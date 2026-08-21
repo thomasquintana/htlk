@@ -1,5 +1,6 @@
 # Harness Toolkit
 
+[![CI](https://github.com/thomasquintana/htlk/actions/workflows/ci.yml/badge.svg)](https://github.com/thomasquintana/htlk/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/htlk.svg)](https://crates.io/crates/htlk)
 [![Documentation](https://docs.rs/htlk/badge.svg)](https://docs.rs/htlk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
@@ -38,8 +39,6 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 ```
 
 See `CONTRIBUTING.md` for contribution and release guidance.
-Repository-specific links and the CI status badge will be added when the final
-GitHub URL is known.
 
 ## License
 

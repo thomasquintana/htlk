@@ -60,3 +60,13 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Check third-party notices
+        run: |
+          cargo about generate about.hbs --workspace --locked --fail --output-file "$RUNNER_TEMP/THIRD_PARTY_LICENSES"
+          diff --unified THIRD_PARTY_LICENSES "$RUNNER_TEMP/THIRD_PARTY_LICENSES"

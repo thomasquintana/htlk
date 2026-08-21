@@ -29,6 +29,14 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      - name: Validate release credentials
+        shell: bash
+        run: |
+          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not configured in the crates-io environment"
+            exit 1
+          fi
+
       - name: Validate release version
         shell: bash
         run: |
@@ -50,6 +58,21 @@ jobs:
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo test --workspace --all-features --locked
           cargo doc --workspace --all-features --no-deps --locked
+
+      - name: Check dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Check third-party notices
+        run: |
+          cargo about generate about.hbs --workspace --locked --fail --output-file "$RUNNER_TEMP/THIRD_PARTY_LICENSES"
+          diff --unified THIRD_PARTY_LICENSES "$RUNNER_TEMP/THIRD_PARTY_LICENSES"
 
       - name: Validate component packages
         run: |
