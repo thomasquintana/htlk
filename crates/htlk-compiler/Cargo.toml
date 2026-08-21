@@ -1,0 +1,18 @@
+[package]
+name = "htlk-compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Compiles natural-language harness definitions into Harness Toolkit IR"
+readme = "README.md"
+documentation = "https://docs.rs/htlk-compiler"
+keywords = ["harness", "compiler", "toolkit"]
+categories = ["compilers", "development-tools"]
+
+[dependencies]
+chumsky.workspace = true
+logos.workspace = true
+miette.workspace = true
+
+[lints]
+workspace = true

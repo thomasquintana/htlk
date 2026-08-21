@@ -1,0 +1,20 @@
+[package]
+name = "htlk-rt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Actor-based runtime for Harness Toolkit bytecode, LLMs, storage, and MCP servers"
+readme = "README.md"
+documentation = "https://docs.rs/htlk-rt"
+keywords = ["harness", "runtime", "toolkit"]
+categories = ["development-tools"]
+
+[dependencies]
+actix.workspace = true
+async-openai.workspace = true
+rmcp.workspace = true
+sqlite-vec.workspace = true
+tokio-rusqlite.workspace = true
+
+[lints]
+workspace = true

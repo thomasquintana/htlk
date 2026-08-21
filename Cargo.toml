@@ -1,0 +1,66 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+actix = "0.13.5"
+async-openai = { version = "0.41.3", default-features = false, features = [
+    "byot",
+    "chat-completion",
+    "embedding",
+    "rustls",
+] }
+chumsky = "0.13.0"
+htlk-compiler = { version = "0.1.0", path = "crates/htlk-compiler" }
+htlk-ir = { version = "0.1.0", path = "crates/htlk-ir" }
+htlk-rt = { version = "0.1.0", path = "crates/htlk-rt" }
+logos = "0.16.1"
+miette = "7.6.0"
+rmcp = { version = "3.1.4", default-features = false, features = [
+    "auth-client-credentials-jwt",
+    "client",
+    "reqwest",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
+sqlite-vec = "0.1.9"
+tokio-rusqlite = { version = "0.7.0", default-features = false, features = [
+    "bundled",
+] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[package]
+name = "htlk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A facade for the Harness Toolkit compiler, IR compiler, and actor-based runtime"
+readme = "README.md"
+documentation = "https://docs.rs/htlk"
+keywords = ["harness", "compiler", "runtime", "toolkit"]
+categories = ["compilers", "development-tools"]
+
+[dependencies]
+htlk-compiler.workspace = true
+htlk-ir.workspace = true
+htlk-rt.workspace = true
+
+[lints]
+workspace = true
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
