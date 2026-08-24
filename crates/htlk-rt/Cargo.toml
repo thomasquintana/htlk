@@ -14,8 +14,10 @@ categories = ["development-tools"]
 [dependencies]
 actix.workspace = true
 async-openai.workspace = true
+mlua.workspace = true
 rmcp.workspace = true
 sqlite-vec.workspace = true
+tera.workspace = true
 tokio-rusqlite.workspace = true
 
 [lints]

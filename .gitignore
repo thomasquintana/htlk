@@ -31,3 +31,6 @@ rustc-ice-*.txt
 
 # Development playground
 playground/
+
+# Development notes.
+.notes.md

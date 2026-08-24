@@ -26,6 +26,10 @@ The facade exposes the component crates as `htlk::compiler`, `htlk::ir`, and
 `htlk::rt`. Applications that only need one layer can depend on its crate
 directly.
 
+## Documentation
+
+- [IR grammar](docs/ir-grammar.md)
+
 ## Development
 
 The workspace follows latest stable Rust. Install the configured toolchain and
