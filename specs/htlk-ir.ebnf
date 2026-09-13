@@ -1,0 +1,103 @@
+document = version_decl, { import_decl }, { declaration }, EOF ;
+version_decl = "ir_version", "=", string ;
+import_decl = "import", identifier, "from", string ;
+declaration = export_decl | type_decl | prompt_decl | library_decl | task_decl | graph_decl ;
+export_decl = "export", ( type_decl | prompt_decl | task_decl ) ;
+
+qualified_name = identifier, { ".", identifier } ;
+qualified_type = { identifier, "." }, type_identifier ;
+type_decl = "type", qualified_type, "=", value_type ;
+value_type = primitive_type | qualified_type
+           | "list", "(", value_type, ")"
+           | "map", "(", value_type, ")"
+           | "union", "(", value_type, ",", value_type, { ",", value_type }, [ "," ], ")"
+           | "enum", "(", string, { ",", string }, [ "," ], ")"
+           | "record", port_table ;
+primitive_type = "string" | "text" | "integer" | "float" | "boolean"
+               | "null" | "bytes" | "json" | "regex"
+               | "ResourceSnapshot" | "McpPromptResult" | "Error" ;
+port_type = value_type | "optional", "(", value_type, ")" ;
+port_table = "{", [ field, { ",", field }, [ "," ] ], "}" ;
+field = record_key, "=", port_type ;
+record_key = identifier | string ;
+
+prompt_decl = "prompt", qualified_name, [ prompt_parameters ], "=", template ;
+prompt_parameters = "(", [ parameter, { ",", parameter }, [ "," ] ], ")" ;
+parameter = identifier, "=", value_type ;
+template = string | triple_string ;
+library_decl = "predicate_library", identifier, "=", "predicates.library",
+               "(", string, ")", "{", { library_member }, "}" ;
+library_member = "version", "=", string | "digest", "=", string ;
+
+task_decl = "task", qualified_name, scope ;
+graph_decl = "graph", qualified_name, scope ;
+scope = "{", { scope_member }, "}" ;
+scope_member = description | inputs | outputs | nodes | edges
+             | preconditions | postconditions | limits ;
+description = "description", "=", string ;
+inputs = "inputs", "=", port_table ;
+outputs = "outputs", "=", port_table ;
+preconditions = "preconditions", "=", expression ;
+postconditions = "postconditions", "=", expression ;
+when = "when", "=", expression ;
+
+nodes = "nodes", "{", { node }, "}" ;
+node = identifier, "=", ( operation, [ node_options ] | loop ) ;
+operation = "eval", "(", port_type, ",", expression, ")"
+          | "call", "(", tool_ref, ")"
+          | "read", "(", resource_ref, ")"
+          | "fetch", "(", prompt_ref, ")"
+          | "use", "(", qualified_name, ")"
+          | "wait", "(", value_type, ")" ;
+tool_ref = "mcp.tool", "(", string, ",", string, ")" ;
+resource_ref = ( "mcp.resource" | "mcp.template" ), "(", string, ",", string, ")" ;
+prompt_ref = "mcp.prompt", "(", string, ",", string, ")" ;
+node_options = "{", { node_member }, "}" ;
+node_member = description | when | preconditions | postconditions | limits | inputs | retry
+            | "pin", "=", string | "topic", "=", string | "timeout_ms", "=", integer ;
+retry = "retry", "{", { retry_member }, "}" ;
+retry_member = "max_attempts", "=", integer
+             | "on", "=", string_list
+             | "backoff_ms", "=", integer_list ;
+limits = "limits", "{", { limit }, "}" ;
+limit = identifier, "=", integer ;
+string_list = "[", [ string, { ",", string }, [ "," ] ], "]" ;
+integer_list = "[", [ integer, { ",", integer }, [ "," ] ], "]" ;
+
+edges = "edges", "{", { edge }, "}" ;
+edge = "edge", identifier, "{", { edge_member }, "}" ;
+edge_member = "from", "=", source | "to", "=", destination | when | description ;
+source = "inputs", ".", identifier
+       | identifier, ".", "outputs", ".", identifier
+       | "carried", ".", identifier ;
+destination = identifier, ".", "inputs", ".", identifier
+            | "outputs", ".", identifier | "next", ".", identifier ;
+
+loop = "loop", "{", { loop_member }, "}" ;
+loop_member = description | inputs | outputs | when | preconditions | postconditions | limits
+            | carried | body | "until", "=", expression | "max_iterations", "=", integer ;
+carried = "carried", "=", "{", [ initializer, { ",", initializer }, [ "," ] ], "}" ;
+initializer = identifier, "=", "inputs", ".", identifier ;
+body = "body", "{", nodes, edges, "}" ;
+
+expression = disjunction ;
+disjunction = conjunction, { "or", conjunction } ;
+conjunction = negation, { "and", negation } ;
+negation = "not", negation | comparison ;
+comparison = primary, [ comparison_operator, primary ] ;
+comparison_operator = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
+primary = atom, { suffix } ;
+atom = literal | value_reference | call | static_reference | node_handle
+     | list | record | "(", expression, ")" ;
+literal = string | triple_string | integer | float | regex | "true" | "false" | "null" ;
+value_reference = "inputs", ".", identifier
+                | "outputs", ".", identifier
+                | identifier, ".", "outputs", ".", identifier
+                | "carried", ".", identifier | "next", ".", identifier ;
+suffix = ".", identifier | "[", ( integer | string ), "]" ;
+call = qualified_name, "(", [ expression, { ",", expression }, [ "," ] ], ")" ;
+static_reference = "&", qualified_name ;
+node_handle = "@", identifier ;
+list = "[", [ expression, { ",", expression }, [ "," ] ], "]" ;
+record = "{", [ record_entry, { ",", record_entry }, [ "," ] ], "}" ;
+record_entry = record_key, "=", expression ;

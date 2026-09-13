@@ -1,0 +1,7 @@
+ir_version = "0.1"
+
+export type BriefOutcome = record {
+    status = enum("accepted", "needs_attention"),
+    brief = union(string, null),
+    message = string,
+}

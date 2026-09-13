@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Aligned executable envelopes and draft specifications on `htlk.executable.graph`,
+  `version: "0.1"`, and SHA-256 of the newline-terminated format/version prefix
+  plus raw payload bytes. Alternate schemas and hash formulas are rejected.
+- Updated active CBOR profile documentation and runtime-identity examples to the
+  unified HTLK 0.1 baseline.
 - Consolidated digest support into `htlk-executable::digest`, replacing the
   `htlk-cbor-digest` package while preserving digest behavior and wire results.
 - Regenerated the dependency lockfile and notices with compatible releases,

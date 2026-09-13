@@ -4,7 +4,7 @@ Shared deterministic CBOR encoding and strict decoding for the HTLK compiler
 and runtime. Provides validated values, bounded operations, reusable limits,
 and structured errors with input offsets.
 
-## HTLK 0.3 encoding profile
+## HTLK 0.1 encoding profile
 
 - RFC 8949 section 4.2.1 core deterministic encoding.
 - Shortest integer and length headers; definite-length strings and collections.

@@ -1,0 +1,85 @@
+ir_version = "0.1"
+
+import queries from "self/prompts"
+import shared from "self/types"
+import research from "research/search"
+import brief from "writing/refine"
+
+graph decision_brief {
+    inputs = { question = string }
+    outputs = { result = shared.BriefOutcome }
+
+    nodes {
+        opportunities_question = eval(string, render(&queries.opportunities_query, {
+            question = inputs.question,
+        })) {
+            inputs = { question = string }
+        }
+
+        risks_question = eval(string, render(&queries.risks_query, {
+            question = inputs.question,
+        })) {
+            inputs = { question = string }
+        }
+
+        opportunities = use(research.find_evidence)
+        risks = use(research.find_evidence)
+
+        bundle = eval(string, render(&queries.evidence_bundle, {
+            opportunities = inputs.opportunities,
+            risks = inputs.risks,
+        })) {
+            inputs = { opportunities = string, risks = string }
+        }
+
+        empty_text = eval(string, "")
+        refine = use(brief.refine)
+
+        accepted_result = eval(shared.BriefOutcome, {
+            status = "accepted",
+            brief = inputs.draft,
+            message = "The configured reviewer accepted this brief.",
+        }) {
+            inputs = { draft = string }
+            when = status(@refine) == "succeeded"
+        }
+
+        attention_result = eval(shared.BriefOutcome, {
+            status = "needs_attention",
+            brief = null,
+            message = "No reviewed brief was produced. Inspect the run for the cause.",
+        }) {
+            when = status(@refine) == "failed"
+        }
+    }
+
+    edges {
+        edge opportunities_question { from = inputs.question to = opportunities_question.inputs.question }
+        edge risks_question { from = inputs.question to = risks_question.inputs.question }
+        edge opportunities_query { from = opportunities_question.outputs.value to = opportunities.inputs.query }
+        edge risks_query { from = risks_question.outputs.value to = risks.inputs.query }
+        edge opportunities_evidence { from = opportunities.outputs.evidence to = bundle.inputs.opportunities }
+        edge risks_evidence { from = risks.outputs.evidence to = bundle.inputs.risks }
+
+        edge refine_question { from = inputs.question to = refine.inputs.question }
+        edge refine_evidence { from = bundle.outputs.value to = refine.inputs.evidence }
+        edge seed_draft { from = empty_text.outputs.value to = refine.inputs.initial_draft }
+        edge seed_feedback { from = empty_text.outputs.value to = refine.inputs.initial_feedback }
+
+        edge accepted_draft { from = refine.outputs.draft to = accepted_result.inputs.draft }
+
+        edge success {
+            from = accepted_result.outputs.value
+            to = outputs.result
+            when = status(@refine) == "succeeded"
+        }
+        edge attention {
+            from = attention_result.outputs.value
+            to = outputs.result
+            when = status(@refine) == "failed"
+        }
+    }
+
+    preconditions = length(inputs.question) > 0
+    limits { max_mcp_calls = 8 }
+}

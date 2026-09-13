@@ -1,0 +1,14 @@
+{
+  "manifest_version": "0.1",
+  "package_name": "htlk_examples.decision_brief",
+  "package_version": "0.1",
+  "modules": {
+    "main": "src/main.htlk",
+    "prompts": "src/prompts.htlk",
+    "types": "src/types.htlk"
+  },
+  "dependencies": {
+    "research": "sha256:e8beee71886cee613648efbf09082846d9cbf9254c88e8c0068ab61a47f80168",
+    "writing": "sha256:f8b0d2b44541cbad5f05089c5d5a5e5a27a70c45199184fbe8cbca5daadfe370"
+  }
+}

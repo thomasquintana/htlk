@@ -1,0 +1,9 @@
+{
+  "manifest_version": "0.1",
+  "package_name": "htlk_examples.writing",
+  "package_version": "0.1",
+  "modules": {
+    "refine": "src/refine.htlk"
+  },
+  "dependencies": {}
+}

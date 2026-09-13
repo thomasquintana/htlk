@@ -1,0 +1,222 @@
+; HTLK IR executable format 0.1.
+;
+; Reading this file:
+; CDDL (Concise Data Definition Language) describes allowed stored data.
+; It is not source code for a graph. The compiler produces graph packages
+; using CBOR (Concise Binary Object Representation), a binary data format.
+; This file describes the structures obtained by decoding those packages.
+;
+; A semicolon begins a comment. A named rule has the form name = shape.
+; tstr means text, bstr means bytes, and bool means true or false.
+; Braces describe maps of named fields; brackets describe ordered arrays.
+; A slash separates alternatives. A question mark makes an entry optional.
+; An asterisk permits repetition; 1* requires at least one occurrence.
+; A quoted string requires that exact text. => separates key and value
+; types in a map. .regexp requires text matching the written pattern.
+;
+; Shapes are closed: extra fields not allowed by a rule are rejected.
+; Shape checking alone does not verify a graph. compiler-spec.md explains
+; the required behavior checks, consistent encoding order, content hashes,
+; complete referenced definitions, and compatibility of connected values.
+; No unrestricted "any" rule is used.
+
+executable = {
+  format: "htlk.executable.graph",
+  version: "0.1",
+  fingerprint: digest,
+  payload: bstr
+}
+
+canonical_document = {
+  ir_version: "0.1",
+  graph_id: tstr,
+  profile: profile,
+  root_scope: digest,
+  scopes: { * digest => scope },
+  templates: { * digest => prompt_template },
+  bindings: { * digest => mcp_binding },
+  libraries: { * digest => library },
+  schema_uris: { * tstr => digest },
+  documents: { * digest => bstr }
+}
+
+digest = tstr .regexp "sha256:[0-9a-f]{64}"
+identifier = tstr .regexp "[a-z][a-z0-9]*(_[a-z0-9]+)*"
+positive = 1..9223372036854775807
+nonnegative = 0..9223372036854775807
+signed = -9223372036854775808..9223372036854775807
+
+profile = {
+  core_version: "0.1",
+  core_digest: digest,
+  mcp_protocol_version: "2025-11-25",
+  regex_engine: engine,
+  schema_validator: engine,
+  uri_template_engine: engine,
+  policy_document: digest
+}
+engine = {
+  name: tstr,
+  version: tstr,
+  data_version: tstr,
+  implementation_digest: digest
+}
+
+; Validate the decoded JCS policy object with this rule separately.
+policy_document = {
+  cost_unit: tstr,
+  defaults: limits,
+  evaluator_limits: {
+    max_expression_depth: positive,
+    max_value_bytes: positive,
+    max_collection_visits: positive,
+    max_regex_bytes: positive,
+    max_regex_compiled_bytes: positive,
+    max_output_bytes: positive,
+    max_steps: positive
+  },
+  maximum_scope_depth: positive,
+  maximum_expanded_nodes: positive
+}
+; Semantic validation requires timeout_ms, attempt_timeout_ms and
+; max_concurrency in defaults, and enforces the JSON numeric profile.
+
+port = { type: value_type, required: bool }
+ports = { * identifier => port }
+fields = { * tstr => port }
+value_type = primitive
+           / ["list", value_type]
+           / ["map", value_type]
+           / ["record", fields]
+           / ["union", [2* value_type]]
+           / ["enum", [1* tstr]]
+           / ["schema", digest]
+           / ["var", identifier]
+           / ["function", [* port], port]
+primitive = "string" / "integer" / "float" / "boolean" / "null"
+          / "bytes" / "json" / "regex"
+          / "ResourceSnapshot" / "McpPromptResult" / "Error"
+; var/function are restricted to library signatures by semantic validation.
+
+scope = {
+  inputs: ports,
+  outputs: ports,
+  carried: ports,
+  nodes: [* node],
+  edges: [* edge],
+  preconditions: expression,
+  postconditions: expression,
+  limits: limits
+}
+node = {
+  id: identifier,
+  inputs: ports,
+  outputs: ports,
+  guard: expression,
+  preconditions: expression,
+  postconditions: expression,
+  limits: limits,
+  operation: operation
+}
+operation = ["eval", expression]
+          / ["mcp", digest, retry_policy]
+          / ["scope", digest]
+          / ["loop", digest, { * identifier => identifier }, expression, positive]
+          / ["wait", tstr, positive]
+
+edge = {
+  id: identifier,
+  source: source,
+  destination: destination,
+  guard: expression
+}
+source = ["input", identifier]
+       / ["output", identifier, identifier]
+       / ["carried", identifier]
+destination = ["input", identifier, identifier]
+            / ["output", identifier]
+            / ["next", identifier]
+
+limits = {
+  ? timeout_ms: positive,
+  ? attempt_timeout_ms: positive,
+  ? max_mcp_calls: nonnegative,
+  ? max_tokens: nonnegative,
+  ? max_cost_units: nonnegative,
+  ? max_concurrency: positive
+}
+retry_policy = {
+  max_attempts: positive,
+  on: [* tstr],
+  backoff_ms: [* nonnegative]
+}
+
+expression = ["literal", scalar]
+           / ["regex", tstr, tstr]
+           / ["ref", value_reference, [* path_step]]
+           / ["get", expression, [1* path_step]]
+           / ["list", [* expression]]
+           / ["record", [* [tstr, expression]]]
+           / ["call", function_id, [* expression]]
+           / ["function_ref", digest, identifier]
+           / ["render", digest, { * identifier => expression }]
+           / ["status", identifier]
+           / ["error", identifier]
+           / ["not", expression]
+           / [binary_operator, expression, expression]
+scalar = tstr / bstr / signed / float / bool / null
+value_reference = ["input", identifier]
+                / ["output", identifier, identifier]
+                / ["scope_output", identifier]
+                / ["carried", identifier]
+                / ["next", identifier]
+path_step = tstr / nonnegative
+function_id = ["core", "length" / "present"]
+            / ["library", digest, identifier]
+binary_operator = "and" / "or" / "eq" / "ne" / "lt" / "le" / "gt" / "ge"
+
+prompt_template = {
+  parameters: ports,
+  parts: [* (tstr / ["slot", identifier])]
+}
+library = {
+  library_id: tstr,
+  version: tstr,
+  implementation_digest: digest,
+  functions: { * identifier => function_signature }
+}
+function_signature = {
+  type_parameters: [* identifier],
+  parameters: [* port],
+  returns: port
+}
+
+server_identity = {
+  deployment_id: tstr,
+  transport: "stdio" / "streamable_http",
+  implementation_name: tstr,
+  implementation_version: tstr
+}
+mcp_binding = {
+  kind: "tool",
+  server: server_identity,
+  descriptor: digest,
+  name: tstr,
+  input_schema: digest,
+  output_schema: digest
+} / {
+  kind: "resource",
+  server: server_identity,
+  descriptor: digest,
+  uri: tstr
+} / {
+  kind: "template",
+  server: server_identity,
+  descriptor: digest,
+  uri_template: tstr
+} / {
+  kind: "prompt",
+  server: server_identity,
+  descriptor: digest,
+  name: tstr
+}

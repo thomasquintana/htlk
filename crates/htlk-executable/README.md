@@ -18,10 +18,10 @@ use htlk_executable::ExecutableEnvelope;
 let limits = Limits::default();
 // Payload is opaque here; CBOR null is not a compiled graph.
 let envelope = ExecutableEnvelope::new(vec![0xf6], &limits)?;
-assert_eq!(envelope.format(), "htlk.executable");
+assert_eq!(envelope.format(), "htlk.executable.graph");
 assert_eq!(envelope.version(), "0.1");
 assert_eq!(envelope.fingerprint().to_string(),
-    "sha256:25e4bc7d3cd311fb07bd53b7bfede608ba5a659b124d02106f98e63bee238146");
+    "sha256:9b039893d4db25c42f0765d6a31877987d90ff86f07ca593af128ca23500120d");
 let bytes = envelope.encode(&limits)?;
 let decoded = ExecutableEnvelope::decode(&bytes, &limits)?;
 assert_eq!(decoded.payload(), &[0xf6]);
@@ -32,8 +32,8 @@ assert_eq!(decoded, envelope);
 `ExecutableEnvelope` has private fields and read-only `format`, `version`,
 `fingerprint`, and `payload` accessors. It retains a checked record for encoding
 without copying its payload; Debug shows metadata and payload length only.
-`EnvelopeError` exposes structured codec, schema, format/version, fingerprint,
-and temporary-copy allocation failures. `EXECUTABLE_FORMAT` and
+`EnvelopeError` exposes structured codec, schema, format/version, and fingerprint
+failures. `EXECUTABLE_FORMAT` and
 `EXECUTABLE_VERSION` expose the supported constants.
 
 ## Envelope wire contract — version 0.1
@@ -42,7 +42,7 @@ Exactly four required fields form a canonical CBOR map:
 
 | Field | Required representation |
 |---|---|
-| `format` | Text, exactly `htlk.executable` |
+| `format` | Text, exactly `htlk.executable.graph` |
 | `version` | Text, exactly `0.1` |
 | `fingerprint` | Text, `sha256:` plus exactly 64 lowercase hex digits |
 | `payload` | Byte string, preserved exactly; empty is permitted |
@@ -51,28 +51,29 @@ Unknown fields are rejected. Canonical wire key order is `format`, `payload`,
 `version`, `fingerprint`. The fingerprint is:
 
 ```text
-SHA256(deterministic_cbor(["htlk.executable", "0.1", payload_bytes]))
+SHA256(UTF8("htlk.executable.graph/0.1\n") || payload)
 ```
 
-Here `payload_bytes` is a CBOR byte string, not a decoded graph value. There are
-no further implicit prefixes, and payload bytes are never rewritten before
-hashing. Envelope version `0.1` is independent of runtime/IR version identifiers
-such as `0.3` used in other identity preimages.
+The prefix ends in exactly one LF byte; the raw payload follows it directly,
+without a CBOR array or byte-string header. Payload bytes are never rewritten
+before hashing. All current HTLK-owned format and identity version labels use
+`0.1`. Only this envelope contract is supported: alternate format names, version
+field aliases, and fingerprint formulas are rejected.
 
 ### Golden vectors
 
 An empty payload has fingerprint
-`sha256:1848fa2b7902ab7f9340287c3c8de220515da01c9efd65bd496d209cac398d6a`.
+`sha256:ebbad418b6ddd9ead246e32dc337b19276b2c709701d2ad69a9992098f9fa14c`.
 Payload `f6` has fingerprint
-`sha256:25e4bc7d3cd311fb07bd53b7bfede608ba5a659b124d02106f98e63bee238146`.
-Its complete 131-byte envelope is the following hex (concatenate lines):
+`sha256:9b039893d4db25c42f0765d6a31877987d90ff86f07ca593af128ca23500120d`.
+Its complete 137-byte envelope is the following hex (concatenate lines):
 
 ```text
-a466666f726d61746f68746c6b2e65786563757461626c65
+a466666f726d61747568746c6b2e65786563757461626c652e6772617068
 677061796c6f616441f6
 6776657273696f6e63302e31
 6b66696e6765727072696e747847
-7368613235363a32356534626337643363643331316662303762643533623762666564653630386261356136353962313234643032313036663938653633626565323338313436
+7368613235363a39623033393839336434646232356334326630373635643661333138373739383764393066663836663037636135393361663132386361323335303031323064
 ```
 
 ### Validation and resource accounting
@@ -86,16 +87,18 @@ Errors do not retain untrusted names, metadata values, or payload contents.
 Wrapped codec errors preserve their offsets and remain accessible via Error's
 `source`; fingerprint parsing errors likewise retain their structured cause.
 
-Construction takes ownership of the payload, hashes its preimage, and checks that
-the complete envelope encodes within the supplied limits. Encoding borrows the
-checked record. Decoding makes one fallible payload copy after the outer codec
-has bounded it, then builds the fingerprint preimage with that copy. CBOR
-encoding allocates its bounded temporary output. Fixed-size schema metadata is
-additional overhead; codec limits do not measure exact heap usage.
+Construction takes ownership of the payload and checks its bounds using the
+codec before hashing, then verifies that the complete envelope encodes within
+the supplied limits. The temporary payload encoding is discarded and never
+used as the hash preimage. Encoding borrows the checked record. Decoding hashes
+the payload directly after outer validation. A private incremental SHA-256
+operation processes the prefix and payload without concatenating or copying
+them. Codec encoding allocates bounded temporary output; fixed-size metadata
+and hash state are additional overhead, not exact heap accounting.
 
-Every codec operation has fresh accounting, including the fingerprint preimage
-encoding. No `RegistrationLimits` type or shared registration allowance is
-introduced. A valid envelope can contain malformed CBOR or an invalid graph;
+Every codec operation has fresh accounting. No `RegistrationLimits` type or
+shared registration allowance is introduced. A valid outer envelope can contain
+malformed CBOR or an invalid graph;
 payload interpretation and aggregate registration accounting belong to later
 registration stages.
 
@@ -146,7 +149,7 @@ use htlk_executable::digest::hash_cbor;
 
 let preimage = Value::Array(vec![
     Value::Text("htlk.root_scope".into()),
-    Value::Text("0.3".into()),
+    Value::Text("0.1".into()),
     Value::Text("example-run".into()),
 ]);
 let root_scope_id = hash_cbor(&preimage, &Limits::default())?;

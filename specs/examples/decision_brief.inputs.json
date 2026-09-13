@@ -1,0 +1,6 @@
+{
+  "question": {
+    "kind": "inline",
+    "value": "Compare a docs-as-code workflow with a shared knowledge-base workflow for our engineering documentation. Recommend a small pilot, explain tradeoffs, and identify unanswered questions."
+  }
+}

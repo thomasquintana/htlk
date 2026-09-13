@@ -1,0 +1,234 @@
+ir_version = "0.1"
+
+-- Complete source example for the HTLK IR user guide.
+-- Requires the illustrative tool contracts in decision_brief.catalogs.json.
+
+type BriefOutcome = record {
+    status = enum("accepted", "needs_attention"),
+    brief = union(string, null),
+    message = string,
+}
+
+prompt opportunities_query = """
+Investigate opportunities and expected benefits relevant to this decision.
+Report evidence and its sources, and identify uncertainties.
+Decision question: {question}
+"""
+
+prompt risks_query = """
+Investigate risks, costs, and limitations relevant to this decision.
+Report evidence and its sources, and identify uncertainties.
+Decision question: {question}
+"""
+
+prompt evidence_bundle = """
+OPPORTUNITIES AND BENEFITS
+{opportunities}
+
+RISKS AND LIMITATIONS
+{risks}
+"""
+
+task research.find_evidence {
+    inputs = { query = string }
+    outputs = { evidence = string }
+
+    nodes {
+        arguments = eval(json, { query = inputs.query }) {
+            inputs = { query = string }
+        }
+        lookup = call(mcp.tool("research", "lookup"))
+        extract = eval(string, inputs.response.evidence_text) {
+            inputs = { response = json }
+            postconditions = length(outputs.value) > 0
+        }
+    }
+
+    edges {
+        edge query { from = inputs.query to = arguments.inputs.query }
+        edge request { from = arguments.outputs.value to = lookup.inputs.arguments }
+        edge response { from = lookup.outputs.value to = extract.inputs.response }
+        edge evidence { from = extract.outputs.value to = outputs.evidence }
+    }
+
+    preconditions = length(inputs.query) > 0
+}
+
+task brief.refine {
+    inputs = {
+        question = string,
+        evidence = string,
+        initial_draft = string,
+        initial_feedback = string,
+    }
+    outputs = { draft = string }
+
+    nodes {
+        improve = loop {
+            inputs = {
+                question = string,
+                evidence = string,
+                initial_draft = string,
+                initial_feedback = string,
+            }
+            outputs = { draft = string }
+            carried = {
+                draft = inputs.initial_draft,
+                feedback = inputs.initial_feedback,
+            }
+
+            body {
+                nodes {
+                    draft_arguments = eval(json, {
+                        question = inputs.question,
+                        evidence = inputs.evidence,
+                        previous_draft = inputs.draft,
+                        feedback = inputs.feedback,
+                    }) {
+                        inputs = {
+                            question = string,
+                            evidence = string,
+                            draft = string,
+                            feedback = string,
+                        }
+                    }
+
+                    revise = call(mcp.tool("models", "revise_brief"))
+
+                    draft = eval(string, inputs.response.draft) {
+                        inputs = { response = json }
+                        postconditions = length(outputs.value) > 0
+                    }
+
+                    review_arguments = eval(json, {
+                        question = inputs.question,
+                        evidence = inputs.evidence,
+                        draft = inputs.draft,
+                    }) {
+                        inputs = {
+                            question = string,
+                            evidence = string,
+                            draft = string,
+                        }
+                    }
+
+                    review = call(mcp.tool("models", "review_brief"))
+
+                    feedback = eval(string, inputs.response.feedback) {
+                        inputs = { response = json }
+                    }
+                }
+
+                edges {
+                    edge draft_question { from = inputs.question to = draft_arguments.inputs.question }
+                    edge draft_evidence { from = inputs.evidence to = draft_arguments.inputs.evidence }
+                    edge prior_draft { from = carried.draft to = draft_arguments.inputs.draft }
+                    edge prior_feedback { from = carried.feedback to = draft_arguments.inputs.feedback }
+                    edge draft_request { from = draft_arguments.outputs.value to = revise.inputs.arguments }
+                    edge draft_response { from = revise.outputs.value to = draft.inputs.response }
+
+                    edge review_question { from = inputs.question to = review_arguments.inputs.question }
+                    edge review_evidence { from = inputs.evidence to = review_arguments.inputs.evidence }
+                    edge review_draft { from = draft.outputs.value to = review_arguments.inputs.draft }
+                    edge review_request { from = review_arguments.outputs.value to = review.inputs.arguments }
+                    edge review_response { from = review.outputs.value to = feedback.inputs.response }
+
+                    edge next_draft { from = draft.outputs.value to = next.draft }
+                    edge next_feedback { from = feedback.outputs.value to = next.feedback }
+                    edge candidate { from = draft.outputs.value to = outputs.draft }
+                }
+            }
+
+            until = review.outputs.value.accepted
+            max_iterations = 3
+            limits { max_mcp_calls = 6 }
+        }
+    }
+
+    edges {
+        edge question { from = inputs.question to = improve.inputs.question }
+        edge evidence { from = inputs.evidence to = improve.inputs.evidence }
+        edge initial_draft { from = inputs.initial_draft to = improve.inputs.initial_draft }
+        edge initial_feedback { from = inputs.initial_feedback to = improve.inputs.initial_feedback }
+        edge final_draft { from = improve.outputs.draft to = outputs.draft }
+    }
+}
+
+graph decision_brief {
+    inputs = { question = string }
+    outputs = { result = BriefOutcome }
+
+    nodes {
+        opportunities_question = eval(string, render(&opportunities_query, {
+            question = inputs.question,
+        })) {
+            inputs = { question = string }
+        }
+
+        risks_question = eval(string, render(&risks_query, {
+            question = inputs.question,
+        })) {
+            inputs = { question = string }
+        }
+
+        opportunities = use(research.find_evidence)
+        risks = use(research.find_evidence)
+
+        bundle = eval(string, render(&evidence_bundle, {
+            opportunities = inputs.opportunities,
+            risks = inputs.risks,
+        })) {
+            inputs = { opportunities = string, risks = string }
+        }
+
+        empty_text = eval(string, "")
+        refine = use(brief.refine)
+
+        accepted_result = eval(BriefOutcome, {
+            status = "accepted",
+            brief = inputs.draft,
+            message = "The configured reviewer accepted this brief.",
+        }) {
+            inputs = { draft = string }
+            when = status(@refine) == "succeeded"
+        }
+
+        attention_result = eval(BriefOutcome, {
+            status = "needs_attention",
+            brief = null,
+            message = "No reviewed brief was produced. Inspect the run for the cause.",
+        }) {
+            when = status(@refine) == "failed"
+        }
+    }
+
+    edges {
+        edge opportunities_question { from = inputs.question to = opportunities_question.inputs.question }
+        edge risks_question { from = inputs.question to = risks_question.inputs.question }
+        edge opportunities_query { from = opportunities_question.outputs.value to = opportunities.inputs.query }
+        edge risks_query { from = risks_question.outputs.value to = risks.inputs.query }
+        edge opportunities_evidence { from = opportunities.outputs.evidence to = bundle.inputs.opportunities }
+        edge risks_evidence { from = risks.outputs.evidence to = bundle.inputs.risks }
+
+        edge refine_question { from = inputs.question to = refine.inputs.question }
+        edge refine_evidence { from = bundle.outputs.value to = refine.inputs.evidence }
+        edge seed_draft { from = empty_text.outputs.value to = refine.inputs.initial_draft }
+        edge seed_feedback { from = empty_text.outputs.value to = refine.inputs.initial_feedback }
+
+        edge accepted_draft { from = refine.outputs.draft to = accepted_result.inputs.draft }
+
+        edge success {
+            from = accepted_result.outputs.value
+            to = outputs.result
+            when = status(@refine) == "succeeded"
+        }
+        edge attention {
+            from = attention_result.outputs.value
+            to = outputs.result
+            when = status(@refine) == "failed"
+        }
+    }
+
+    preconditions = length(inputs.question) > 0
+    limits { max_mcp_calls = 8 }
+}

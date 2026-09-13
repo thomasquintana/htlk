@@ -1,0 +1,21 @@
+ir_version = "0.1"
+
+export prompt opportunities_query = """
+Investigate opportunities and expected benefits relevant to this decision.
+Report evidence and its sources, and identify uncertainties.
+Decision question: {question}
+"""
+
+export prompt risks_query = """
+Investigate risks, costs, and limitations relevant to this decision.
+Report evidence and its sources, and identify uncertainties.
+Decision question: {question}
+"""
+
+export prompt evidence_bundle = """
+OPPORTUNITIES AND BENEFITS
+{opportunities}
+
+RISKS AND LIMITATIONS
+{risks}
+"""

@@ -1,0 +1,169 @@
+{
+  "tools": {
+    "catalog_version": "0.1",
+    "mcp_protocol_version": "2025-11-25",
+    "servers": {
+      "research": {
+        "deployment_id": "example-research",
+        "transport": "streamable_http",
+        "implementation_name": "htlk-guide-research",
+        "implementation_version": "0.1.0"
+      },
+      "models": {
+        "deployment_id": "example-models",
+        "transport": "streamable_http",
+        "implementation_name": "htlk-guide-models",
+        "implementation_version": "0.1.0"
+      }
+    },
+    "schema_documents": {},
+    "tools": [
+      {
+        "server": "research",
+        "descriptor": {
+          "name": "lookup",
+          "description": "Retrieve evidence relevant to the query. Include source references and distinguish evidence from uncertainty in evidence_text.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "additionalProperties": false
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "evidence_text": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "evidence_text"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "server": "models",
+        "descriptor": {
+          "name": "revise_brief",
+          "description": "Create a decision brief when previous_draft is empty; otherwise revise it using feedback. Address the question, use the supplied evidence, separate claims from uncertainties, and propose a bounded pilot.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "question": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "previous_draft": {
+                "type": "string"
+              },
+              "feedback": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "question",
+              "evidence",
+              "previous_draft",
+              "feedback"
+            ],
+            "additionalProperties": false
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "draft": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "draft"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "server": "models",
+        "descriptor": {
+          "name": "review_brief",
+          "description": "Assess whether the draft addresses the question, represents the supplied evidence, separates speculation, proposes a bounded pilot, and identifies uncertainties. Return accepted and actionable feedback. This is an assessment, not a proof of factual correctness.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "question": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "draft": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "question",
+              "evidence",
+              "draft"
+            ],
+            "additionalProperties": false
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "accepted": {
+                "type": "boolean"
+              },
+              "feedback": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "accepted",
+              "feedback"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ]
+  },
+  "resources": {
+    "catalog_version": "0.1",
+    "mcp_protocol_version": "2025-11-25",
+    "servers": {},
+    "schema_documents": {},
+    "resources": [],
+    "templates": []
+  },
+  "prompts": {
+    "catalog_version": "0.1",
+    "mcp_protocol_version": "2025-11-25",
+    "servers": {},
+    "schema_documents": {},
+    "prompts": []
+  }
+}

@@ -1,14 +1,17 @@
 use std::fmt;
 
 use htlk_cbor::{Limits, Map, Value};
+use sha2::{Digest as _, Sha256};
 
-use crate::digest::{Digest, ParseDigestError, hash_cbor};
+use crate::digest::{Digest, ParseDigestError};
 
 /// The supported executable envelope format identifier.
-pub const EXECUTABLE_FORMAT: &str = "htlk.executable";
+pub const EXECUTABLE_FORMAT: &str = "htlk.executable.graph";
 
 /// The supported envelope version, independent of runtime/IR version identifiers.
 pub const EXECUTABLE_VERSION: &str = "0.1";
+
+const FINGERPRINT_PREFIX: &[u8] = b"htlk.executable.graph/0.1\n";
 
 // Decoded UTF-8 order, deliberately independent of canonical CBOR key order.
 const FIELDS: [&str; 4] = ["fingerprint", "format", "payload", "version"];
@@ -30,16 +33,23 @@ pub struct ExecutableEnvelope {
 impl ExecutableEnvelope {
     /// Constructs an envelope and computes its version-0.1 fingerprint.
     ///
-    /// Transfers ownership of the exact payload bytes. Both the fingerprint
-    /// preimage and the final envelope must encode within the supplied limits;
-    /// each encoding has fresh accounting. Empty payloads are permitted.
+    /// Transfers ownership of the exact payload bytes. Checks payload bounds
+    /// before hashing and full envelope bounds before returning. Codec checks
+    /// have fresh accounting. Empty payloads are permitted at this outer layer.
     ///
     /// # Errors
     /// Returns [`EnvelopeError::Codec`] for codec configuration, limit, or
     /// allocation failures. No envelope is returned unless all checks pass.
     pub fn new(payload: Vec<u8>, limits: &Limits) -> Result<Self, EnvelopeError> {
         limits.validate()?;
-        let (fingerprint, payload) = fingerprint_payload(payload, limits)?;
+        let payload = Value::Bytes(payload);
+        // Bound the caller-owned payload before spending work hashing it. The
+        // temporary CBOR bytes validate size only; they are not the hash input.
+        htlk_cbor::encode(&payload, limits)?;
+        let Value::Bytes(bytes) = &payload else {
+            unreachable!("payload is constructed as bytes");
+        };
+        let fingerprint = fingerprint_payload(bytes);
         let record = Value::Map(Map::try_from_entries([
             ("format".into(), Value::Text(EXECUTABLE_FORMAT.into())),
             ("version".into(), Value::Text(EXECUTABLE_VERSION.into())),
@@ -50,8 +60,7 @@ impl ExecutableEnvelope {
             record,
             fingerprint,
         };
-        // Check the complete record too: its metadata consumes more space than
-        // the fingerprint preimage. No retained serialized copy is needed.
+        // Metadata must also fit. No retained serialized copy is needed.
         envelope.encode(limits)?;
         Ok(envelope)
     }
@@ -66,8 +75,8 @@ impl ExecutableEnvelope {
     /// errors. Underlying codec failures preserve their input byte offsets.
     ///
     /// # Errors
-    /// Returns [`EnvelopeError`] for any codec, schema, format/version, fingerprint,
-    /// or temporary payload-copy allocation failure. Partial results are dropped.
+    /// Returns [`EnvelopeError`] for codec, schema, format/version, or fingerprint
+    /// failures. Partial results are dropped.
     pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Self, EnvelopeError> {
         let record = htlk_cbor::decode(bytes, limits)?;
         let map = validate_schema(&record)?;
@@ -80,14 +89,9 @@ impl ExecutableEnvelope {
         let fingerprint = text(map, "fingerprint")
             .parse::<Digest>()
             .map_err(EnvelopeError::InvalidFingerprint)?;
-        let payload = payload(map);
-        // The successful outer decode already bounded this byte string. Use a
-        // fallible copy to build the canonical preimage without mutating record.
-        let mut copy = Vec::new();
-        copy.try_reserve_exact(payload.len())
-            .map_err(|_| EnvelopeError::AllocationFailed)?;
-        copy.extend_from_slice(payload);
-        let (computed, _) = fingerprint_payload(copy, limits)?;
+        // Outer decoding has bounded the payload. Hash it directly without a
+        // copy or a CBOR wrapper around the fingerprint preimage.
+        let computed = fingerprint_payload(payload(map));
         if fingerprint != computed {
             return Err(EnvelopeError::FingerprintMismatch);
         }
@@ -141,24 +145,11 @@ impl fmt::Debug for ExecutableEnvelope {
     }
 }
 
-fn fingerprint_payload(
-    payload: Vec<u8>,
-    limits: &Limits,
-) -> Result<(Digest, Value), EnvelopeError> {
-    let preimage = Value::Array(vec![
-        Value::Text(EXECUTABLE_FORMAT.into()),
-        Value::Text(EXECUTABLE_VERSION.into()),
-        Value::Bytes(payload),
-    ]);
-    let fingerprint = hash_cbor(&preimage, limits)?;
-    // Recover ownership of the payload after hashing rather than cloning it.
-    let Value::Array(mut fields) = preimage else {
-        unreachable!("preimage is constructed as an array");
-    };
-    Ok((
-        fingerprint,
-        fields.pop().expect("preimage always has a payload"),
-    ))
+fn fingerprint_payload(payload: &[u8]) -> Digest {
+    let mut hasher = Sha256::new();
+    hasher.update(FINGERPRINT_PREFIX);
+    hasher.update(payload);
+    Digest::from_bytes(hasher.finalize().into())
 }
 
 fn validate_schema(record: &Value) -> Result<&Map, EnvelopeError> {
@@ -226,8 +217,6 @@ pub enum EnvelopeError {
     InvalidFingerprint(ParseDigestError),
     /// The fingerprint did not match the prescribed payload preimage.
     FingerprintMismatch,
-    /// Fallible temporary payload-copy allocation failed.
-    AllocationFailed,
 }
 
 impl From<htlk_cbor::Error> for EnvelopeError {
@@ -250,7 +239,6 @@ impl fmt::Display for EnvelopeError {
             Self::UnsupportedVersion => f.write_str("unsupported executable envelope version"),
             Self::InvalidFingerprint(error) => write!(f, "invalid executable fingerprint: {error}"),
             Self::FingerprintMismatch => f.write_str("executable fingerprint mismatch"),
-            Self::AllocationFailed => f.write_str("executable envelope allocation failed"),
         }
     }
 }

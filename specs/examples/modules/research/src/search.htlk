@@ -1,0 +1,26 @@
+ir_version = "0.1"
+
+export task find_evidence {
+    inputs = { query = string }
+    outputs = { evidence = string }
+
+    nodes {
+        arguments = eval(json, { query = inputs.query }) {
+            inputs = { query = string }
+        }
+        lookup = call(mcp.tool("research", "lookup"))
+        extract = eval(string, inputs.response.evidence_text) {
+            inputs = { response = json }
+            postconditions = length(outputs.value) > 0
+        }
+    }
+
+    edges {
+        edge query { from = inputs.query to = arguments.inputs.query }
+        edge request { from = arguments.outputs.value to = lookup.inputs.arguments }
+        edge response { from = lookup.outputs.value to = extract.inputs.response }
+        edge evidence { from = extract.outputs.value to = outputs.evidence }
+    }
+
+    preconditions = length(inputs.query) > 0
+}

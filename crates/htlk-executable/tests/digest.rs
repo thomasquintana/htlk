@@ -168,16 +168,16 @@ fn caller_supplied_domain_labels_are_hashed_exactly() {
     for (domain, expected) in [
         (
             "htlk.root_scope",
-            "sha256:f4968d5e2c868088fb9102528bb62b80c55fa92b6944988b0c337fa7b8659b33",
+            "sha256:9ad118cebd02e8bbc9b3472709577d159118e8119e17462c389e5be10865394a",
         ),
         (
             "htlk.child_scope",
-            "sha256:705fb04851d208b58c90ac0f6e2635fce01fbc5f4c1b95671aaf915c2ebddf39",
+            "sha256:3d66d3687d5a047f9a88da776ad619dfe98e9fe454904234b0b6b4858f2131a5",
         ),
     ] {
         let preimage = Value::Array(vec![
             Value::Text(domain.into()),
-            Value::Text("0.3".into()),
+            Value::Text("0.1".into()),
             Value::Text("example-run".into()),
         ]);
         assert_eq!(
