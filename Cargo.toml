@@ -11,7 +11,7 @@ repository = "https://github.com/thomasquintana/htlk"
 
 [workspace.dependencies]
 actix = "0.13.5"
-async-openai = { version = "0.41.3", default-features = false, features = [
+async-openai = { version = "0.42.0", default-features = false, features = [
     "byot",
     "chat-completion",
     "embedding",
@@ -34,7 +34,7 @@ rmcp = { version = "3.1.4", default-features = false, features = [
 ] }
 sqlite-vec = "0.1.9"
 tera = "2.2.0"
-tokio-rusqlite = { version = "0.7.0", default-features = false, features = [
+tokio-rusqlite = { version = "0.8.0", default-features = false, features = [
     "bundled",
 ] }
 
