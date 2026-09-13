@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Shared `htlk-cbor-digest` with typed SHA-256 digests, canonical text parsing
+- Version-0.1 executable envelopes with immutable payload access, explicit
+  format/version checks, domain-separated fingerprints, and structured validation
+  errors using the existing codec limits.
+- Shared `htlk-executable::digest` with typed SHA-256 digests, canonical text parsing
   and formatting, exact-byte hashing, and bounded canonical-CBOR hashing.
 - Shared `htlk-cbor` foundation with validated values, canonical-order maps,
   configurable limits, structured errors, and the HTLK deterministic CBOR profile.
@@ -20,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Consolidated digest support into `htlk-executable::digest`, replacing the
+  `htlk-cbor-digest` package while preserving digest behavior and wire results.
 - Regenerated the dependency lockfile and notices with compatible releases,
   replacing the yanked `chacha20` 0.10.1 resolution.
 - Compiler and runtime share `htlk-cbor`; package validation covers the complete

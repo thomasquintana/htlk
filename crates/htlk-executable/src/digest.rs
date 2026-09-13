@@ -1,4 +1,8 @@
+//! SHA-256 digest representation, strict text parsing, and canonical-CBOR hashing.
+
 use std::{fmt, str::FromStr};
+
+use sha2::{Digest as _, Sha256};
 
 /// A 32-byte SHA-256 digest, displayed as `sha256:` plus 64 lowercase hex digits.
 ///
@@ -90,3 +94,36 @@ impl fmt::Display for ParseDigestError {
 }
 
 impl std::error::Error for ParseDigestError {}
+
+/// Computes SHA-256 of the exact supplied bytes.
+///
+/// Adds no domain label, version, length prefix, or encoding. The caller is
+/// responsible for constructing its preimage and bounding input size. The hash
+/// operation borrows the input and uses fixed-size hashing state.
+///
+/// ```
+/// use htlk_executable::digest::hash_bytes;
+/// assert_eq!(hash_bytes(b"abc").to_string(),
+///     "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+/// ```
+pub fn hash_bytes(bytes: &[u8]) -> Digest {
+    Digest::from_bytes(Sha256::digest(bytes).into())
+}
+
+/// Computes SHA-256 of a value's deterministic CBOR encoding.
+///
+/// Encodes exactly once using [`htlk_cbor::encode`] and fresh per-operation
+/// accounting, then hashes the complete resulting bytes. No implicit domain or
+/// version labels are added. Different valid limits do not change the digest.
+/// The temporary encoded buffer is dropped before returning.
+///
+/// # Errors
+/// Propagates the codec's configuration, limit, and allocation errors unchanged.
+/// No digest is produced unless encoding succeeds.
+pub fn hash_cbor(
+    value: &htlk_cbor::Value,
+    limits: &htlk_cbor::Limits,
+) -> Result<Digest, htlk_cbor::Error> {
+    let bytes = htlk_cbor::encode(value, limits)?;
+    Ok(hash_bytes(&bytes))
+}

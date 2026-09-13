@@ -14,10 +14,12 @@ harnesses. The root crate is a facade over two focused libraries:
 Both components depend on [`htlk-cbor`](crates/htlk-cbor/README.md), the shared
 deterministic CBOR codec. It provides validated values, bounded encoding,
 strict decoding, and structured errors. They also share
-[`htlk-cbor-digest`](crates/htlk-cbor-digest/README.md) for typed SHA-256 digests,
-strict digest parsing, and hashing raw bytes or canonical CBOR.
-The compiler and runtime domain APIs
-are being defined; executable production and registration will use this codec.
+[`htlk-executable`](crates/htlk-executable/README.md), whose `digest` module provides
+typed SHA-256 digests, strict digest parsing, and hashing raw bytes or canonical
+CBOR. Its `ExecutableEnvelope` API implements the version-0.1 outer package
+contract, including format/version and fingerprint checks. The compiler and
+runtime domain APIs are being defined; executable
+production and registration will use these shared components.
 
 ## Installation
 
@@ -34,7 +36,7 @@ directly.
 
 - [IR grammar](docs/ir-grammar.md)
 - [Deterministic CBOR profile and API](crates/htlk-cbor/README.md)
-- [SHA-256 digest representation and CBOR hashing](crates/htlk-cbor-digest/README.md)
+- [Executable foundations and digest API](crates/htlk-executable/README.md)
 
 ## Development
 

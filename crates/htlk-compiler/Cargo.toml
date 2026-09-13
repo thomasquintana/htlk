@@ -14,7 +14,7 @@ categories = ["compilers", "development-tools"]
 [dependencies]
 chumsky.workspace = true
 htlk-cbor.workspace = true
-htlk-cbor-digest.workspace = true
+htlk-executable.workspace = true
 logos.workspace = true
 miette.workspace = true
 

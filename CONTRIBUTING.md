@@ -42,7 +42,7 @@ All five crates share one version. To release:
 4. Create and push an annotated tag matching the package version, such as `v0.1.0`.
 
 The release workflow publishes `htlk-cbor` first and waits for registry
-availability, then publishes `htlk-cbor-digest` and waits for it, then publishes
+availability, then publishes `htlk-executable` and waits for it, then publishes
 `htlk-compiler` and `htlk-rt`, waits for both, and publishes the `htlk` facade.
 All five packages are verified together before publication. The GitHub repository
 must provide a protected `crates-io`

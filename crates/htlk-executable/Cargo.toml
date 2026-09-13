@@ -1,13 +1,13 @@
 [package]
-name = "htlk-cbor-digest"
+name = "htlk-executable"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
-description = "SHA-256 digests of exact bytes and deterministic CBOR for HTLK"
+description = "Shared HTLK executable-format foundations and digest primitives"
 readme = "README.md"
-documentation = "https://docs.rs/htlk-cbor-digest"
+documentation = "https://docs.rs/htlk-executable"
 keywords = ["cbor", "sha256", "digest", "htlk"]
 categories = ["encoding", "cryptography"]
 

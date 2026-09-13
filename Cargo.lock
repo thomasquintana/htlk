@@ -742,22 +742,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "htlk-cbor-digest"
-version = "0.1.0"
-dependencies = [
- "htlk-cbor",
- "sha2",
-]
-
-[[package]]
 name = "htlk-compiler"
 version = "0.1.0"
 dependencies = [
  "chumsky",
  "htlk-cbor",
- "htlk-cbor-digest",
+ "htlk-executable",
  "logos",
  "miette",
+]
+
+[[package]]
+name = "htlk-executable"
+version = "0.1.0"
+dependencies = [
+ "htlk-cbor",
+ "sha2",
 ]
 
 [[package]]
@@ -767,7 +767,7 @@ dependencies = [
  "actix",
  "async-openai",
  "htlk-cbor",
- "htlk-cbor-digest",
+ "htlk-executable",
  "mlua",
  "rmcp",
  "sqlite-vec",

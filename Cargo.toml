@@ -20,8 +20,8 @@ async-openai = { version = "0.41.3", default-features = false, features = [
 chumsky = "0.13.0"
 half = { version = "2.7.1", default-features = false }
 htlk-cbor = { version = "=0.1.0", path = "crates/htlk-cbor" }
-htlk-cbor-digest = { version = "=0.1.0", path = "crates/htlk-cbor-digest" }
 htlk-compiler = { version = "=0.1.0", path = "crates/htlk-compiler" }
+htlk-executable = { version = "=0.1.0", path = "crates/htlk-executable" }
 htlk-rt = { version = "=0.1.0", path = "crates/htlk-rt" }
 logos = "0.16.1"
 miette = "7.6.0"

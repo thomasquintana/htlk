@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use htlk_cbor::{FiniteFloat, Limits, Map, Value};
-use htlk_cbor_digest::{Digest, ParseDigestError, hash_bytes, hash_cbor};
+use htlk_executable::digest::{Digest, ParseDigestError, hash_bytes, hash_cbor};
 
 #[test]
 fn sha256_known_answers() {
