@@ -18,8 +18,9 @@ async-openai = { version = "0.41.3", default-features = false, features = [
     "rustls",
 ] }
 chumsky = "0.13.0"
+half = { version = "2.7.1", default-features = false }
+htlk-cbor = { version = "=0.1.0", path = "crates/htlk-cbor" }
 htlk-compiler = { version = "=0.1.0", path = "crates/htlk-compiler" }
-htlk-ir = { version = "=0.1.0", path = "crates/htlk-ir" }
 htlk-rt = { version = "=0.1.0", path = "crates/htlk-rt" }
 logos = "0.16.1"
 miette = "7.6.0"
@@ -53,15 +54,15 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
-description = "A facade for the Harness Toolkit compiler, IR compiler, and actor-based runtime"
+description = "A facade for the Harness Toolkit compiler and actor-based runtime"
 readme = "README.md"
+exclude = ["docs/.plan-*.md"]
 documentation = "https://docs.rs/htlk"
 keywords = ["harness", "compiler", "runtime", "toolkit"]
 categories = ["compilers", "development-tools"]
 
 [dependencies]
 htlk-compiler.workspace = true
-htlk-ir.workspace = true
 htlk-rt.workspace = true
 
 [lints]

@@ -13,6 +13,7 @@ categories = ["compilers", "development-tools"]
 
 [dependencies]
 chumsky.workspace = true
+htlk-cbor.workspace = true
 logos.workspace = true
 miette.workspace = true
 

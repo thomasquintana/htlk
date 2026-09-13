@@ -6,14 +6,15 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 Harness Toolkit (`htlk`) is a Rust workspace for compiling and running
-harnesses. The root crate is a facade over three focused libraries:
+harnesses. The root crate is a facade over two focused libraries:
 
 - [`htlk-compiler`](https://crates.io/crates/htlk-compiler) compiles natural language into IR.
-- [`htlk-ir`](https://crates.io/crates/htlk-ir) parses and compiles IR into bytecode.
 - [`htlk-rt`](https://crates.io/crates/htlk-rt) executes bytecode with actors, LLMs, SQLite, and MCP servers.
 
-The component APIs are intentionally minimal while their domain requirements
-are being defined.
+Both components depend on [`htlk-cbor`](crates/htlk-cbor/README.md), the shared
+deterministic CBOR codec. It provides validated values, bounded encoding,
+strict decoding, and structured errors. The compiler and runtime domain APIs
+are being defined; executable production and registration will use this codec.
 
 ## Installation
 
@@ -22,13 +23,14 @@ are being defined.
 htlk = "0.1.0"
 ```
 
-The facade exposes the component crates as `htlk::compiler`, `htlk::ir`, and
+The facade exposes the component crates as `htlk::compiler` and
 `htlk::rt`. Applications that only need one layer can depend on its crate
 directly.
 
 ## Documentation
 
 - [IR grammar](docs/ir-grammar.md)
+- [Deterministic CBOR profile and API](crates/htlk-cbor/README.md)
 
 ## Development
 

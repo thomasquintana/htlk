@@ -14,4 +14,8 @@ bytecode. Runtime capabilities include:
 
 Its domain API will be introduced as the runtime requirements are defined.
 
+The shared `htlk-cbor` dependency supplies strict deterministic-CBOR decoding
+for future executable registration and value ingress. Registration schemas,
+aggregate decoding policy, and runtime call sites are pending.
+
 Licensed under the Apache License, Version 2.0.

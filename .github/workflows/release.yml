@@ -74,11 +74,8 @@ jobs:
           cargo about generate about.hbs --workspace --locked --fail --output-file "$RUNNER_TEMP/THIRD_PARTY_LICENSES"
           diff --unified THIRD_PARTY_LICENSES "$RUNNER_TEMP/THIRD_PARTY_LICENSES"
 
-      - name: Validate component packages
-        run: |
-          cargo package -p htlk-compiler --locked
-          cargo package -p htlk-ir --locked
-          cargo package -p htlk-rt --locked
+      - name: Validate workspace packages
+        run: cargo package --workspace --locked
 
       - name: Publish crates
         shell: bash
@@ -104,14 +101,11 @@ jobs:
             fi
           }
 
-          for crate in htlk-compiler htlk-ir htlk-rt; do
-            publish_if_needed "$crate"
-          done
-
-          for crate in htlk-compiler htlk-ir htlk-rt; do
+          wait_for_crate() {
+            local crate="$1"
             for attempt in {1..30}; do
               if crate_exists "$crate"; then
-                break
+                return
               fi
               if [[ "$attempt" == 30 ]]; then
                 echo "Timed out waiting for $crate $version to reach crates.io"
@@ -119,6 +113,17 @@ jobs:
               fi
               sleep 10
             done
+          }
+
+          publish_if_needed htlk-cbor
+          wait_for_crate htlk-cbor
+
+          for crate in htlk-compiler htlk-rt; do
+            publish_if_needed "$crate"
+          done
+
+          for crate in htlk-compiler htlk-rt; do
+            wait_for_crate "$crate"
           done
 
           publish_if_needed htlk

@@ -1,0 +1,18 @@
+[package]
+name = "htlk-cbor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Shared deterministic CBOR data model and codec for HTLK"
+readme = "README.md"
+documentation = "https://docs.rs/htlk-cbor"
+keywords = ["cbor", "encoding", "htlk"]
+categories = ["encoding"]
+
+[dependencies]
+half.workspace = true
+
+[lints]
+workspace = true

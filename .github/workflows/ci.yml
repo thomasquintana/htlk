@@ -43,11 +43,8 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --all-features --no-deps --locked
 
-      - name: Verify component packages
-        run: |
-          cargo package -p htlk-compiler --locked
-          cargo package -p htlk-ir --locked
-          cargo package -p htlk-rt --locked
+      - name: Verify workspace packages
+        run: cargo package --workspace --locked
 
   dependencies:
     name: Dependency policy
