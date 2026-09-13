@@ -13,7 +13,10 @@ harnesses. The root crate is a facade over two focused libraries:
 
 Both components depend on [`htlk-cbor`](crates/htlk-cbor/README.md), the shared
 deterministic CBOR codec. It provides validated values, bounded encoding,
-strict decoding, and structured errors. The compiler and runtime domain APIs
+strict decoding, and structured errors. They also share
+[`htlk-cbor-digest`](crates/htlk-cbor-digest/README.md) for typed SHA-256 digests,
+strict digest parsing, and hashing raw bytes or canonical CBOR.
+The compiler and runtime domain APIs
 are being defined; executable production and registration will use this codec.
 
 ## Installation
@@ -31,6 +34,7 @@ directly.
 
 - [IR grammar](docs/ir-grammar.md)
 - [Deterministic CBOR profile and API](crates/htlk-cbor/README.md)
+- [SHA-256 digest representation and CBOR hashing](crates/htlk-cbor-digest/README.md)
 
 ## Development
 

@@ -118,6 +118,9 @@ jobs:
           publish_if_needed htlk-cbor
           wait_for_crate htlk-cbor
 
+          publish_if_needed htlk-cbor-digest
+          wait_for_crate htlk-cbor-digest
+
           for crate in htlk-compiler htlk-rt; do
             publish_if_needed "$crate"
           done

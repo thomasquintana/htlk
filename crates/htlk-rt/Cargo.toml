@@ -15,6 +15,7 @@ categories = ["development-tools"]
 actix.workspace = true
 async-openai.workspace = true
 htlk-cbor.workspace = true
+htlk-cbor-digest.workspace = true
 mlua.workspace = true
 rmcp.workspace = true
 sqlite-vec.workspace = true

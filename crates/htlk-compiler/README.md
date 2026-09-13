@@ -7,5 +7,7 @@ IR. Its domain API will be introduced as the compiler requirements are defined.
 
 The shared `htlk-cbor` dependency supplies deterministic encoding for future
 executable production. Executable schemas and compiler call sites are pending.
+`htlk-cbor-digest` supplies typed SHA-256 digests and canonical-CBOR hashing;
+the compiler will construct its specified executable identity preimages.
 
 Licensed under the Apache License, Version 2.0.

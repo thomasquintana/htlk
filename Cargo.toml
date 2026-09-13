@@ -20,6 +20,7 @@ async-openai = { version = "0.41.3", default-features = false, features = [
 chumsky = "0.13.0"
 half = { version = "2.7.1", default-features = false }
 htlk-cbor = { version = "=0.1.0", path = "crates/htlk-cbor" }
+htlk-cbor-digest = { version = "=0.1.0", path = "crates/htlk-cbor-digest" }
 htlk-compiler = { version = "=0.1.0", path = "crates/htlk-compiler" }
 htlk-rt = { version = "=0.1.0", path = "crates/htlk-rt" }
 logos = "0.16.1"
@@ -32,6 +33,7 @@ rmcp = { version = "3.1.4", default-features = false, features = [
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
 ] }
+sha2 = "0.10.9"
 sqlite-vec = "0.1.9"
 tera = "2.2.0"
 tokio-rusqlite = { version = "0.7.0", default-features = false, features = [

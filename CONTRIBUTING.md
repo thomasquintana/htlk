@@ -34,7 +34,7 @@ cargo about generate about.hbs --workspace --locked --fail --output-file THIRD_P
 
 ## Releases
 
-All four crates share one version. To release:
+All five crates share one version. To release:
 
 1. Replace `TBD` in `CHANGELOG.md` with the release date.
 2. Update every workspace dependency version when changing the workspace version.
@@ -42,7 +42,8 @@ All four crates share one version. To release:
 4. Create and push an annotated tag matching the package version, such as `v0.1.0`.
 
 The release workflow publishes `htlk-cbor` first and waits for registry
-availability, then publishes `htlk-compiler` and `htlk-rt`, waits for both, and
-publishes the `htlk` facade. All four packages are verified together before
-publication. The GitHub repository must provide a protected `crates-io`
+availability, then publishes `htlk-cbor-digest` and waits for it, then publishes
+`htlk-compiler` and `htlk-rt`, waits for both, and publishes the `htlk` facade.
+All five packages are verified together before publication. The GitHub repository
+must provide a protected `crates-io`
 environment with a `CARGO_REGISTRY_TOKEN` secret authorized to publish them.

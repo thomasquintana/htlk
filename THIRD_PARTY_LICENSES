@@ -844,7 +844,7 @@ Source: https://github.com/iqlusioninc/crates/tree/main/secrecy
 
 
 ================================================================================
-sse-stream 0.2.5
+sse-stream 0.2.6
 License: Apache License 2.0
 Source: https://github.com/4t145/sse-stream/
 ================================================================================
@@ -5103,7 +5103,7 @@ Source: https://github.com/microsoft/windows-rs
 
 
 ================================================================================
-zerocopy-derive 0.8.56
+zerocopy-derive 0.8.57
 License: Apache License 2.0
 Source: https://github.com/google/zerocopy
 ================================================================================
@@ -5313,7 +5313,7 @@ Source: https://github.com/google/zerocopy
 
 
 ================================================================================
-zerocopy 0.8.56
+zerocopy 0.8.57
 License: Apache License 2.0
 Source: https://github.com/google/zerocopy
 ================================================================================
@@ -5732,7 +5732,7 @@ Source: https://github.com/rustls/rustls-platform-verifier
 
 
 ================================================================================
-ipnet 2.12.1
+ipnet 2.12.2
 License: Apache License 2.0
 Source: https://github.com/krisprice/ipnet
 ================================================================================
@@ -6150,7 +6150,7 @@ Source: https://github.com/actix/actix-net.git
 
 
 ================================================================================
-actix-rt 2.11.0
+actix-rt 2.15.0
 License: Apache License 2.0
 Source: https://github.com/actix/actix-net
 ================================================================================
@@ -10135,7 +10135,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ================================================================================
-reqwest 0.13.4
+reqwest 0.13.5
 License: Apache License 2.0
 Source: https://github.com/seanmonstar/reqwest
 ================================================================================
@@ -10553,7 +10553,7 @@ limitations under the License.
 
 
 ================================================================================
-tokio-rustls 0.26.4
+tokio-rustls 0.26.5
 License: Apache License 2.0
 Source: https://github.com/rustls/tokio-rustls
 ================================================================================
@@ -13061,7 +13061,7 @@ limitations under the License.
 
 
 ================================================================================
-bitflags 2.13.1
+bitflags 2.13.2
 License: Apache License 2.0
 Source: https://github.com/bitflags/bitflags
 ================================================================================
@@ -13688,7 +13688,7 @@ limitations under the License.
 
 
 ================================================================================
-cc 1.4.3
+cc 1.4.6
 License: Apache License 2.0
 Source: https://github.com/rust-lang/cc-rs
 ================================================================================
@@ -14733,7 +14733,7 @@ limitations under the License.
 
 
 ================================================================================
-crossbeam-channel 0.5.16
+crossbeam-channel 0.5.17
 License: Apache License 2.0
 Source: https://github.com/crossbeam-rs/crossbeam
 ================================================================================
@@ -14942,7 +14942,7 @@ limitations under the License.
 
 
 ================================================================================
-crossbeam-utils 0.8.22
+crossbeam-utils 0.8.23
 License: Apache License 2.0
 Source: https://github.com/crossbeam-rs/crossbeam
 ================================================================================
@@ -15987,7 +15987,7 @@ limitations under the License.
 
 
 ================================================================================
-find-msvc-tools 0.1.11
+find-msvc-tools 0.1.12
 License: Apache License 2.0
 Source: https://github.com/rust-lang/cc-rs
 ================================================================================
@@ -17868,7 +17868,7 @@ limitations under the License.
 
 
 ================================================================================
-indexmap 2.14.0
+indexmap 2.14.2
 License: Apache License 2.0
 Source: https://github.com/indexmap-rs/indexmap
 ================================================================================
@@ -18286,7 +18286,7 @@ limitations under the License.
 
 
 ================================================================================
-js-sys 0.3.104
+js-sys 0.3.105
 License: Apache License 2.0
 Source: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys
 ================================================================================
@@ -18704,7 +18704,7 @@ limitations under the License.
 
 
 ================================================================================
-log 0.4.33
+log 0.4.34
 License: Apache License 2.0
 Source: https://github.com/rust-lang/log
 ================================================================================
@@ -22257,7 +22257,7 @@ limitations under the License.
 
 
 ================================================================================
-rustls 0.23.43
+rustls 0.23.44
 License: Apache License 2.0
 Source: https://github.com/rustls/rustls
 ================================================================================
@@ -23511,7 +23511,7 @@ limitations under the License.
 
 
 ================================================================================
-smallvec 1.15.2
+smallvec 1.16.1
 License: Apache License 2.0
 Source: https://github.com/servo/rust-smallvec
 ================================================================================
@@ -25183,7 +25183,7 @@ limitations under the License.
 
 
 ================================================================================
-uuid 1.24.1
+uuid 1.26.1
 License: Apache License 2.0
 Source: https://github.com/uuid-rs/uuid
 ================================================================================
@@ -26019,7 +26019,7 @@ limitations under the License.
 
 
 ================================================================================
-wasm-bindgen-futures 0.4.77
+wasm-bindgen-futures 0.4.78
 License: Apache License 2.0
 Source: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures
 ================================================================================
@@ -26228,9 +26228,9 @@ limitations under the License.
 
 
 ================================================================================
-wasm-bindgen-macro-support 0.2.127
+wasm-bindgen-macro-support 0.2.128
 License: Apache License 2.0
-Source: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support
+Source: https://github.com/wasm-bindgen/wasm-bindgen/tree/main/crates/macro-support
 ================================================================================
 
                               Apache License
@@ -26437,7 +26437,7 @@ limitations under the License.
 
 
 ================================================================================
-wasm-bindgen-macro 0.2.127
+wasm-bindgen-macro 0.2.128
 License: Apache License 2.0
 Source: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro
 ================================================================================
@@ -26646,7 +26646,7 @@ limitations under the License.
 
 
 ================================================================================
-wasm-bindgen-shared 0.2.127
+wasm-bindgen-shared 0.2.128
 License: Apache License 2.0
 Source: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared
 ================================================================================
@@ -26855,7 +26855,7 @@ limitations under the License.
 
 
 ================================================================================
-wasm-bindgen 0.2.127
+wasm-bindgen 0.2.128
 License: Apache License 2.0
 Source: https://github.com/wasm-bindgen/wasm-bindgen
 ================================================================================
@@ -27064,7 +27064,7 @@ limitations under the License.
 
 
 ================================================================================
-web-sys 0.3.104
+web-sys 0.3.105
 License: Apache License 2.0
 Source: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys
 ================================================================================
@@ -31277,7 +31277,7 @@ limitations under the License.
 
 
 ================================================================================
-aws-lc-sys 0.44.0
+aws-lc-sys 0.45.0
 License: Apache License 2.0
 Source: https://github.com/aws/aws-lc-rs
 ================================================================================
@@ -32330,7 +32330,7 @@ limitations under the License.
 
 
 ================================================================================
-process-wrap 9.1.0
+process-wrap 10.0.0
 License: Apache License 2.0
 Source: https://github.com/watchexec/process-wrap
 ================================================================================
@@ -32654,7 +32654,7 @@ limitations under the License.
 
 
 ================================================================================
-rand 0.8.7
+rand 0.8.8
 License: Apache License 2.0
 Source: https://github.com/rust-random/rand
 ================================================================================
@@ -32897,7 +32897,7 @@ limitations under the License.
 
 
 ================================================================================
-rmcp 3.1.4
+rmcp 3.3.0
 License: Apache License 2.0
 Source: https://github.com/modelcontextprotocol/rust-sdk/
 ================================================================================
@@ -34193,7 +34193,7 @@ limitations under the License.
 
 
 ================================================================================
-syn 3.0.3
+syn 3.0.5
 License: Apache License 2.0
 Source: https://github.com/dtolnay/syn
 ================================================================================
@@ -35369,7 +35369,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-aws-lc-sys 0.44.0
+aws-lc-sys 0.45.0
 License: BSD 3-Clause "New" or "Revised" License
 Source: https://github.com/aws/aws-lc-rs
 ================================================================================
@@ -35520,7 +35520,7 @@ THIS SOFTWARE.
 
 
 ================================================================================
-rustls-webpki 0.103.14
+rustls-webpki 0.103.15
 License: ISC License
 Source: https://github.com/rustls/webpki
 ================================================================================
@@ -35547,7 +35547,7 @@ third-party/chromium/LICENSE.
 
 
 ================================================================================
-aws-lc-rs 1.18.0
+aws-lc-rs 1.18.1
 License: ISC License
 Source: https://github.com/aws/aws-lc-rs
 ================================================================================
@@ -35563,7 +35563,7 @@ THE SOFTWARE IS PROVIDED "AS IS" AND ISC DISCLAIMS ALL WARRANTIES WITH REGARD TO
 
 
 ================================================================================
-aws-lc-sys 0.44.0
+aws-lc-sys 0.45.0
 License: ISC License
 Source: https://github.com/aws/aws-lc-rs
 ================================================================================
@@ -35613,7 +35613,7 @@ The `cfg_aliases!` macro uses a lot of the code from [`tectonic_cfg_support::tar
 
 
 ================================================================================
-mlua 0.12.0
+mlua 0.12.1
 License: MIT License
 Source: https://github.com/mlua-rs/mlua
 ================================================================================
@@ -35646,7 +35646,7 @@ SOFTWARE.
 
 
 ================================================================================
-mio 1.2.2
+mio 1.2.3
 License: MIT License
 Source: https://github.com/tokio-rs/mio
 ================================================================================
@@ -35755,7 +35755,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ================================================================================
-hyper 1.11.0
+hyper 1.11.1
 License: MIT License
 Source: https://github.com/hyperium/hyper
 ================================================================================
@@ -35782,7 +35782,7 @@ THE SOFTWARE.
 
 
 ================================================================================
-which 8.0.5
+which 8.0.6
 License: MIT License
 Source: https://github.com/harryfei/which-rs.git
 ================================================================================
@@ -36506,7 +36506,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 ================================================================================
-luajit-src 210.7.2+b925b3e
+luajit-src 210.7.3+1ee778a
 License: MIT License
 Source: https://github.com/mlua-rs/luajit-src-rs
 ================================================================================
@@ -36587,7 +36587,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ================================================================================
-lua-src 550.1.1
+lua-src 551.0.2
 License: MIT License
 Source: https://github.com/mlua-rs/lua-src-rs
 ================================================================================
@@ -36613,35 +36613,9 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ================================================================================
-mlua-sys 0.11.0
+mlua-sys 0.12.0
 License: MIT License
 Source: https://github.com/mlua-rs/mlua
-================================================================================
-
-MIT License
-
-Copyright (c) <year> <copyright holders>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
-associated documentation files (the "Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
-following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial
-portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
-LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
-EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-
-================================================================================
-tera 2.2.0
-License: MIT License
-Source: https://github.com/Keats/tera
 ================================================================================
 
 MIT License
@@ -36959,7 +36933,7 @@ SOFTWARE.
 
 
 ================================================================================
-combine 4.6.7
+combine 4.6.8
 License: MIT License
 Source: https://github.com/Marwes/combine
 ================================================================================
@@ -37018,7 +36992,7 @@ SOFTWARE.
 
 
 ================================================================================
-aws-lc-sys 0.44.0
+aws-lc-sys 0.45.0
 License: MIT License
 Source: https://github.com/aws/aws-lc-rs
 ================================================================================
@@ -37161,6 +37135,36 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+================================================================================
+tera 2.4.0
+License: MIT License
+Source: https://github.com/Keats/tera
+================================================================================
+
+The MIT License (MIT)
+
+Copyright (c) 2025 Vincent Prouillet
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 
 ================================================================================
