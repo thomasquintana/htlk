@@ -637,6 +637,49 @@ JSON integers. Local execution limits still allow signed-i64 values; the tighter
 range applies when included in external JSON. Canonical-document assembly enforces
 the two structural ceilings; runtime metering and evaluator limits are subsequent work.
 
+## JSON Pointer locations
+
+`JsonPointer::new` parses RFC 6901 plain strings; `from_fragment` parses URI
+fragments beginning with `#`. Both use existing codec `Limits`. Immutable decoded
+tokens are available through `tokens()`, and Display reconstructs the escaped
+plain-pointer form. `resolve(&JsonDocument)` returns a borrowed value without
+copying it or recursively traversing the document.
+
+```rust
+use htlk_cbor::{Limits, Value};
+use htlk_executable::{JsonDocument, JsonPointer};
+
+let limits = Limits::default();
+let document = JsonDocument::new(br#"{"a/b":[null,"found"]}"#, &limits)?;
+let pointer = JsonPointer::from_fragment("#/a~1b/1", &limits)?;
+assert_eq!(pointer.tokens(), &["a/b", "1"]);
+assert_eq!(pointer.resolve(&document)?, &Value::Text("found".into()));
+assert_eq!(JsonPointer::new("/a~1b/0", &limits)?.resolve(&document)?, &Value::Null);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The empty plain pointer selects the document root; `/` selects an empty object
+key. `~1` decodes to slash and `~0` to tilde in one pass, so `~01` means the key
+`~1`. Percent encoding is decoded only in URI fragments, before pointer escapes;
+`+` is never treated as space. Fragment Unicode uses UTF-8 percent encoding.
+Object keys preserve exact Unicode spelling and may contain arbitrary strings.
+Array indices require unsigned decimal without leading zeros, except `0` itself.
+The `-` token and oversized/out-of-range indices name no existing array element.
+
+Input byte limits apply before parsing. Depth, collection-entry, and total-value
+limits each bound token count; text/payload limits bound individual/aggregate
+decoded token UTF-8 bytes. Tokens are sized before copying. Fragment decoding
+temporarily retains one input-size-bounded buffer before token construction;
+logical counters are not exact process-heap measurements. Lookup is iterative,
+including at the supported depth ceiling of 128.
+
+`JsonPointerError` reports syntax/fragment byte offsets or the failing zero-based
+token index, without retaining submitted keys. A missing target differs from a
+present null; traversing a scalar is another explicit failure. Named anchors such
+as `#Name` are not pointers. This API is a location primitive for the forthcoming
+offline schema resolver: it does not select nested `$id` resources, resolve
+anchors, fetch documents, or establish that a target is a schema-bearing location.
+
 ## Canonical document assembly
 
 `DocumentFields::new(graph_id, profile, root_scope)` starts empty authored tables.

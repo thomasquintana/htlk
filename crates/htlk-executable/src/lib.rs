@@ -10,6 +10,7 @@ mod expression;
 mod graph;
 mod identifier;
 mod json;
+mod json_pointer;
 mod metadata;
 mod options;
 mod policy;
@@ -30,6 +31,7 @@ pub use graph::{
 };
 pub use identifier::{Identifier, ParseIdentifierError};
 pub use json::{JsonDocument, JsonError};
+pub use json_pointer::{JsonPointer, JsonPointerError};
 pub use metadata::{
     CORE_VERSION, EngineIdentity, ExecutionProfile, FunctionSignature, Library,
     MCP_PROTOCOL_VERSION, McpBinding, McpBindingKind, McpTransport, MetadataError, ServerIdentity,
