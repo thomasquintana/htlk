@@ -13,6 +13,7 @@ mod metadata;
 mod options;
 mod policy;
 mod record_accounting;
+mod structure;
 mod types;
 
 pub use document::{CanonicalDocument, DocumentError, DocumentFields};
@@ -33,4 +34,5 @@ pub use metadata::{
 };
 pub use options::{ExecutionLimits, ExecutionOptionsError, RetryPolicy};
 pub use policy::{EvaluatorLimits, PolicyDocument, PolicyError, PolicyFields};
+pub use structure::{StructuralLimit, StructuralSummary};
 pub use types::{Port, PrimitiveType, TypeContext, TypeError, ValueType, ValueTypeKind};

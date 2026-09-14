@@ -634,8 +634,8 @@ clone, and failure cleanup have depth-128 tests on 512 KiB and 2 MiB stacks.
 Defaults must supply positive timeout, attempt timeout, and concurrency. All
 seven evaluator ceilings and both structural ceilings must be positive safe
 JSON integers. Local execution limits still allow signed-i64 values; the tighter
-range applies when included in external JSON. Policy records describe ceilings;
-runtime metering and semantic expanded-node/depth enforcement are subsequent work.
+range applies when included in external JSON. Canonical-document assembly enforces
+the two structural ceilings; runtime metering and evaluator limits are subsequent work.
 
 ## Canonical document assembly
 
@@ -662,6 +662,36 @@ references, including function references; library function names/arity and
 render argument names are checked. Descriptor, tool-schema, schema-URI, and
 type-schema references must identify stored documents. Complete library manifests
 are retained even when only one public function is used.
+
+### Policy structural bounds
+
+Construction and canonical ingress enforce `maximum_scope_depth` and
+`maximum_expanded_nodes` from the pinned policy. `structural_summary()` returns an
+immutable `StructuralSummary` with `scope_depth()` and `expanded_nodes()` getters.
+The summary is derived metadata and adds no canonical fields or digest inputs.
+
+The root counts as depth one. Each nested task or loop body adds one level;
+iterations do not add nesting. Every node occurrence counts once, including use
+and loop wrappers. Shared bodies count at each use, and each loop multiplies its
+body's count by `max_iterations`. False guards and literal-true termination tests
+do not reduce the conservative count. An empty root has zero node invocations;
+a loop with an empty body contributes only its wrapper at that use site.
+
+For example, a one-node body repeated three times costs four invocations (one
+loop wrapper plus three body invocations). Repeating that loop body five times
+costs 21: one outer wrapper plus five times four. Scope depth is three.
+
+Leaf-to-root propagation uses iterative reverse dependencies over the stored DAG,
+with one contribution per use. Time is O((definitions + uses) log definitions)
+and auxiliary storage is O(definitions + uses), independent of expanded counts.
+Checked arithmetic rejects overflows as exceeded policy ceilings. Codec nesting
+and semantic scope nesting remain separate: flat digest references can describe
+a 256-level definition chain without nesting CBOR 256 levels deep. Failures use
+`DocumentError::StructuralLimitExceeded` with `StructuralLimit::ScopeDepth` or
+`ExpandedNodes` and the exact policy ceiling. These checks reserve no runtime
+invocations or storage.
+
+### Assembly boundaries
 
 Each embedded record is bounded before aggregate CBOR accounting charges its real
 depth and size. External JSON is independently rechecked under each call's limits.

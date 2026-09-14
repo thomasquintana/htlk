@@ -598,3 +598,241 @@ fn document_on_controlled_stacks() {
         );
     }
 }
+
+fn structural_policy(f: &mut DocumentFields, depth: u64, nodes: u64, l: &Limits) {
+    let mut fields = policy_fields();
+    fields.maximum_scope_depth = depth;
+    fields.maximum_expanded_nodes = nodes;
+    let policy = PolicyDocument::new(fields, l).unwrap();
+    let p = &f.profile;
+    let profile = ExecutionProfile::new(
+        p.core_digest(),
+        p.regex_engine().clone(),
+        p.schema_validator().clone(),
+        p.uri_template_engine().clone(),
+        policy.digest(),
+        l,
+    )
+    .unwrap();
+    f.documents.remove(&p.policy_document());
+    f.documents
+        .insert(policy.digest(), policy.document().clone());
+    f.profile = profile;
+}
+
+// Retain the previous root as a shared child definition. Each wrapper has the
+// child's empty interface; loop bodies are role-neutral in these fixtures.
+fn wrap(f: &mut DocumentFields, copies: usize, iterations: Option<u64>, l: &Limits) {
+    let child = f.root_scope;
+    let scope = f.scopes[&child].clone();
+    let nodes = (0..copies)
+        .map(|i| {
+            let op = iterations.map_or(Operation::Scope(child), |max_iterations| Operation::Loop {
+                body: child,
+                max_iterations,
+                initializers: vec![],
+                until: Expression::literal(ScalarLiteral::Boolean(true)),
+            });
+            let mut fields = NodeFields::new(format!("use_{i}").parse().unwrap(), op);
+            // All guarded branches and all bounded iterations count, even though
+            // this guard is false and each loop's until is literal true.
+            fields.guard = Expression::literal(ScalarLiteral::Boolean(false));
+            Node::new(fields, C::Ordinary, l).unwrap()
+        })
+        .collect();
+    root(
+        f,
+        ScopeFields {
+            nodes,
+            ..ScopeFields::default()
+        },
+        l,
+    );
+    f.scopes.insert(child, scope);
+}
+
+#[test]
+fn structural_counts_include_root_depth_wrappers_reuse_and_loop_products() {
+    let l = Limits::default();
+    let mut f = base(&l);
+    structural_policy(&mut f, 1, 1, &l);
+    let empty = Doc::new(f.clone(), &l).unwrap().structural_summary();
+    assert_eq!((empty.scope_depth(), empty.expanded_nodes()), (1, 0));
+    eval(
+        &mut f,
+        ExpressionKind::Literal(ScalarLiteral::String("leaf".into())),
+        &l,
+    );
+    let leaf = Doc::new(f.clone(), &l).unwrap().structural_summary();
+    assert_eq!((leaf.scope_depth(), leaf.expanded_nodes()), (1, 1));
+    structural_policy(&mut f, 4, 30, &l);
+    wrap(&mut f, 2, None, &l); // Two uses: 2 * (wrapper + leaf) = 4.
+    wrap(&mut f, 1, Some(3), &l); // One loop: 1 + 3 * 4 = 13.
+    wrap(&mut f, 2, None, &l); // Shared loop: 2 * (1 + 13) = 28.
+    let doc = Doc::new(f, &l).unwrap();
+    assert_eq!(doc.fields().scopes.len(), 4);
+    assert_eq!(doc.structural_summary().scope_depth(), 4);
+    assert_eq!(doc.structural_summary().expanded_nodes(), 28);
+    assert_eq!(
+        Doc::decode(&doc.encode(&l).unwrap(), &l)
+            .unwrap()
+            .structural_summary(),
+        doc.structural_summary()
+    );
+    let mut f = base(&l);
+    eval(
+        &mut f,
+        ExpressionKind::Literal(ScalarLiteral::String("leaf".into())),
+        &l,
+    );
+    wrap(&mut f, 1, Some(3), &l);
+    wrap(&mut f, 1, Some(5), &l);
+    let summary = Doc::new(f, &l).unwrap().structural_summary();
+    // Outer wrapper + five occurrences of (inner wrapper + three leaves).
+    assert_eq!((summary.scope_depth(), summary.expanded_nodes()), (3, 21));
+}
+
+#[test]
+fn structural_policy_boundaries_apply_to_construction_and_canonical_ingress() {
+    use htlk_executable::StructuralLimit as S;
+    let l = Limits::default();
+    let mut f = base(&l);
+    eval(
+        &mut f,
+        ExpressionKind::Literal(ScalarLiteral::String("leaf".into())),
+        &l,
+    );
+    wrap(&mut f, 2, Some(3), &l); // 2 loop wrappers + 2*3 leaf invocations = 8.
+    structural_policy(&mut f, 2, 8, &l);
+    let doc = Doc::new(f.clone(), &l).unwrap();
+    assert_eq!(doc.structural_summary().expanded_nodes(), 8);
+    for (depth, nodes, limit, maximum) in [(1, 8, S::ScopeDepth, 1), (2, 7, S::ExpandedNodes, 7)] {
+        let mut bad = f.clone();
+        structural_policy(&mut bad, depth, nodes, &l);
+        let expected = Error::StructuralLimitExceeded { limit, maximum };
+        assert_eq!(Doc::new(bad.clone(), &l).unwrap_err(), expected);
+        // Produce canonical bytes with matching profile and policy identities,
+        // bypassing authored construction to exercise ingress independently.
+        let value = doc.to_value(&l).unwrap();
+        let docs = Value::Map(
+            Map::try_from_entries(
+                bad.documents
+                    .iter()
+                    .map(|(d, j)| (d.to_string(), Value::Bytes(j.as_bytes().to_vec()))),
+            )
+            .unwrap(),
+        );
+        let value = replace(
+            &replace(&value, "profile", Some(bad.profile.to_value(&l).unwrap())),
+            "documents",
+            Some(docs),
+        );
+        let bytes = htlk_cbor::encode(&value, &l).unwrap();
+        assert_eq!(Doc::decode(&bytes, &l).unwrap_err(), expected);
+        assert_eq!(
+            Doc::from_envelope(&ExecutableEnvelope::new(bytes, &l).unwrap(), &l).unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn structural_arithmetic_rejects_overflow_without_expanding_invocations() {
+    use htlk_executable::StructuralLimit;
+    let l = Limits::default();
+    let mut f = base(&l);
+    structural_policy(&mut f, 10, (1 << 53) - 1, &l);
+    // Huge iteration count with an empty body only counts its one loop node.
+    wrap(&mut f, 1, Some(i64::MAX as u64), &l);
+    assert_eq!(
+        Doc::new(f, &l)
+            .unwrap()
+            .structural_summary()
+            .expanded_nodes(),
+        1
+    );
+    let mut f = base(&l);
+    structural_policy(&mut f, 10, (1 << 53) - 1, &l);
+    eval(
+        &mut f,
+        ExpressionKind::Literal(ScalarLiteral::String("leaf".into())),
+        &l,
+    );
+    wrap(&mut f, 2, None, &l); // Four invocations.
+    wrap(&mut f, 1, Some(i64::MAX as u64), &l); // Multiplication overflows u64.
+    assert_eq!(
+        Doc::new(f, &l).unwrap_err(),
+        Error::StructuralLimitExceeded {
+            limit: StructuralLimit::ExpandedNodes,
+            maximum: (1 << 53) - 1,
+        }
+    );
+    let mut f = base(&l);
+    structural_policy(&mut f, 3, (1 << 53) - 1, &l);
+    eval(
+        &mut f,
+        ExpressionKind::Literal(ScalarLiteral::String("leaf".into())),
+        &l,
+    );
+    wrap(&mut f, 2, Some(4_000_000_000_000_000), &l);
+    wrap(&mut f, 1, Some(2), &l); // Child fits policy; parent exceeds it.
+    assert!(matches!(
+        Doc::new(f, &l),
+        Err(Error::StructuralLimitExceeded {
+            limit: StructuralLimit::ExpandedNodes,
+            ..
+        })
+    ));
+}
+
+fn definition_depth_exercise() {
+    let l = Limits::default();
+    let mut f = base(&l);
+    structural_policy(&mut f, 256, 255, &l);
+    for _ in 0..255 {
+        wrap(&mut f, 1, None, &l);
+    }
+    // Definition depth is independent of the CBOR nesting limit (default 64).
+    let doc = Doc::new(f.clone(), &l).unwrap();
+    assert_eq!(doc.structural_summary().scope_depth(), 256);
+    assert_eq!(doc.structural_summary().expanded_nodes(), 255);
+    assert_eq!(Doc::decode(&doc.encode(&l).unwrap(), &l).unwrap(), doc);
+    structural_policy(&mut f, 255, 255, &l);
+    assert!(matches!(
+        Doc::new(f, &l),
+        Err(Error::StructuralLimitExceeded {
+            limit: htlk_executable::StructuralLimit::ScopeDepth,
+            ..
+        })
+    ));
+}
+#[test]
+fn structural_definitions_on_controlled_stacks() {
+    const CHILD: &str = "HTLK_STRUCTURAL_DEPTH_STACK";
+    if let Ok(size) = std::env::var(CHILD) {
+        std::thread::Builder::new()
+            .stack_size(size.parse().unwrap())
+            .spawn(definition_depth_exercise)
+            .unwrap()
+            .join()
+            .unwrap();
+        return;
+    }
+    for size in [512 * 1024, 2 * 1024 * 1024] {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "structural_definitions_on_controlled_stacks",
+                "--nocapture",
+            ])
+            .env(CHILD, size.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stack {size}: {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

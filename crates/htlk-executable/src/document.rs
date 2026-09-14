@@ -62,10 +62,12 @@ impl DocumentFields {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalDocument {
     fields: Box<DocumentFields>,
+    structure: crate::StructuralSummary,
 }
 impl CanonicalDocument {
     /// Checks complete fields, record keys, scope closure/roles/interfaces, known
-    /// expression references, and policy/JCS identities under codec limits.
+    /// expression references, policy/JCS identities, and the policy's structural
+    /// ceilings under codec limits.
     ///
     /// # Errors
     /// Returns structural, identity, reference, JSON/policy, or resource failures.
@@ -84,11 +86,12 @@ impl CanonicalDocument {
                 ))
             },
         )?;
-        let result = Self {
+        let mut result = Self {
             fields: Box::new(fields),
+            structure: crate::StructuralSummary::EMPTY,
         };
         result.build(&roles, limits)?; // Bound the whole document before semantic walks.
-        result.validate(&roles, limits)?;
+        result.structure = result.validate(&roles, limits)?;
         Ok(result)
     }
     /// Current canonical-document version.
@@ -98,6 +101,11 @@ impl CanonicalDocument {
     /// Borrows immutable tables and root/profile metadata.
     pub fn fields(&self) -> &DocumentFields {
         &self.fields
+    }
+    /// Derived scope depth and possible invocation count, within the pinned
+    /// policy's structural ceilings. This summary is not serialized.
+    pub const fn structural_summary(&self) -> crate::StructuralSummary {
+        self.structure
     }
     /// Produces canonical document data under this call's limits.
     ///
@@ -303,14 +311,19 @@ impl CanonicalDocument {
             f.documents
                 .insert(key.parse()?, JsonDocument::decode(bytes, l)?);
         }
-        let result = Self {
+        let mut result = Self {
             fields: Box::new(f),
+            structure: crate::StructuralSummary::EMPTY,
         };
-        result.validate(&roles, l)?;
+        result.structure = result.validate(&roles, l)?;
         Ok(result)
     }
 
-    fn validate(&self, roles: &BTreeMap<Digest, u8>, l: &Limits) -> Result<(), DocumentError> {
+    fn validate(
+        &self,
+        roles: &BTreeMap<Digest, u8>,
+        l: &Limits,
+    ) -> Result<crate::StructuralSummary, DocumentError> {
         let f = &self.fields;
         if f.graph_id
             .split('.')
@@ -347,7 +360,7 @@ impl CanonicalDocument {
             .documents
             .get(&f.profile.policy_document())
             .ok_or(DocumentError::MissingRecord("policy document"))?;
-        PolicyDocument::decode(policy.as_bytes(), l)?;
+        let policy = PolicyDocument::decode(policy.as_bytes(), l)?;
         for (uri, d) in &f.schema_uris {
             let parsed = url::Url::parse(uri).map_err(|_| DocumentError::InvalidSchemaUri)?;
             if uri.bytes().any(|b| {
@@ -464,7 +477,7 @@ impl CanonicalDocument {
                 }
             }
         }
-        Ok(())
+        crate::structure::analyze(f, policy.fields())
     }
 }
 
@@ -855,6 +868,13 @@ pub enum DocumentError {
     ScopeCycle,
     /// Scope/loop interface or initializer mismatch.
     ScopeInterfaceMismatch,
+    /// Pinned policy scope-depth or expanded-invocation ceiling exceeded.
+    StructuralLimitExceeded {
+        /// Exhausted structural resource, separate from codec limits.
+        limit: crate::StructuralLimit,
+        /// Exact positive policy ceiling.
+        maximum: u64,
+    },
     /// Library call argument count differs from its signature.
     FunctionArity,
     /// Render arguments do not exactly cover template parameters.
