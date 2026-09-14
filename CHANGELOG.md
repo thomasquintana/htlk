@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Canonical `ExecutionLimits` and `RetryPolicy` records with checked integer
+  ranges, explicit inheritance/zero semantics, and strict retry cardinality/order.
 - Canonical `ValueType` and `Port` records, bounded normalization and serialization,
   strict type decoding, and explicit value/signature context checks.
 - Validated local `Identifier` names and structured `ParseIdentifierError`

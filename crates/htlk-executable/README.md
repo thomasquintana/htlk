@@ -8,6 +8,9 @@ the outer schema, supported
 format/version, and fingerprint; registration separately verifies graph contents
 and producer trust.
 
+Execution-limit and retry-policy records describe the controls later enforced
+by the runtime; these are configuration records, not running counters or timers.
+
 Depends on `htlk-cbor` for deterministic encoding and RustCrypto's `sha2` for
 SHA-256; the codec does not depend on this crate.
 
@@ -146,6 +149,87 @@ unions, construction/encoding/cloning/formatting, and cleanup after a nested fie
 failure. Collection-specific parsing/conversion helpers keep recursive dispatch
 frames small. These tests provide headroom, not a guarantee for arbitrary caller
 stack sizes. Clone/Debug of caller-owned objects are ordinary Rust operations.
+
+## Execution limits and retry policies
+
+`ExecutionLimits` represents the optional local `limits` record on a node or
+scope. `new()` and `default()` produce an empty map: each omitted field inherits
+its applicable ceiling. An explicit zero call/token/cost budget remains present
+and is different from omission. Timeouts and concurrency must be positive.
+All values are integers in `0..=i64::MAX`; floats, strings, and null are rejected.
+
+| Field | Meaning | Zero permitted? |
+|---|---|---|
+| `timeout_ms` | Admitted node/scope duration ceiling | No |
+| `attempt_timeout_ms` | Duration ceiling for each MCP attempt | No |
+| `max_mcp_calls` | Scope/descendant dispatch-count budget | Yes |
+| `max_tokens` | Token budget when enforceable | Yes |
+| `max_cost_units` | Budget in the profile's cost units | Yes |
+| `max_concurrency` | Concurrent descendant MCP dispatch ceiling | No |
+
+Checked, consuming `with_*` methods set fields; matching read-only getters return
+`Option<u64>`. `to_value`/`from_value` and `encode`/`decode` use the existing codec
+`Limits`. Unknown fields fail; optional fields are omitted rather than emitted
+as null. Numeric validation follows field-name UTF-8 order after unknown-field
+checking. An empty local record is valid; the containing policy-profile validator
+will require its defaults to include timeout, attempt timeout, and concurrency.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{ExecutionLimits, RetryPolicy};
+
+let codec_limits = Limits::default();
+let local = ExecutionLimits::new()
+    .with_timeout_ms(60000)?
+    .with_max_mcp_calls(3)?
+    .with_max_concurrency(1)?;
+assert_eq!(local.max_tokens(), None); // Inherit; not zero or unlimited.
+let wire = local.encode(&codec_limits)?;
+assert_eq!(ExecutionLimits::decode(&wire, &codec_limits)?, local);
+
+let retry = RetryPolicy::new(3,
+    vec!["MCP_TRANSPORT".into(), "MCP_TIMEOUT".into()],
+    vec![1000, 5000], &codec_limits)?;
+assert_eq!(retry.on(), ["MCP_TIMEOUT", "MCP_TRANSPORT"]);
+assert_eq!(retry.backoff_ms(), [1000, 5000]);
+assert_eq!(RetryPolicy::decode(&retry.encode(&codec_limits)?, &codec_limits)?, retry);
+# Ok::<(), htlk_executable::ExecutionOptionsError>(())
+```
+
+`RetryPolicy` always serializes all three fields: positive `max_attempts`, array
+`on`, and array `backoff_ms`. The attempt count includes the initial dispatch;
+there must be exactly `max_attempts - 1` delays. Delay entry k-2 precedes attempt
+k (one-based). Delays are nonnegative i64-range integers, may decrease or be zero,
+and retain their authored order. The parser never allocates from an attempt count.
+
+Construction checks codec limits on the raw policy before sorting/deduplicating
+the code set. Codes are opaque exact strings (including custom codes), not
+identifiers, patterns, or authority grants. Canonical ingress rejects duplicate
+or out-of-order codes rather than repairing them. Unicode spelling is preserved.
+`RetryPolicy::no_retry()` and `default()` represent one attempt and empty lists:
+
+```text
+{ max_attempts: 1, on: [], backoff_ms: [] }
+```
+
+Strict parsing checks unknown fields, missing fields, and top-level native types,
+then numeric range, delay cardinality/content, and code types/order. Missing/type
+checks use `backoff_ms`, `max_attempts`, `on` order. No exponential policy, jitter,
+wildcard matching, or default list contents are inferred from supplied records.
+
+`ExecutionOptionsError` distinguishes schema, numeric, delay-count, order, codec,
+conversion-limit, and allocation failures. Errors omit submitted field names and
+code strings; codec errors retain byte offsets through their error source.
+Private `RecordAccounting` is shared with type conversion and bounds complete
+record sizes, text, integers, collections, and depth before conversion copies.
+This accounting is per codec operation, not runtime usage accounting.
+
+The runtime still computes effective ceilings, starts persisted deadlines after
+admission, reserves and accounts for dispatch usage, checks hard token/cost
+enforceability, and authorizes replay based on delivery state, operation policy,
+and exact approvals. A valid policy alone does not authorize a retry or revive
+a terminal invocation. Retry attachment to MCP-only operations is checked by
+the future containing operation schema.
 
 ## Executable envelope API
 

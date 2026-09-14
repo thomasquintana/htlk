@@ -4,6 +4,7 @@ use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use super::{Port, PrimitiveType, TypeContext, ValueType, ValueTypeKind};
 use crate::digest::{Digest, ParseDigestError};
+use crate::record_accounting::{EncodingLimitError, RecordAccounting};
 use crate::{Identifier, ParseIdentifierError};
 
 /// A canonical type/port construction or decoding failure.
@@ -53,6 +54,15 @@ pub enum TypeError {
 impl From<htlk_cbor::Error> for TypeError {
     fn from(error: htlk_cbor::Error) -> Self {
         Self::Codec(error)
+    }
+}
+
+impl From<EncodingLimitError> for TypeError {
+    fn from(error: EncodingLimitError) -> Self {
+        Self::LimitExceeded {
+            limit: error.limit,
+            maximum: error.maximum,
+        }
     }
 }
 
@@ -119,91 +129,22 @@ fn signature(context: TypeContext, tag: &'static str) -> Result<(), TypeError> {
 // arrays, maps, and booleans) BEFORE cloning strings or growing collections.
 // This is not execution-budget accounting. The final encoder still owns bytes.
 struct Builder<'a> {
-    limits: &'a Limits,
+    accounting: RecordAccounting<'a>,
     context: TypeContext,
-    values: usize,
-    payload: usize,
-    bytes: usize,
-}
-
-fn check(value: usize, maximum: usize, limit: LimitKind) -> Result<(), TypeError> {
-    if value > maximum {
-        return Err(TypeError::LimitExceeded { limit, maximum });
-    }
-    Ok(())
-}
-fn add(
-    current: usize,
-    amount: usize,
-    maximum: usize,
-    limit: LimitKind,
-) -> Result<usize, TypeError> {
-    let total = current
-        .checked_add(amount)
-        .ok_or(TypeError::LimitExceeded { limit, maximum })?;
-    check(total, maximum, limit)?;
-    Ok(total)
-}
-fn header_size(len: usize) -> usize {
-    match len {
-        0..=23 => 1,
-        24..=255 => 2,
-        256..=65535 => 3,
-        65536..=0xffff_ffff => 5,
-        _ => 9,
-    }
 }
 
 impl<'a> Builder<'a> {
     fn new(context: TypeContext, limits: &'a Limits) -> Result<Self, TypeError> {
-        limits.validate()?;
         Ok(Self {
-            limits,
+            accounting: RecordAccounting::new(limits)?,
             context,
-            values: 0,
-            payload: 0,
-            bytes: 0,
         })
     }
-    fn enter(&mut self, depth: usize) -> Result<(), TypeError> {
-        check(depth, self.limits.max_depth, LimitKind::Depth)?;
-        self.values = add(
-            self.values,
-            1,
-            self.limits.max_total_values,
-            LimitKind::TotalValues,
-        )?;
-        Ok(())
-    }
-    fn bytes(&mut self, bytes: usize) -> Result<(), TypeError> {
-        self.bytes = add(
-            self.bytes,
-            bytes,
-            self.limits.max_document_bytes,
-            LimitKind::DocumentBytes,
-        )?;
-        Ok(())
-    }
     fn collection(&mut self, len: usize, depth: usize) -> Result<(), TypeError> {
-        self.enter(depth)?;
-        check(
-            len,
-            self.limits.max_collection_entries,
-            LimitKind::CollectionEntries,
-        )?;
-        self.bytes(header_size(len))
+        Ok(self.accounting.collection(len, depth)?)
     }
     fn string(&mut self, text: &str, depth: usize) -> Result<String, TypeError> {
-        self.enter(depth)?;
-        check(text.len(), self.limits.max_text_bytes, LimitKind::TextBytes)?;
-        self.payload = add(
-            self.payload,
-            text.len(),
-            self.limits.max_total_payload_bytes,
-            LimitKind::TotalPayloadBytes,
-        )?;
-        self.bytes(header_size(text.len()))?;
-        self.bytes(text.len())?;
+        self.accounting.text(text, depth)?;
         owned(text)
     }
     fn text(&mut self, text: &str, depth: usize) -> Result<Value, TypeError> {
@@ -220,8 +161,7 @@ impl<'a> Builder<'a> {
         let ty_key = self.string("type", depth + 1)?;
         let ty = self.ty(&port.value_type.kind, depth + 1)?;
         let required_key = self.string("required", depth + 1)?;
-        self.enter(depth + 1)?;
-        self.bytes(1)?;
+        self.accounting.boolean(depth + 1)?;
         Ok(Value::Map(Map::try_from_entries([
             (ty_key, ty),
             (required_key, Value::Bool(port.required)),
@@ -550,24 +490,4 @@ fn parse_function(
         parameters,
         returns: Box::new(parse_port(result, context, limits, normalize)?),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn conversion_arithmetic_is_checked() {
-        assert!(matches!(
-            add(usize::MAX, 1, usize::MAX, LimitKind::DocumentBytes),
-            Err(TypeError::LimitExceeded {
-                limit: LimitKind::DocumentBytes,
-                ..
-            })
-        ));
-        assert_eq!(
-            add(usize::MAX - 1, 1, usize::MAX, LimitKind::TotalValues).unwrap(),
-            usize::MAX
-        );
-    }
 }
