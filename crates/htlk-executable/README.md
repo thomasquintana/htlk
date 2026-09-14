@@ -16,6 +16,9 @@ Scope, node, edge, and operation records assemble those declarations into locall
 checked graph definitions; full graph verification remains a separate stage.
 Execution profiles, library signatures, and MCP binding records describe exact
 implementation selections; they do not load engines, open connections, or grant access.
+`JsonDocument` and `PolicyDocument` provide canonical external JSON and policy
+records. `CanonicalDocument` assembles the complete payload with record identity
+and known-reference checks.
 
 Depends on `htlk-cbor` for deterministic encoding and RustCrypto's `sha2` for
 SHA-256; the codec does not depend on this crate.
@@ -589,6 +592,92 @@ one extra codec-bounded temporary allocation; these are logical counters, not
 exact heap measurements. Signature variable validation occurs after size bounds.
 Tests cover exact engine bytes, all binding kinds, variable declaration scope,
 closed schemas, and deep library-signature embedding/cleanup on controlled stacks.
+
+## External JSON and policy documents
+
+`JsonDocument::new` parses authored UTF-8 JSON and produces RFC 8785 JCS bytes.
+`decode` requires those exact canonical bytes; `from_value` explicitly crosses
+the native-to-JSON boundary. Accessors borrow normalized `value()` and exact
+`as_bytes()`; `digest()` hashes the JCS bytes directly, without an HTLK prefix.
+
+```rust
+use htlk_cbor::{Limits, Value};
+use htlk_executable::JsonDocument;
+
+let limits = Limits::default();
+let json = JsonDocument::new(br#" { "z": 1.0, "a": "\u0061" } "#, &limits)?;
+assert_eq!(json.as_bytes(), br#"{"a":"a","z":1}"#);
+assert_eq!(JsonDocument::decode(json.as_bytes(), &limits)?, json);
+assert_eq!(JsonDocument::new(b"-0", &limits)?.value(), &Value::Integer(0));
+assert!(JsonDocument::new(b"9007199254740991.5", &limits).is_err());
+# Ok::<(), htlk_executable::JsonError>(())
+```
+
+Duplicate decoded keys, malformed UTF-8/escapes, and unpaired surrogates fail.
+Strings preserve Unicode spelling; JCS object keys sort by UTF-16 code units.
+Mathematically integral numeric tokens are checked against ±(2^53−1) before
+binary64 rounding. Fractional conversion is correctly rounded; nonfinite results
+and rounded unsafe integers fail. Underflow may yield zero. Safe integral JSON
+numbers become native integers, including numbers authored as integral floats at
+this explicit boundary. Native bytes cannot cross the JSON boundary.
+
+Parsing checks decoded string sizes before string allocation. `serde_json`
+handles string decoding/escaping; `ryu-js` supplies ECMAScript float formatting.
+Private per-operation accounting applies existing `Limits` to JSON input/output
+bytes, depth, collection entries, values (including keys), individual decoded
+UTF-8 strings, and aggregate decoded string payload. These are logical ceilings,
+not exact heap counters. JSON is not charged CBOR headers. The parser, writer,
+clone, and failure cleanup have depth-128 tests on 512 KiB and 2 MiB stacks.
+
+`PolicyFields` and `EvaluatorLimits` describe the closed policy schema.
+`PolicyDocument::new` validates them into JCS; `decode` checks stored policy bytes.
+Defaults must supply positive timeout, attempt timeout, and concurrency. All
+seven evaluator ceilings and both structural ceilings must be positive safe
+JSON integers. Local execution limits still allow signed-i64 values; the tighter
+range applies when included in external JSON. Policy records describe ceilings;
+runtime metering and semantic expanded-node/depth enforcement are subsequent work.
+
+## Canonical document assembly
+
+`DocumentFields::new(graph_id, profile, root_scope)` starts empty authored tables.
+Insert scope, template, binding, complete supplied library-manifest, schema-URI,
+and JSON-document entries as needed, then call `CanonicalDocument::new`.
+Digest keys are assertions: assembly checks them rather than silently rekeying
+or pruning entries. The immutable document exposes borrowed `fields()` plus
+`to_value`/`from_value` and `encode`/`decode` with fresh codec limits.
+
+The exact ten wire fields are `ir_version: "0.1"`, `graph_id`, `profile`,
+`root_scope`, `scopes`, `templates`, `bindings`, `libraries`, `schema_uris`,
+and `documents`. Document values are canonical JCS byte strings. Graph names
+use dot-separated identifiers. Retrieval roots are absolute, fragment-free URIs
+preserved exactly; URL parsing is a syntax check, not a resolver or rewrite.
+
+Assembly checks root/policy existence, record hashes, raw JCS identities, library
+keys against supplied implementation identities, scope-definition acyclicity,
+and exact scope/template/binding/library reachability. Scope roles are derived
+from use sites before decoding bodies; a shared definition must satisfy every
+role in which it is used. Scope interfaces and loop initializer coverage,
+types, and requiredness must match. All expression branches contribute static
+references, including function references; library function names/arity and
+render argument names are checked. Descriptor, tool-schema, schema-URI, and
+type-schema references must identify stored documents. Complete library manifests
+are retained even when only one public function is used.
+
+Each embedded record is bounded before aggregate CBOR accounting charges its real
+depth and size. External JSON is independently rechecked under each call's limits.
+Scope references remain digests; iterative definition traversal does not expand
+task invocations or loop iterations. `envelope()` packages the canonical payload;
+`from_envelope()` checks the nested document of an already checked envelope.
+
+**This assembly stage is not full executable verification.** The shared verifier
+still must resolve expression names/types and hidden dependency cycles, enforce
+binding interfaces and graph observability, match linked implementation profiles,
+validate MCP descriptor schemas and extracted schema equality, restrict schema
+types to reached tool roots, derive nested schema resources, and prove exact
+external-document/retrieval-URI closure offline. Assembly currently accepts extra
+external documents/URI roots because their schema reachability needs that resolver.
+Registration and authorization remain runtime work. `DocumentError` preserves
+structured causes and static diagnostics without retaining submitted values.
 
 ## Executable envelope API
 

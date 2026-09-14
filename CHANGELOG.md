@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bounded external JSON/JCS documents with duplicate-key and HTLK numeric checks,
+  exact raw-JSON digests, and closed policy documents with required defaults.
+- Canonical document assembly and envelope integration with record-key integrity,
+  scope-definition closure/roles/interfaces, and known template/library/MCP references.
 - Canonical execution profiles, engine identities, library/function signatures,
   compound server identities, and MCP bindings with bounded record validation.
 - Canonical scopes, nodes, edges, operations, and identifier-keyed port tables,
