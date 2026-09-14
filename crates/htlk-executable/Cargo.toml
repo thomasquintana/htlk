@@ -14,6 +14,7 @@ categories = ["encoding", "cryptography"]
 [dependencies]
 half.workspace = true
 htlk-cbor.workspace = true
+iri-string.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
 ryu-js.workspace = true

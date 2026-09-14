@@ -731,6 +731,64 @@ This is an explicit resolver foundation, not automatic full validation inside
 `$id`, anchors and dynamic references, check custom vocabularies with the pinned
 validator, resolve reference targets, and prove offline document closure.
 
+## Schema resources and initial reference targets
+
+`SchemaResources::new(&JsonDocument, retrieval_uri, &Limits)` indexes one schema
+document using an absolute, fragment-free retrieval context. It reuses standard
+schema-location discovery, follows `$id` only at those locations, and records
+the effective base for each location. `resources()` exposes URI-to-pointer roots;
+`base_uri()` retrieves a location's effective base, and `document_digest()` ties
+all returned locations to the complete source document.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{JsonDocument, JsonPointer, SchemaResources};
+
+let limits = Limits::default();
+let document = JsonDocument::new(br#"{
+  "$defs": { "child": { "$id": "child", "$defs": { "item": true } } }
+}"#, &limits)?;
+let resources = SchemaResources::new(&document, "https://example.test/root", &limits)?;
+let root = JsonPointer::new("", &limits)?;
+let target = resources.resolve(&root, "child#/$defs/item", &limits)?;
+assert_eq!(target.to_string(), "/$defs/child/$defs/item");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The retrieval URI remains a root alias if the document declares a different root
+`$id`. Nested IDs establish resources at their actual subschema pointers. A pointer
+fragment is applied relative to the selected resource, then checked against known
+schema locations; pointers into `examples` or other instance data fail. `$anchor`
+and `$dynamicAnchor` names are scoped to their owning resource. Different locations
+claiming the same resource URI or anchor fail; both anchor keywords at the same
+location may share a name. `is_dynamic_anchor()` exposes the dynamic declaration.
+
+URI syntax uses `iri-string`'s RFC 3986 parser. Reference resolution follows RFC
+3986 §5.2 with bounded intermediate/output strings and literal dot-segment removal.
+It preserves percent-encoded dot segments, URI case, and other exact spelling;
+it performs no browser-style URL fixups or universal URI-equivalence rewriting.
+An ambiguous authority-less `//` result is rejected. Local fragments work against
+opaque bases such as synthetic schema URNs; non-fragment relative references
+against a nonempty rootless base fail. Percent decoding of fragments occurs before
+pointer/anchor lookup, with no form-URL plus-to-space conversion.
+
+Location discovery and resource metadata have separately bounded derived indexes.
+The resource index counts stored base/resource/anchor entries against collection
+and total-value ceilings, and copied URI/name bytes against aggregate payload.
+Individual URI input, intermediate, and output strings observe text, document-byte,
+and payload limits. Reference calls apply their supplied limits to query construction;
+they do not rebuild the immutable index. Tests cover RFC resolution vectors, exact
+limits, nested resources, anchor conflicts, and depth-128 indexing/cleanup on
+512 KiB and 2 MiB stacks. Errors retain static categories and underlying location
+or pointer errors, without submitted content.
+
+This is a **single-document resource index**, not full executable verification.
+Missing external resources return an error without I/O. `resolve` returns the
+initial target for either static or dynamic references; evaluation-time dynamic
+rebinding remains validator work. Multi-document resource merging/closure,
+embedded-tool base selection, vocabulary/keyword validation, and integration with
+the pinned validator and canonical-document verifier remain subsequent steps.
+
 ## Canonical document assembly
 
 `DocumentFields::new(graph_id, profile, root_scope)` starts empty authored tables.

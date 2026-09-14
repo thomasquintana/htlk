@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-document schema resource/base and anchor indexing with bounded RFC 3986
+  reference lookup relative to actual nested resource roots, without network I/O.
 - Bounded JSON Schema 2020-12 location discovery with exact JSON Pointers,
   standard applicator traversal, instance-data exclusion, and derived-index limits.
 - Bounded RFC 6901 JSON Pointer and URI-fragment parsing with exact token decoding,

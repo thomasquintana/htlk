@@ -23,6 +23,7 @@ htlk-cbor = { version = "=0.1.0", path = "crates/htlk-cbor" }
 htlk-compiler = { version = "=0.1.0", path = "crates/htlk-compiler" }
 htlk-executable = { version = "=0.1.0", path = "crates/htlk-executable" }
 htlk-rt = { version = "=0.1.0", path = "crates/htlk-rt" }
+iri-string = "0.7.14"
 logos = "0.16.1"
 miette = "7.6.0"
 mlua = { version = "0.12.0", features = ["lua54", "vendored"] }
