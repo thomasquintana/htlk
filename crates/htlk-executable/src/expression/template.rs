@@ -1,8 +1,7 @@
 use htlk_cbor::{LimitKind, Limits, Map, Value};
-use sha2::{Digest as _, Sha256};
 
 use super::{ExpressionContext, ExpressionError, wire};
-use crate::digest::Digest;
+use crate::digest::{Digest, RecordKind, record_digest};
 use crate::{Identifier, Port};
 
 /// One literal text segment or statically named substitution slot.
@@ -114,11 +113,11 @@ impl PromptTemplate {
     /// # Errors
     /// Returns resource or allocation failures during canonical encoding.
     pub fn digest(&self, limits: &Limits) -> Result<Digest, ExpressionError> {
-        let bytes = self.encode(limits)?;
-        let mut hash = Sha256::new();
-        hash.update(b"htlk.template/0.1\n");
-        hash.update(bytes);
-        Ok(Digest::from_bytes(hash.finalize().into()))
+        Ok(record_digest(
+            RecordKind::Template,
+            &self.to_value(limits)?,
+            limits,
+        )?)
     }
 
     fn parse(value: &Value, limits: &Limits, normalize: bool) -> Result<Self, ExpressionError> {

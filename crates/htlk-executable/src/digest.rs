@@ -127,3 +127,44 @@ pub fn hash_cbor(
     let bytes = htlk_cbor::encode(value, limits)?;
     Ok(hash_bytes(&bytes))
 }
+
+/// Closed compiler record-content digest domains. Libraries use linked
+/// implementation identities rather than a caller-authored record hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordKind {
+    /// Root/task/loop-body scope definition.
+    Scope,
+    /// Complete node definition.
+    Node,
+    /// Prompt-template definition.
+    Template,
+    /// MCP binding definition.
+    Binding,
+    /// Compound MCP server identity.
+    Server,
+}
+
+/// Hashes the exact canonical record under its version-0.1 domain:
+/// `SHA256(UTF8("htlk.<kind>/0.1\n") || deterministic_cbor(record))`.
+/// This validates encoding limits, not the record's schema or references.
+///
+/// # Errors
+/// Propagates codec failures unchanged; no digest is returned on failure.
+pub fn record_digest(
+    kind: RecordKind,
+    record: &htlk_cbor::Value,
+    limits: &htlk_cbor::Limits,
+) -> Result<Digest, htlk_cbor::Error> {
+    let bytes = htlk_cbor::encode(record, limits)?;
+    let prefix: &[u8] = match kind {
+        RecordKind::Scope => b"htlk.scope/0.1\n",
+        RecordKind::Node => b"htlk.node/0.1\n",
+        RecordKind::Template => b"htlk.template/0.1\n",
+        RecordKind::Binding => b"htlk.binding/0.1\n",
+        RecordKind::Server => b"htlk.server/0.1\n",
+    };
+    let mut hash = Sha256::new();
+    hash.update(prefix);
+    hash.update(bytes);
+    Ok(Digest::from_bytes(hash.finalize().into()))
+}

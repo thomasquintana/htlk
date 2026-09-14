@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Canonical execution profiles, engine identities, library/function signatures,
+  compound server identities, and MCP bindings with bounded record validation.
+- Canonical scopes, nodes, edges, operations, and identifier-keyed port tables,
+  with local structural checks and the closed compiler record-digest domains.
 - Canonical expressions, scoped reference-category checks, static library function
   references, and prompt templates with normalization, bounded codecs, and digests.
 - Canonical `ExecutionLimits` and `RetryPolicy` records with checked integer
@@ -31,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated the locked `rustls` dependency to 0.23.45 to address RUSTSEC-2026-0285.
 - Aligned executable envelopes and draft specifications on `htlk.executable.graph`,
   `version: "0.1"`, and SHA-256 of the newline-terminated format/version prefix
   plus raw payload bytes. Alternate schemas and hash formulas are rejected.

@@ -12,6 +12,10 @@ Execution-limit and retry-policy records describe the controls later enforced
 by the runtime; these are configuration records, not running counters or timers.
 Canonical expressions and prompt templates describe calculations and text assembly;
 their model APIs do not evaluate expressions or invoke services.
+Scope, node, edge, and operation records assemble those declarations into locally
+checked graph definitions; full graph verification remains a separate stage.
+Execution profiles, library signatures, and MCP binding records describe exact
+implementation selections; they do not load engines, open connections, or grant access.
 
 Depends on `htlk-cbor` for deterministic encoding and RustCrypto's `sha2` for
 SHA-256; the codec does not depend on this crate.
@@ -385,6 +389,206 @@ enforceability, and authorizes replay based on delivery state, operation policy,
 and exact approvals. A valid policy alone does not authorize a retry or revive
 a terminal invocation. Retry attachment to MCP-only operations is checked by
 the future containing operation schema.
+
+## Canonical graph records
+
+`PortTable` maps validated `Identifier` names to ordinary-value `Port` declarations.
+Its read-only iteration is decoded UTF-8/ASCII order, while the codec controls
+wire map order. Record-type field names remain arbitrary strings in `ValueType`.
+
+`EdgeSource` selects a complete scope input, node output, or carried value.
+`EdgeDestination` selects a node input, public output, or next value. An `Edge`
+has an ID and explicit guard; `Edge::new` supplies a literal-true authored default.
+There is no edge projection, transform, or implicit input assignment.
+
+`Operation` has the exact canonical variants:
+
+| Rust variant | Wire form |
+|---|---|
+| Eval | `["eval", expression]` |
+| Mcp | `["mcp", binding_digest, retry_policy]` |
+| Scope | `["scope", scope_digest]` |
+| Loop | `["loop", body_digest, initializers, until, max_iterations]` |
+| Wait | `["wait", topic, timeout_ms]` |
+
+Only MCP has a retry slot. Loop/wait bounds are positive signed-i64 integers.
+Initializers map carried names to loop-input names; the complete carried table
+and type/requiredness equality require the referenced body definition at linkage.
+Scopes are referenced by digest, never recursively expanded into parent records.
+
+`NodeFields` and `ScopeFields` are authored field collections. Their constructors
+provide true guard/contracts and empty local limits/tables where appropriate.
+Pass them to `Node::new` or `Scope::new` to obtain immutable checked definitions.
+Read-only `fields()` access permits inspection; cloning fields and rebuilding is
+an explicit new definition. Canonical ingress requires every CDDL field and does
+not apply authored defaults to incomplete records.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{Edge, EdgeDestination, EdgeSource, Expression,
+    ExpressionContext, ExpressionKind, Node, NodeFields, Operation, Port,
+    PortTable, PrimitiveType, Scope, ScopeContext, ScopeFields, ValueReference,
+    ValueType};
+
+let limits = Limits::default();
+let string_port = Port::new(ValueType::primitive(PrimitiveType::String), true);
+let inputs = PortTable::new(vec![("question".parse()?, string_port.clone())], &limits)?;
+let expression = Expression::new(ExpressionKind::Ref {
+    source: ValueReference::Input("question".parse()?), path: vec![],
+}, ExpressionContext::Eval, &limits)?;
+let mut fields = NodeFields::new("echo".parse()?, Operation::Eval(expression));
+fields.inputs = inputs.clone();
+fields.outputs = PortTable::new(vec![("value".parse()?, string_port.clone())], &limits)?;
+let node = Node::new(fields, ScopeContext::Ordinary, &limits)?;
+let scope = Scope::new(ScopeFields {
+    inputs,
+    outputs: PortTable::new(vec![("answer".parse()?, string_port)], &limits)?,
+    nodes: vec![node],
+    edges: vec![
+        Edge::new("supply".parse()?, EdgeSource::Input("question".parse()?),
+            EdgeDestination::Input { node: "echo".parse()?, port: "question".parse()? }),
+        Edge::new("publish".parse()?,
+            EdgeSource::Output { node: "echo".parse()?, port: "value".parse()? },
+            EdgeDestination::Output("answer".parse()?)),
+    ],
+    ..ScopeFields::default()
+}, ScopeContext::Ordinary, &limits)?;
+let bytes = scope.encode(ScopeContext::Ordinary, &limits)?;
+assert_eq!(Scope::decode(&bytes, ScopeContext::Ordinary, &limits)?, scope);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+### Local checks and use contexts
+
+Authored scope construction sorts node and edge arrays by ASCII ID. Canonical
+decoding rejects unsorted or duplicate IDs. Node and edge namespaces are distinct;
+a node and an edge may share a name. Reserved expression roots cannot name nodes.
+Edges must address declared local nodes/ports and declared boundary destinations,
+even when their guard is false. Loop initializer input names must exist on the node.
+
+`ScopeContext::Ordinary` requires empty carried declarations and disallows carried/
+next endpoints. `LoopBody` permits them, but requires literal-true local contracts
+and empty local limits. The loop node owns its loop contracts and limits. Context
+is not serialized or hashed: a role-neutral definition can have the same digest
+when used as a task or loop body, with checks performed at each use site.
+
+Node/edge guards select containing-scope expression contexts; eval expressions use
+own inputs; loop termination uses settled-body context; scope uses have wrapper
+postconditions. Primitive nodes have exactly one `value` output. Eval may declare
+optional value presence; MCP/wait success outputs are required. Wait inputs are
+exactly required `request: json`. MCP inputs are empty or a required `arguments`
+port, with exact binding-specific schema/port matching deferred to linkage.
+
+These are **local record checks**, not complete executable verification. Expression
+name/type resolution, self-references, dependency cycles, observability, required
+binding coverage/conflicts, referenced scope/binding existence, profile matching,
+and loop-body interface compatibility remain shared-verifier responsibilities.
+No graph execution or persistence occurs in these constructors.
+
+### Whole-record limits and identities
+
+Every child conversion is bounded by codec Limits. Private accounting then charges
+the child at its actual embedded depth and against the containing record's totals
+before retaining it. A failed child may temporarily occupy one additional
+codec-sized allocation; counters are not exact heap measurements. Scope references
+stay digests, and local endpoint lookup is derived rather than serialized.
+
+`Node::digest` and `Scope::digest` cover complete canonical records. The public
+`digest::record_digest` helper takes a closed `RecordKind` (scope, node, template,
+binding, server) and hashes the raw `htlk.<kind>/0.1\n` prefix plus canonical CBOR.
+It validates encoding limits, not arbitrary supplied record schemas. Library
+identities and external JSON documents retain their separate digest rules.
+
+`GraphRecordError` retains codec/type/expression/option causes and static structural
+diagnostics without copying input names or values into error messages. Tests cover
+exact empty-scope bytes, all five record domains, primitive layouts, endpoint and
+ordering errors, and whole-scope embedded expression depth/failure cleanup.
+
+## Profiles, libraries, and MCP bindings
+
+`EngineIdentity` records exact `name`, `version`, `data_version`, and
+`implementation_digest`. Strings retain their supplied Unicode spelling and
+external version labels; the model does not parse version ranges or select a
+newer implementation.
+
+`ExecutionProfile` embeds the regex, schema-validator, and URI-template engine
+identities, a core implementation digest, and a policy-document digest. Its fixed
+format fields are `core_version: "0.1"` and
+`mcp_protocol_version: "2025-11-25"`, exposed through `CORE_VERSION` and
+`MCP_PROTOCOL_VERSION`. Unsupported profile versions fail rather than being
+rewritten. Engine availability, exact implementation matching, and policy-document
+JCS/schema validation are later verifier responsibilities.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{EngineIdentity, ExecutionProfile};
+use htlk_executable::digest::Digest;
+
+let limits = Limits::default();
+// Illustrative identities; a linked registry must validate them before execution.
+let engine = EngineIdentity::new("example".into(), "1.2.3".into(),
+    "data-v1".into(), Digest::from_bytes([1; 32]), &limits)?;
+let profile = ExecutionProfile::new(Digest::from_bytes([2; 32]),
+    engine.clone(), engine.clone(), engine, Digest::from_bytes([3; 32]), &limits)?;
+assert_eq!(profile.core_version(), "0.1");
+assert_eq!(profile.mcp_protocol_version(), "2025-11-25");
+assert_eq!(ExecutionProfile::decode(&profile.encode(&limits)?, &limits)?, profile);
+# Ok::<(), htlk_executable::MetadataError>(())
+```
+
+`FunctionSignature` contains ordered `type_parameters`, positional parameter
+`Port` records, and one `returns` port. Port types use signature context, so named
+variables and function types are permitted. Generic declaration names must be
+unique; every variable referenced anywhere in a parameter/result (including
+nested record, union, collection, or function types) must be declared by that
+signature. Unused declarations are retained. Call-site inference/unification,
+recursive inference constraints, and callback compatibility remain verifier work.
+Presence flags and both declaration/argument order are preserved.
+
+`Library` contains exact `library_id`, `version`, `implementation_digest`, and
+an identifier-keyed `functions` map. Read-only function iteration is decoded
+UTF-8 order and lookup uses exact names. Constructors reject duplicate names,
+retain every supplied public signature, and never prune to a call-site subset.
+The implementation digest is supplied linked-implementation identity, not
+record_digest of caller signatures. The verifier must compare the full manifest
+with the linked registry before trusting its completeness or behavior.
+
+`ServerIdentity` contains exactly deployment ID, `McpTransport`, implementation
+name, and implementation version. Transport is either `stdio` or
+`streamable_http`; spelling aliases fail. Connection URLs, credentials, aliases,
+and observation timestamps are not identity fields. The host remains responsible
+for trusted deployment selection. Its `digest` method uses record_digest("server").
+
+`McpBinding` embeds that server identity and a descriptor digest, plus one
+read-only `McpBindingKind`:
+
+| Kind | Additional canonical fields |
+|---|---|
+| Tool | `name`, `input_schema`, `output_schema` |
+| Resource | `uri` |
+| Template | `uri_template` |
+| Prompt | `name` |
+
+The binding's `digest` method uses record_digest("binding"). External names,
+URIs, and template text remain exact strings; there is no universal URI rewrite.
+A server-side prompt binding selects an MCP prompt, distinct from a local
+`PromptTemplate` used by render expressions. Descriptor/schema bytes, protocol
+schema conformance, URI-template interpretation, authorization, and live drift
+checks require later catalog/profile/runtime integration.
+
+All six record types have bounded constructors, read-only accessors, and
+`to_value`/`from_value`/`encode`/`decode`. Canonical readers require every declared
+field and reject unknown fields. A binding's kind selects its exact closed field
+set; another kind's fields are not tolerated. `MetadataError` retains codec,
+identifier, digest, and type causes, with static schema/version/signature errors
+that do not retain untrusted field contents.
+
+Conversions bound each child and then charge it at its real embedded depth and
+against aggregate record limits before retaining it. A failing child may occupy
+one extra codec-bounded temporary allocation; these are logical counters, not
+exact heap measurements. Signature variable validation occurs after size bounds.
+Tests cover exact engine bytes, all binding kinds, variable declaration scope,
+closed schemas, and deep library-signature embedding/cleanup on controlled stacks.
 
 ## Executable envelope API
 

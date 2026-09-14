@@ -17,6 +17,40 @@ pub(crate) struct RecordAccounting<'a> {
 }
 
 impl<'a> RecordAccounting<'a> {
+    /// Charges an already bounded child at its actual containing-record depth.
+    /// The child conversion may temporarily occupy one additional codec-sized
+    /// allocation; no further children are retained after an aggregate failure.
+    pub(crate) fn value(
+        &mut self,
+        value: &htlk_cbor::Value,
+        depth: usize,
+    ) -> Result<(), EncodingLimitError> {
+        use htlk_cbor::Value;
+        match value {
+            Value::Text(v) => self.text(v, depth),
+            Value::Bytes(v) => self.byte_string(v, depth),
+            Value::Integer(v) => self.integer(*v, depth),
+            Value::Float(v) => self.float(*v, depth),
+            Value::Bool(_) => self.boolean(depth),
+            Value::Null => self.null(depth),
+            Value::Array(values) => {
+                self.collection(values.len(), depth)?;
+                for value in values {
+                    self.value(value, depth + 1)?;
+                }
+                Ok(())
+            }
+            Value::Map(values) => {
+                self.collection(values.len(), depth)?;
+                for (key, value) in values.iter() {
+                    self.text(key, depth + 1)?;
+                    self.value(value, depth + 1)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn new(limits: &'a Limits) -> Result<Self, htlk_cbor::Error> {
         limits.validate()?;
         Ok(Self {
