@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- RFC 6570 resource-template syntax and exact variable-interface validation, with
+  bounded discovery, preserved percent-encoded names, and required string arguments.
 - Fixed-resource and prompt interface validation, including exact protocol output
   types and descriptor-derived prompt argument names, string types, and presence.
 - Cross-record MCP descriptor selection and extracted tool-schema integrity checks,

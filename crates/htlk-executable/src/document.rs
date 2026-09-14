@@ -125,7 +125,15 @@ impl CanonicalDocument {
                 ))
             },
         )?;
-        self.build(&roles, limits)
+        let value = self.build(&roles, limits)?;
+        // Template syntax was checked at construction; reapply derived-variable
+        // ceilings when this encoding call supplies tighter limits.
+        for binding in self.fields.bindings.values() {
+            if let McpBindingKind::Template { uri_template } = binding.kind() {
+                crate::uri_template::variables(uri_template, limits)?;
+            }
+        }
+        Ok(value)
     }
     /// Encodes exactly one canonical graph document.
     ///
@@ -388,7 +396,11 @@ impl CanonicalDocument {
         }
         let mut used = Used::default();
         let mut schema_roots = BTreeSet::new();
-        for binding in f.bindings.values() {
+        let mut template_variables = BTreeMap::new();
+        for (id, binding) in &f.bindings {
+            if let McpBindingKind::Template { uri_template } = binding.kind() {
+                template_variables.insert(*id, crate::uri_template::variables(uri_template, l)?);
+            }
             if let McpBindingKind::Tool {
                 input_schema,
                 output_schema,
@@ -423,6 +435,9 @@ impl CanonicalDocument {
                         }
                         used.bindings.insert(*binding);
                         crate::binding_validation::ports(n, &f.bindings[binding], f)?;
+                        if let Some(variables) = template_variables.get(binding) {
+                            crate::binding_validation::template_ports(n, variables)?;
+                        }
                     }
                     Operation::Scope(d) | Operation::Loop { body: d, .. } => {
                         let target = f
@@ -879,6 +894,11 @@ pub enum DocumentError {
     ScopeInterfaceMismatch,
     /// Descriptor is not an object or its selection/schema field is invalid.
     InvalidDescriptor(&'static str),
+    /// Malformed RFC 6570 syntax or a reserved, unsupported expression operator.
+    InvalidUriTemplate {
+        /// Zero-based byte offset in the exact template string.
+        offset: usize,
+    },
     /// Tool schema identity differs from the exact descriptor subdocument.
     ToolSchemaMismatch(&'static str),
     /// MCP ports disagree with their binding's required interface.

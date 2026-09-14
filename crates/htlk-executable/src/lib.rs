@@ -16,6 +16,7 @@ mod policy;
 mod record_accounting;
 mod structure;
 mod types;
+mod uri_template;
 
 pub use document::{CanonicalDocument, DocumentError, DocumentFields};
 pub use envelope::{EXECUTABLE_FORMAT, EXECUTABLE_VERSION, EnvelopeError, ExecutableEnvelope};

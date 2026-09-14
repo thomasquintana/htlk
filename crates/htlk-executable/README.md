@@ -705,7 +705,35 @@ Per-node prompt matching first compares argument counts, then validates and
 indexes the matching-size descriptor arguments by borrowed names. Every reached
 prompt descriptor is also validated independently. This bounds repeated-use
 work by the encoded node interfaces. Complete MCP protocol descriptor validation
-and RFC 6570 resource-template interfaces remain separate verifier work.
+remains separate verifier work.
+
+### Resource-template interfaces
+
+Resource-template nodes require one required `arguments` record containing exactly
+the template's distinct variables, all required primitive strings, and one required
+`value: ResourceSnapshot` output. Even a template with no variables requires a
+present empty arguments record. Repeated references contribute one interface field
+while remaining unchanged in the exact template string and binding identity.
+
+The syntax checker follows [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570)
+Sections 1.5 and 2: simple expansion and the defined `+`, `#`, `.`, `/`, `;`, `?`,
+`&` operators, multiple variables, prefix lengths 1–9999, and explode modifiers.
+HTLK arguments are scalar strings even with an explode modifier. Future-reserved
+operators, malformed percent triplets, nested/unbalanced braces, invalid names,
+invalid modifiers, and forbidden literal characters fail. Relative templates and
+the RFC's Unicode literal ranges are accepted; no URI parser rewrites the template.
+
+Variable names are exact and case-sensitive. A dot is part of a name, not field
+projection; percent triplets are not decoded or case-folded. `%61` and `a` are
+different variables. Names are borrowed from bounded binding strings, collected
+once per binding, and reused for node matching. Distinct-variable counts use
+`max_collection_entries`; occurrence counts, including repetitions, use
+`max_total_values` per template. Encoding under tighter limits rechecks those
+derived ceilings. Invalid syntax reports `InvalidUriTemplate` with a byte offset.
+
+This checks syntax and interface metadata. Actual expansion, Unicode prefix
+handling, output percent encoding, and implementation-profile matching remain
+responsibilities of the pinned URI-template engine and runtime.
 
 ### Policy structural bounds
 

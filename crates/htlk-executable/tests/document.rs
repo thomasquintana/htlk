@@ -875,6 +875,9 @@ fn select_binding(f: &mut DocumentFields, binding: McpBinding, l: &Limits) {
     } else if matches!(binding.kind(), McpBindingKind::Prompt { .. }) {
         n.inputs = prompt_ports(&[], l);
         n.outputs = primitive_ports("value", PrimitiveType::McpPromptResult, l);
+    } else if matches!(binding.kind(), McpBindingKind::Template { .. }) {
+        n.inputs = prompt_ports(&[], l);
+        n.outputs = primitive_ports("value", PrimitiveType::ResourceSnapshot, l);
     } else {
         n.outputs = ports("value", l);
     }
@@ -920,6 +923,10 @@ fn tool_fixture(l: &Limits) -> DocumentFields {
     f
 }
 fn change_descriptor(f: &mut DocumentFields, replacement: Value, l: &Limits) {
+    let inputs = f.scopes[&f.root_scope].fields().nodes[0]
+        .fields()
+        .inputs
+        .clone();
     let old = f.bindings.values().next().unwrap().clone();
     let json = JsonDocument::from_value(&replacement, l).unwrap();
     let binding =
@@ -927,6 +934,7 @@ fn change_descriptor(f: &mut DocumentFields, replacement: Value, l: &Limits) {
     f.documents.remove(&old.descriptor());
     f.documents.insert(json.digest(), json);
     select_binding(f, binding, l);
+    set_prompt_inputs(f, inputs, l);
 }
 // Encode internally consistent table hashes without calling document assembly.
 // This exercises canonical ingress as well as authored rejection.
@@ -1072,6 +1080,12 @@ fn every_binding_selection_matches_its_exact_descriptor_field() {
             let binding = McpBinding::new(old.server().clone(), json.digest(), kind, &l).unwrap();
             f.documents.insert(json.digest(), json);
             select_binding(&mut f, binding, &l);
+        }
+        if matches!(
+            f.bindings.values().next().unwrap().kind(),
+            McpBindingKind::Template { .. }
+        ) {
+            set_prompt_inputs(&mut f, prompt_ports(&[("Name", true)], &l), &l);
         }
         assert!(Doc::new(f.clone(), &l).is_ok());
         let b = f.bindings.values().next().unwrap();
@@ -1395,4 +1409,118 @@ fn fixed_resource_and_prompt_outputs_have_exact_protocol_types() {
         root(&mut f, fields, &l);
         expect_integrity_failure(f, Error::McpInterfaceMismatch, &l);
     }
+}
+
+fn template_fixture(template: &str, fields: &[(&str, bool)], l: &Limits) -> DocumentFields {
+    let mut f = prompt_fixture(br#"{"name":"prompt"}"#, &[], l);
+    let server = f.bindings.values().next().unwrap().server().clone();
+    let value = Value::Map(
+        Map::try_from_entries([("uriTemplate".into(), Value::Text(template.into()))]).unwrap(),
+    );
+    let descriptor = JsonDocument::from_value(&value, l).unwrap();
+    let binding = McpBinding::new(
+        server,
+        descriptor.digest(),
+        McpBindingKind::Template {
+            uri_template: template.into(),
+        },
+        l,
+    )
+    .unwrap();
+    f.documents.insert(descriptor.digest(), descriptor);
+    select_binding(&mut f, binding, l);
+    set_prompt_inputs(&mut f, prompt_ports(fields, l), l);
+    f
+}
+
+#[test]
+fn resource_templates_require_exact_distinct_variables_with_level_four_syntax() {
+    let l = Limits::default();
+    for op in ["", "+", "#", ".", "/", ";", "?", "&"] {
+        let template = format!("https://例.test/{{{op}Name:3,other*}}/{{Name}}");
+        let f = template_fixture(&template, &[("Name", true), ("other", true)], &l);
+        let doc = Doc::new(f, &l).unwrap();
+        assert_eq!(Doc::decode(&doc.encode(&l).unwrap(), &l).unwrap(), doc);
+    }
+    let template = "{X.part,%61,a,%6A,%6a}/{X.part:9999}";
+    let fields = [
+        ("X.part", true),
+        ("%61", true),
+        ("a", true),
+        ("%6A", true),
+        ("%6a", true),
+    ];
+    let f = template_fixture(template, &fields, &l);
+    assert!(Doc::new(f.clone(), &l).is_ok());
+    for fields in [
+        vec![],
+        vec![
+            ("X.part", false),
+            ("%61", true),
+            ("a", true),
+            ("%6A", true),
+            ("%6a", true),
+        ],
+        vec![("X.part", true), ("a", true), ("j", true)],
+    ] {
+        let mut bad = f.clone();
+        set_prompt_inputs(&mut bad, prompt_ports(&fields, &l), &l);
+        expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+    }
+    let mut bad = f.clone();
+    set_prompt_inputs(
+        &mut bad,
+        primitive_ports("arguments", PrimitiveType::Json, &l),
+        &l,
+    );
+    expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+    let mut fields = f.scopes[&f.root_scope].fields().clone();
+    let mut node = fields.nodes[0].fields().clone();
+    node.outputs = ports("value", &l);
+    fields.nodes[0] = Node::new(node, C::Ordinary, &l).unwrap();
+    let mut bad = f;
+    root(&mut bad, fields, &l);
+    expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+    let f = template_fixture("relative/path", &[], &l);
+    assert!(Doc::new(f.clone(), &l).is_ok());
+    let mut bad = f;
+    set_prompt_inputs(&mut bad, PortTable::default(), &l);
+    expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+}
+
+#[test]
+fn malformed_resource_templates_fail_canonical_ingress_with_byte_offsets() {
+    let l = Limits::default();
+    for (template, offset) in [
+        ("é/{x:0}", 4),
+        ("{!x}", 1),
+        ("abc%xx", 3),
+        ("{}", 1),
+        ("{x..y}", 1),
+        ("a{", 1),
+    ] {
+        let f = template_fixture(template, &[], &l);
+        expect_integrity_failure(f, Error::InvalidUriTemplate { offset }, &l);
+    }
+}
+
+#[test]
+fn repeated_template_variables_obey_tighter_per_call_limits() {
+    let l = Limits::default();
+    let f = template_fixture(&"{x}".repeat(1000), &[("x", true)], &l);
+    let doc = Doc::new(f.clone(), &l).unwrap();
+    let bytes = doc.encode(&l).unwrap();
+    let tight = Limits {
+        max_total_values: 500,
+        ..l
+    };
+    // Raw CBOR and each JSON document fit; derived template mentions do not.
+    assert!(htlk_cbor::decode(&bytes, &tight).is_ok());
+    let expected = Error::LimitExceeded {
+        limit: LimitKind::TotalValues,
+        maximum: 500,
+    };
+    assert_eq!(Doc::new(f, &tight).unwrap_err(), expected);
+    assert_eq!(doc.encode(&tight).unwrap_err(), expected);
+    assert_eq!(Doc::decode(&bytes, &tight).unwrap_err(), expected);
 }

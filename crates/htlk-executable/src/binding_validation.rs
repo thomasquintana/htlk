@@ -1,7 +1,7 @@
 //! Cross-record MCP selection, extracted schema, and tool-interface integrity.
 
 use htlk_cbor::{Limits, Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::digest::Digest;
 use crate::{
@@ -130,6 +130,33 @@ fn primitive_output(table: &PortTable, ty: PrimitiveType) -> Result<(), Error> {
     } else {
         Err(Error::McpInterfaceMismatch)
     }
+}
+pub(crate) fn template_ports(n: &NodeFields, variables: &BTreeSet<&str>) -> Result<(), Error> {
+    primitive_output(&n.outputs, PrimitiveType::ResourceSnapshot)?;
+    let port = n
+        .inputs
+        .get("arguments")
+        .filter(|p| p.required())
+        .ok_or(Error::McpInterfaceMismatch)?;
+    if n.inputs.len() != 1 {
+        return Err(Error::McpInterfaceMismatch);
+    }
+    let ValueTypeKind::Record(fields) = port.value_type().kind() else {
+        return Err(Error::McpInterfaceMismatch);
+    };
+    if fields.len() != variables.len()
+        || fields.iter().any(|(name, p)| {
+            !variables.contains(name.as_str())
+                || !p.required()
+                || !matches!(
+                    p.value_type().kind(),
+                    ValueTypeKind::Primitive(PrimitiveType::String)
+                )
+        })
+    {
+        return Err(Error::McpInterfaceMismatch);
+    }
+    Ok(())
 }
 fn argument_array(m: &Map) -> Result<&[Value], Error> {
     match m.get("arguments") {
