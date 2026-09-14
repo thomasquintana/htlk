@@ -870,6 +870,11 @@ fn select_binding(f: &mut DocumentFields, binding: McpBinding, l: &Limits) {
     {
         n.inputs = schema_ports("arguments", *input_schema, l);
         n.outputs = schema_ports("value", *output_schema, l);
+    } else if matches!(binding.kind(), McpBindingKind::Resource { .. }) {
+        n.outputs = primitive_ports("value", PrimitiveType::ResourceSnapshot, l);
+    } else if matches!(binding.kind(), McpBindingKind::Prompt { .. }) {
+        n.inputs = prompt_ports(&[], l);
+        n.outputs = primitive_ports("value", PrimitiveType::McpPromptResult, l);
     } else {
         n.outputs = ports("value", l);
     }
@@ -1219,4 +1224,175 @@ fn schema_root_checks_cover_unused_functions_in_reached_manifests() {
     fields.nodes.push(Node::new(node, C::Ordinary, &l).unwrap());
     root(&mut f, fields, &l);
     expect_integrity_failure(f, Error::UnreachedSchemaType, &l);
+}
+
+fn primitive_ports(name: &str, ty: PrimitiveType, l: &Limits) -> PortTable {
+    PortTable::new(
+        vec![(
+            name.parse().unwrap(),
+            Port::new(ValueType::primitive(ty), true),
+        )],
+        l,
+    )
+    .unwrap()
+}
+fn prompt_ports(fields: &[(&str, bool)], l: &Limits) -> PortTable {
+    let fields = fields
+        .iter()
+        .map(|(n, r)| {
+            (
+                n.to_string(),
+                Port::new(ValueType::primitive(PrimitiveType::String), *r),
+            )
+        })
+        .collect();
+    let ty = ValueType::new(
+        htlk_executable::ValueTypeKind::Record(fields),
+        htlk_executable::TypeContext::Value,
+        l,
+    )
+    .unwrap();
+    PortTable::new(vec![("arguments".parse().unwrap(), Port::new(ty, true))], l).unwrap()
+}
+fn prompt_fixture(json: &[u8], fields: &[(&str, bool)], l: &Limits) -> DocumentFields {
+    let mut f = base(l);
+    let descriptor = JsonDocument::new(json, l).unwrap();
+    let server = ServerIdentity::new(
+        "prod".into(),
+        McpTransport::Stdio,
+        "server".into(),
+        "1".into(),
+        l,
+    )
+    .unwrap();
+    let binding = McpBinding::new(
+        server,
+        descriptor.digest(),
+        McpBindingKind::Prompt {
+            name: "prompt".into(),
+        },
+        l,
+    )
+    .unwrap();
+    f.documents.insert(descriptor.digest(), descriptor);
+    select_binding(&mut f, binding, l);
+    set_prompt_inputs(&mut f, prompt_ports(fields, l), l);
+    f
+}
+fn set_prompt_inputs(f: &mut DocumentFields, inputs: PortTable, l: &Limits) {
+    let mut fields = f.scopes[&f.root_scope].fields().clone();
+    let mut node = fields.nodes[0].fields().clone();
+    node.inputs = inputs;
+    fields.nodes[0] = Node::new(node, C::Ordinary, l).unwrap();
+    root(f, fields, l);
+}
+
+#[test]
+fn prompts_match_exact_external_argument_names_and_presence() {
+    let l = Limits::default();
+    let json = br#"{"name":"prompt","arguments":[{"name":"Z.External","required":true,"description":"Keep exactly"},{"name":"optional"},{"name":"","required":false}]}"#;
+    let expected = [("Z.External", true), ("optional", false), ("", false)];
+    let f = prompt_fixture(json, &expected, &l);
+    let doc = Doc::new(f.clone(), &l).unwrap();
+    assert_eq!(Doc::decode(&doc.encode(&l).unwrap(), &l).unwrap(), doc);
+    for fields in [
+        vec![],
+        vec![("Z.External", false), ("optional", false), ("", false)],
+        vec![("z.external", true), ("optional", false), ("", false)],
+        vec![("Z.External", true), ("optional", true), ("", false)],
+    ] {
+        let mut bad = f.clone();
+        set_prompt_inputs(&mut bad, prompt_ports(&fields, &l), &l);
+        expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+    }
+    let mut bad = f;
+    set_prompt_inputs(
+        &mut bad,
+        primitive_ports("arguments", PrimitiveType::Json, &l),
+        &l,
+    );
+    expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+    for json in [
+        br#"{"name":"prompt"}"#.as_slice(),
+        br#"{"name":"prompt","arguments":[]}"#.as_slice(),
+    ] {
+        let f = prompt_fixture(json, &[], &l);
+        assert!(Doc::new(f.clone(), &l).is_ok());
+        let mut bad = f;
+        set_prompt_inputs(&mut bad, PortTable::default(), &l);
+        expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+    }
+}
+
+#[test]
+fn prompt_argument_metadata_rejects_malformed_or_duplicate_declarations() {
+    let l = Limits::default();
+    for (json, fields, error) in [
+        (r#"{"name":"prompt","arguments":null}"#, vec![], "arguments"),
+        (
+            r#"{"name":"prompt","arguments":[null]}"#,
+            vec![("x", false)],
+            "prompt argument",
+        ),
+        (
+            r#"{"name":"prompt","arguments":[{}]}"#,
+            vec![("x", false)],
+            "argument name",
+        ),
+        (
+            r#"{"name":"prompt","arguments":[{"name":"x","required":1}]}"#,
+            vec![("x", false)],
+            "argument required",
+        ),
+        (
+            r#"{"name":"prompt","arguments":[{"name":"x","description":false}]}"#,
+            vec![("x", false)],
+            "argument description",
+        ),
+        (
+            r#"{"name":"prompt","arguments":[{"name":"x"},{"name":"x"}]}"#,
+            vec![("x", false), ("y", false)],
+            "duplicate argument",
+        ),
+    ] {
+        let f = prompt_fixture(json.as_bytes(), &fields, &l);
+        expect_integrity_failure(f, Error::InvalidDescriptor(error), &l);
+    }
+}
+
+#[test]
+fn fixed_resource_and_prompt_outputs_have_exact_protocol_types() {
+    let l = Limits::default();
+    for resource in [false, true] {
+        let mut f = prompt_fixture(br#"{"name":"prompt"}"#, &[], &l);
+        if resource {
+            let old = f.bindings.values().next().unwrap().clone();
+            let json = JsonDocument::new(br#"{"uri":"file:///resource"}"#, &l).unwrap();
+            let binding = McpBinding::new(
+                old.server().clone(),
+                json.digest(),
+                McpBindingKind::Resource {
+                    uri: "file:///resource".into(),
+                },
+                &l,
+            )
+            .unwrap();
+            f.documents.insert(json.digest(), json);
+            select_binding(&mut f, binding, &l);
+            assert!(Doc::new(f.clone(), &l).is_ok());
+            let mut bad = f.clone();
+            set_prompt_inputs(
+                &mut bad,
+                primitive_ports("arguments", PrimitiveType::Json, &l),
+                &l,
+            );
+            expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+        }
+        let mut fields = f.scopes[&f.root_scope].fields().clone();
+        let mut node = fields.nodes[0].fields().clone();
+        node.outputs = ports("value", &l);
+        fields.nodes[0] = Node::new(node, C::Ordinary, &l).unwrap();
+        root(&mut f, fields, &l);
+        expect_integrity_failure(f, Error::McpInterfaceMismatch, &l);
+    }
 }

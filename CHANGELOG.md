@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fixed-resource and prompt interface validation, including exact protocol output
+  types and descriptor-derived prompt argument names, string types, and presence.
 - Cross-record MCP descriptor selection and extracted tool-schema integrity checks,
   exact tool port/schema matching, and reached-tool-root restrictions on schema types.
 - Policy scope-depth and expanded-invocation checks over the scope-definition DAG,

@@ -692,8 +692,20 @@ function signatures in a reached library.
 
 Failures report `InvalidDescriptor` with a static field label,
 `ToolSchemaMismatch`, `McpInterfaceMismatch`, or `UnreachedSchemaType`.
-Complete MCP protocol descriptor validation and resource/template/prompt interface
-checks remain separate verifier work.
+Fixed resource reads require no inputs and one required `value: ResourceSnapshot`
+output. Prompt fetches require one required `arguments` record and one required
+`value: McpPromptResult` output. Prompt record fields exactly match descriptor
+argument names, are primitive strings, and use descriptor `required` flags;
+omitted flags mean optional. External names are preserved, including names that
+are not HTLK identifiers. Omitted or empty descriptor argument arrays still
+require a present empty argument record. Duplicate names, malformed argument
+objects, non-Boolean required flags, and non-string descriptions fail.
+
+Per-node prompt matching first compares argument counts, then validates and
+indexes the matching-size descriptor arguments by borrowed names. Every reached
+prompt descriptor is also validated independently. This bounds repeated-use
+work by the encoded node interfaces. Complete MCP protocol descriptor validation
+and RFC 6570 resource-template interfaces remain separate verifier work.
 
 ### Policy structural bounds
 

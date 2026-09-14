@@ -422,7 +422,7 @@ impl CanonicalDocument {
                             return Err(DocumentError::MissingRecord("binding"));
                         }
                         used.bindings.insert(*binding);
-                        crate::binding_validation::tool_ports(n, &f.bindings[binding])?;
+                        crate::binding_validation::ports(n, &f.bindings[binding], f)?;
                     }
                     Operation::Scope(d) | Operation::Loop { body: d, .. } => {
                         let target = f
@@ -881,7 +881,7 @@ pub enum DocumentError {
     InvalidDescriptor(&'static str),
     /// Tool schema identity differs from the exact descriptor subdocument.
     ToolSchemaMismatch(&'static str),
-    /// Tool ports do not use the required exact input/output schema identities.
+    /// MCP ports disagree with their binding's required interface.
     McpInterfaceMismatch,
     /// A schema type does not identify a reached tool input/output schema root.
     UnreachedSchemaType,
