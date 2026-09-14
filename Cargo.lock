@@ -756,6 +756,7 @@ dependencies = [
 name = "htlk-executable"
 version = "0.1.0"
 dependencies = [
+ "half",
  "htlk-cbor",
  "sha2",
 ]

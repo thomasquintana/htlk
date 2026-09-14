@@ -1,6 +1,7 @@
 //! Shared pre-allocation accounting for canonical executable record conversion.
 
-use htlk_cbor::{LimitKind, Limits};
+use half::f16;
+use htlk_cbor::{FiniteFloat, LimitKind, Limits};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EncodingLimitError {
@@ -77,6 +78,48 @@ impl<'a> RecordAccounting<'a> {
     pub(crate) fn boolean(&mut self, depth: usize) -> Result<(), EncodingLimitError> {
         self.enter(depth)?;
         self.bytes(1)
+    }
+
+    pub(crate) fn null(&mut self, depth: usize) -> Result<(), EncodingLimitError> {
+        self.boolean(depth)
+    }
+
+    pub(crate) fn byte_string(
+        &mut self,
+        value: &[u8],
+        depth: usize,
+    ) -> Result<(), EncodingLimitError> {
+        self.enter(depth)?;
+        check(
+            value.len(),
+            self.limits.max_byte_string_bytes,
+            LimitKind::ByteStringBytes,
+        )?;
+        self.payload = add(
+            self.payload,
+            value.len(),
+            self.limits.max_total_payload_bytes,
+            LimitKind::TotalPayloadBytes,
+        )?;
+        self.bytes(header_size(value.len() as u64))?;
+        self.bytes(value.len())
+    }
+
+    pub(crate) fn float(
+        &mut self,
+        value: FiniteFloat,
+        depth: usize,
+    ) -> Result<(), EncodingLimitError> {
+        self.enter(depth)?;
+        let value = value.get();
+        let size = if f16::from_f64_const(value).to_f64_const().to_bits() == value.to_bits() {
+            3
+        } else if f64::from(value as f32).to_bits() == value.to_bits() {
+            5
+        } else {
+            9
+        };
+        self.bytes(size)
     }
 
     pub(crate) fn integer(&mut self, value: i64, depth: usize) -> Result<(), EncodingLimitError> {

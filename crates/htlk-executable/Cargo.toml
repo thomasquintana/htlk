@@ -12,6 +12,7 @@ keywords = ["cbor", "sha256", "digest", "htlk"]
 categories = ["encoding", "cryptography"]
 
 [dependencies]
+half.workspace = true
 htlk-cbor.workspace = true
 sha2.workspace = true
 

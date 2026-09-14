@@ -10,6 +10,8 @@ and producer trust.
 
 Execution-limit and retry-policy records describe the controls later enforced
 by the runtime; these are configuration records, not running counters or timers.
+Canonical expressions and prompt templates describe calculations and text assembly;
+their model APIs do not evaluate expressions or invoke services.
 
 Depends on `htlk-cbor` for deterministic encoding and RustCrypto's `sha2` for
 SHA-256; the codec does not depend on this crate.
@@ -149,6 +151,159 @@ unions, construction/encoding/cloning/formatting, and cleanup after a nested fie
 failure. Collection-specific parsing/conversion helpers keep recursive dispatch
 frames small. These tests provide headroom, not a guarantee for arbitrary caller
 stack sizes. Clone/Debug of caller-owned objects are ordinary Rust operations.
+
+## Canonical expressions
+
+`Expression` is an immutable normalized tree with a read-only `ExpressionKind`.
+Supporting types are `ScalarLiteral`, `ValueReference`, `PathStep`, `FunctionId`,
+`CoreFunction`, and `BinaryOperator`. Scalar literals hold text, bytes, signed
+integers, finite floats, Booleans, or null; list/record construction has separate
+expression forms. Absence, node handles, and callable references are not scalar
+application values.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{BinaryOperator, CoreFunction, Expression, ExpressionContext,
+    ExpressionKind, FunctionId, ScalarLiteral, ValueReference};
+
+let limits = Limits::default();
+let context = ExpressionContext::Preconditions;
+let question = Expression::new(ExpressionKind::Ref {
+    source: ValueReference::Input("question".parse()?), path: vec![],
+}, context, &limits)?;
+let length = Expression::new(ExpressionKind::Call {
+    function: FunctionId::Core(CoreFunction::Length), arguments: vec![question],
+}, context, &limits)?;
+let condition = Expression::new(ExpressionKind::Binary {
+    operator: BinaryOperator::Gt,
+    left: Box::new(length),
+    right: Box::new(Expression::literal(ScalarLiteral::Integer(0))),
+}, context, &limits)?;
+let bytes = condition.encode(context, &limits)?;
+assert_eq!(Expression::decode(&bytes, context, &limits)?, condition);
+# Ok::<(), htlk_executable::ExpressionError>(())
+```
+
+This describes `length(inputs.question) > 0`; it does not calculate a result.
+The graph verifier must still establish that `question` exists and has a suitable
+type. Context checks restrict reference categories, not the result type of a
+condition or the existence/accessibility of a particular named node or port.
+
+| Kind | Canonical form |
+|---|---|
+| Literal | `["literal", scalar]` |
+| Regex | `["regex", pattern, flags]` |
+| Named value | `["ref", source, path]` |
+| Projection | `["get", expression, nonempty_path]` |
+| List | `["list", [expressions...]]` |
+| Record | `["record", [[key, expression]...]]` |
+| Call | `["call", function_id, [arguments...]]` |
+| Static callable | `["function_ref", library_digest, identifier]` |
+| Render | `["render", template_digest, { name: expression, ... }]` |
+| Outcome | `["status", node]` or `["error", node]` |
+| Negation | `["not", expression]` |
+| Binary | `[operator, left, right]` |
+
+Value roots are input, sibling/body output, proposed scope output, loop-carried,
+or proposed next values. Paths contain exact string field names or nonnegative
+i64-range indices. Function IDs select core `length`/`present` or a library digest
+and identifier. Core calls require one argument; library signatures are resolved
+later. Binary operators are exactly and/or/eq/ne/lt/le/gt/ge.
+
+### Expression contexts
+
+The caller supplies a context derived from the owning graph location, never from
+an untrusted context field:
+
+| Context | Permitted references beyond literals/static definitions |
+|---|---|
+| Eval / preconditions | Own inputs |
+| Guard | Containing inputs, sibling outputs/outcomes; carried only in loop bodies |
+| Primitive / wrapper postconditions | Own inputs and proposed outputs |
+| Scope postconditions | Own inputs, proposed outputs, direct-child outcomes |
+| Loop until | Inputs, carried, next, proposed outputs, body outputs/outcomes |
+| Loop postconditions | Inputs and final proposed outputs |
+
+Restrictions apply recursively, including both Boolean operands. Outcome records
+describe `status(@node)`/`error(@node)`; the eventual runtime waits for terminal
+outcomes instead of exposing transient attempt failures. Self-reference, sibling
+membership, and hidden dependency cycles require full graph verification.
+
+### Normalization and static callable references
+
+`Expression::new` combines adjacent get paths, folds selections into references,
+sorts record-expression fields by decoded UTF-8 keys, and normalizes unique regex
+flags to ims order. Empty get paths, duplicate fields, and unknown/repeated regex
+flags fail. `from_value` and `decode` require these canonical forms already.
+
+Record-expression fields are an ordered array of pairs, not a CBOR map: their
+evaluation order is UTF-8 key order. Render arguments are a wire map, with model
+iteration exposed in UTF-8 name order independently of encoded map-key ordering.
+Function arguments, list elements, and left/right operands are never reordered.
+There is no constant folding, including for constant Boolean operands: all
+references remain available for static dependency analysis.
+
+`ExpressionKind::FunctionRef` preserves the exact library digest/name without
+executing it. It is an AST description, not a callable application-value type.
+The linked-library verifier must enforce function-parameter placement and signature
+compatibility; arbitrary input strings do not become code. Regex pattern syntax
+and compiled-size validation similarly require the pinned regex engine. This
+model checks regex text representation and flags, not engine availability.
+
+## Prompt templates
+
+`PromptTemplate` owns parameter ports and ordered `TemplatePart::Text`/`Slot`
+parts. Names exactly cover the distinct slots; repeated slots remain in order.
+Parameter types must normalize to primitive string, integer, or Boolean. Port
+presence metadata is retained; render argument coverage and value compatibility
+are checked at the use site by the verifier/evaluator.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{Expression, ExpressionContext, ExpressionKind, Port,
+    PrimitiveType, PromptTemplate, ScalarLiteral, TemplatePart, ValueType};
+
+let limits = Limits::default();
+let template = PromptTemplate::new(
+    vec![("name".parse()?, Port::new(ValueType::primitive(PrimitiveType::String), true))],
+    vec![TemplatePart::Text("Hi ".into()), TemplatePart::Slot("name".parse()?)],
+    &limits,
+)?;
+assert_eq!(template.digest(&limits)?.to_string(),
+    "sha256:b2a86fc68a03809076995b595fe6a6367de25626bab6b82b808857fd4de52313");
+let render = Expression::new(ExpressionKind::Render {
+    template: template.digest(&limits)?,
+    arguments: vec![("name".parse()?, Expression::literal(ScalarLiteral::String("Ada".into())))],
+}, ExpressionContext::Eval, &limits)?;
+assert!(matches!(render.kind(), ExpressionKind::Render { .. }));
+# Ok::<(), htlk_executable::ExpressionError>(())
+```
+
+Construction removes empty literal segments and joins adjacent text without
+trimming or Unicode normalization. Canonical ingress rejects such redundant
+segments. Adjacent/repeated slots are permitted. The two required wire fields
+are `parameters` and `parts`; their maps are closed. A template digest is SHA-256
+of raw `htlk.template/0.1\n` followed by canonical record bytes, as specified by
+the compiler's record_digest formula. It is not the executable-envelope hash.
+Rendering text and calling an LLM are separate later operations.
+
+### Expression/template limits and diagnostics
+
+These models use the existing codec Limits for raw and normalized representations.
+Private `RecordAccounting` now also counts byte strings and shortest-exact floats
+before conversion copies. Normalized combined paths and text segments must still
+fit collection/string ceilings. Traversal and normalization temporaries are
+bounded by validated input, with fallible large reservations; the counters are
+not exact process-heap measurements or runtime evaluator fuel.
+
+`ExpressionError` covers both expressions and templates, preserving codec,
+identifier, digest, and type causes. It reports static schema/context descriptions
+rather than retaining submitted data. Codec failures preserve byte offsets; later
+graph/source consumers can attach their own locations to higher-level failures.
+Expression storage is privately boxed and recursive dispatch delegates branch
+temporaries to small helpers. Subprocess tests on 512 KiB and 2 MiB stacks cover
+the 128 codec-depth ceiling, deep unary/binary/call trees, cloning/formatting,
+normalization, and cleanup after partially decoded trees fail.
 
 ## Execution limits and retry policies
 
