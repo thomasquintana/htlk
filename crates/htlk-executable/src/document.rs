@@ -387,10 +387,21 @@ impl CanonicalDocument {
             }
         }
         let mut used = Used::default();
+        let mut schema_roots = BTreeSet::new();
+        for binding in f.bindings.values() {
+            if let McpBindingKind::Tool {
+                input_schema,
+                output_schema,
+                ..
+            } = binding.kind()
+            {
+                schema_roots.extend([*input_schema, *output_schema]);
+            }
+        }
         for scope in f.scopes.values() {
             let s = scope.fields();
             for table in [&s.inputs, &s.outputs, &s.carried] {
-                type_documents(table, f)?;
+                type_documents(table, f, &schema_roots)?;
             }
             expression(&s.preconditions, f, &mut used)?;
             expression(&s.postconditions, f, &mut used)?;
@@ -399,8 +410,8 @@ impl CanonicalDocument {
             }
             for node in &s.nodes {
                 let n = node.fields();
-                type_documents(&n.inputs, f)?;
-                type_documents(&n.outputs, f)?;
+                type_documents(&n.inputs, f, &schema_roots)?;
+                type_documents(&n.outputs, f, &schema_roots)?;
                 for e in [&n.guard, &n.preconditions, &n.postconditions] {
                     expression(e, f, &mut used)?;
                 }
@@ -411,6 +422,7 @@ impl CanonicalDocument {
                             return Err(DocumentError::MissingRecord("binding"));
                         }
                         used.bindings.insert(*binding);
+                        crate::binding_validation::tool_ports(n, &f.bindings[binding])?;
                     }
                     Operation::Scope(d) | Operation::Loop { body: d, .. } => {
                         let target = f
@@ -450,21 +462,7 @@ impl CanonicalDocument {
         exact(&used.templates, f.templates.keys(), "template")?;
         exact(&used.libraries, f.libraries.keys(), "library")?;
         for binding in f.bindings.values() {
-            if !f.documents.contains_key(&binding.descriptor()) {
-                return Err(DocumentError::MissingRecord("descriptor document"));
-            }
-            if let McpBindingKind::Tool {
-                input_schema,
-                output_schema,
-                ..
-            } = binding.kind()
-            {
-                for d in [input_schema, output_schema] {
-                    if !f.documents.contains_key(d) {
-                        return Err(DocumentError::MissingRecord("tool schema document"));
-                    }
-                }
-            }
+            crate::binding_validation::descriptor(binding, f, l)?;
         }
         for lib in f.libraries.values() {
             for (_, sig) in lib.functions() {
@@ -473,7 +471,7 @@ impl CanonicalDocument {
                     .iter()
                     .chain(std::iter::once(sig.returns()))
                 {
-                    type_refs(port.value_type(), f)?;
+                    type_refs(port.value_type(), f, &schema_roots)?;
                 }
             }
         }
@@ -677,28 +675,39 @@ fn expression(e: &Expression, f: &DocumentFields, used: &mut Used) -> Result<(),
     }
     Ok(())
 }
-fn type_documents(t: &PortTable, f: &DocumentFields) -> Result<(), DocumentError> {
+fn type_documents(
+    t: &PortTable,
+    f: &DocumentFields,
+    roots: &BTreeSet<Digest>,
+) -> Result<(), DocumentError> {
     for (_, p) in t.iter() {
-        type_refs(p.value_type(), f)?;
+        type_refs(p.value_type(), f, roots)?;
     }
     Ok(())
 }
-fn type_refs(t: &ValueType, f: &DocumentFields) -> Result<(), DocumentError> {
+fn type_refs(
+    t: &ValueType,
+    f: &DocumentFields,
+    roots: &BTreeSet<Digest>,
+) -> Result<(), DocumentError> {
     match t.kind() {
         T::Schema(d) => {
             if !f.documents.contains_key(d) {
                 return Err(DocumentError::MissingRecord("type schema document"));
             }
+            if !roots.contains(d) {
+                return Err(DocumentError::UnreachedSchemaType);
+            }
         }
-        T::List(t) | T::Map(t) => type_refs(t, f)?,
+        T::List(t) | T::Map(t) => type_refs(t, f, roots)?,
         T::Record(fields) => {
             for (_, p) in fields {
-                type_refs(p.value_type(), f)?;
+                type_refs(p.value_type(), f, roots)?;
             }
         }
         T::Union(v) => {
             for t in v {
-                type_refs(t, f)?;
+                type_refs(t, f, roots)?;
             }
         }
         T::Function {
@@ -706,9 +715,9 @@ fn type_refs(t: &ValueType, f: &DocumentFields) -> Result<(), DocumentError> {
             returns,
         } => {
             for p in parameters {
-                type_refs(p.value_type(), f)?;
+                type_refs(p.value_type(), f, roots)?;
             }
-            type_refs(returns.value_type(), f)?;
+            type_refs(returns.value_type(), f, roots)?;
         }
         _ => (),
     }
@@ -868,6 +877,14 @@ pub enum DocumentError {
     ScopeCycle,
     /// Scope/loop interface or initializer mismatch.
     ScopeInterfaceMismatch,
+    /// Descriptor is not an object or its selection/schema field is invalid.
+    InvalidDescriptor(&'static str),
+    /// Tool schema identity differs from the exact descriptor subdocument.
+    ToolSchemaMismatch(&'static str),
+    /// Tool ports do not use the required exact input/output schema identities.
+    McpInterfaceMismatch,
+    /// A schema type does not identify a reached tool input/output schema root.
+    UnreachedSchemaType,
     /// Pinned policy scope-depth or expanded-invocation ceiling exceeded.
     StructuralLimitExceeded {
         /// Exhausted structural resource, separate from codec limits.

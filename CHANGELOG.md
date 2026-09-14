@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cross-record MCP descriptor selection and extracted tool-schema integrity checks,
+  exact tool port/schema matching, and reached-tool-root restrictions on schema types.
 - Policy scope-depth and expanded-invocation checks over the scope-definition DAG,
   including reused bodies, nested loop multipliers, checked arithmetic, and an
   immutable derived structural summary outside the executable wire format.

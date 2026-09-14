@@ -3,6 +3,7 @@
 
 pub mod digest;
 
+mod binding_validation;
 mod document;
 mod envelope;
 mod expression;

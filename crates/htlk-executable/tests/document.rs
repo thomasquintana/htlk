@@ -443,11 +443,16 @@ fn binding_and_schema_references_require_document_identities() {
         &l,
     )
     .unwrap();
-    let json = JsonDocument::new(b"{}", &l).unwrap();
+    let json = JsonDocument::new(br#"{"type":"object"}"#, &l).unwrap();
+    let descriptor = JsonDocument::new(
+        br#"{"name":"tool","inputSchema":{"type":"object"},"outputSchema":{"type":"object"}}"#,
+        &l,
+    )
+    .unwrap();
     let jd = json.digest();
     let binding = McpBinding::new(
         server,
-        jd,
+        descriptor.digest(),
         McpBindingKind::Tool {
             name: "tool".into(),
             input_schema: jd,
@@ -467,7 +472,8 @@ fn binding_and_schema_references_require_document_identities() {
         "call".parse().unwrap(),
         Operation::Mcp { binding: id, retry },
     );
-    n.outputs = ports("value", &l);
+    n.inputs = schema_ports("arguments", jd, &l);
+    n.outputs = schema_ports("value", jd, &l);
     let n = Node::new(n, C::Ordinary, &l).unwrap();
     root(
         &mut f,
@@ -477,11 +483,12 @@ fn binding_and_schema_references_require_document_identities() {
         },
         &l,
     );
+    f.documents.insert(jd, json);
     assert_eq!(
         Doc::new(f.clone(), &l).unwrap_err(),
         Error::MissingRecord("descriptor document")
     );
-    f.documents.insert(jd, json);
+    f.documents.insert(descriptor.digest(), descriptor);
     f.schema_uris
         .insert("https://example.test/schema".into(), jd);
     let doc = Doc::new(f.clone(), &l).unwrap();
@@ -835,4 +842,381 @@ fn structural_definitions_on_controlled_stacks() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+}
+
+fn schema_ports(name: &str, digest: Digest, l: &Limits) -> PortTable {
+    let ty = ValueType::new(
+        htlk_executable::ValueTypeKind::Schema(digest),
+        htlk_executable::TypeContext::Value,
+        l,
+    )
+    .unwrap();
+    PortTable::new(vec![(name.parse().unwrap(), Port::new(ty, true))], l).unwrap()
+}
+fn select_binding(f: &mut DocumentFields, binding: McpBinding, l: &Limits) {
+    let id = binding.digest(l).unwrap();
+    let mut n = NodeFields::new(
+        "call".parse().unwrap(),
+        Operation::Mcp {
+            binding: id,
+            retry: RetryPolicy::no_retry(),
+        },
+    );
+    if let McpBindingKind::Tool {
+        input_schema,
+        output_schema,
+        ..
+    } = binding.kind()
+    {
+        n.inputs = schema_ports("arguments", *input_schema, l);
+        n.outputs = schema_ports("value", *output_schema, l);
+    } else {
+        n.outputs = ports("value", l);
+    }
+    root(
+        f,
+        ScopeFields {
+            nodes: vec![Node::new(n, C::Ordinary, l).unwrap()],
+            ..ScopeFields::default()
+        },
+        l,
+    );
+    f.bindings.clear();
+    f.bindings.insert(id, binding);
+}
+fn tool_fixture(l: &Limits) -> DocumentFields {
+    let mut f = base(l);
+    let descriptor = JsonDocument::new(br#"{"name":"Tool/Exact","description":"Planning text","inputSchema":{"type":"object"},"outputSchema":{"type":"object","description":"result"},"extension":{"unchanged":true}}"#, l).unwrap();
+    let input = JsonDocument::new(br#"{"type":"object"}"#, l).unwrap();
+    let output = JsonDocument::new(br#"{"type":"object","description":"result"}"#, l).unwrap();
+    let server = ServerIdentity::new(
+        "prod".into(),
+        McpTransport::Stdio,
+        "server".into(),
+        "1".into(),
+        l,
+    )
+    .unwrap();
+    let binding = McpBinding::new(
+        server,
+        descriptor.digest(),
+        McpBindingKind::Tool {
+            name: "Tool/Exact".into(),
+            input_schema: input.digest(),
+            output_schema: output.digest(),
+        },
+        l,
+    )
+    .unwrap();
+    for j in [descriptor, input, output] {
+        f.documents.insert(j.digest(), j);
+    }
+    select_binding(&mut f, binding, l);
+    f
+}
+fn change_descriptor(f: &mut DocumentFields, replacement: Value, l: &Limits) {
+    let old = f.bindings.values().next().unwrap().clone();
+    let json = JsonDocument::from_value(&replacement, l).unwrap();
+    let binding =
+        McpBinding::new(old.server().clone(), json.digest(), old.kind().clone(), l).unwrap();
+    f.documents.remove(&old.descriptor());
+    f.documents.insert(json.digest(), json);
+    select_binding(f, binding, l);
+}
+// Encode internally consistent table hashes without calling document assembly.
+// This exercises canonical ingress as well as authored rejection.
+fn expect_integrity_failure(f: DocumentFields, expected: Error, l: &Limits) {
+    let mut value = Doc::new(base(l), l).unwrap().to_value(l).unwrap();
+    for (key, table) in [
+        (
+            "libraries",
+            Map::try_from_entries(
+                f.libraries
+                    .iter()
+                    .map(|(d, b)| (d.to_string(), b.to_value(l).unwrap())),
+            )
+            .unwrap(),
+        ),
+        (
+            "scopes",
+            Map::try_from_entries(
+                f.scopes
+                    .iter()
+                    .map(|(d, s)| (d.to_string(), s.to_value(C::Ordinary, l).unwrap())),
+            )
+            .unwrap(),
+        ),
+        (
+            "bindings",
+            Map::try_from_entries(
+                f.bindings
+                    .iter()
+                    .map(|(d, b)| (d.to_string(), b.to_value(l).unwrap())),
+            )
+            .unwrap(),
+        ),
+        (
+            "documents",
+            Map::try_from_entries(
+                f.documents
+                    .iter()
+                    .map(|(d, j)| (d.to_string(), Value::Bytes(j.as_bytes().to_vec()))),
+            )
+            .unwrap(),
+        ),
+    ] {
+        value = replace(&value, key, Some(Value::Map(table)));
+    }
+    value = replace(
+        &value,
+        "root_scope",
+        Some(Value::Text(f.root_scope.to_string())),
+    );
+    assert_eq!(Doc::new(f, l).unwrap_err(), expected);
+    assert_eq!(
+        Doc::decode(&htlk_cbor::encode(&value, l).unwrap(), l).unwrap_err(),
+        expected
+    );
+}
+
+#[test]
+fn tool_descriptors_preserve_content_and_require_exact_extracted_schemas() {
+    let l = Limits::default();
+    let f = tool_fixture(&l);
+    let doc = Doc::new(f.clone(), &l).unwrap();
+    assert_eq!(Doc::decode(&doc.encode(&l).unwrap(), &l).unwrap(), doc);
+    let binding = f.bindings.values().next().unwrap();
+    let descriptor = f.documents[&binding.descriptor()].value();
+    let changed = replace(
+        descriptor,
+        "description",
+        Some(Value::Text("Different planning text".into())),
+    );
+    let mut other = f.clone();
+    change_descriptor(&mut other, changed, &l);
+    let other = Doc::new(other, &l).unwrap();
+    assert_ne!(
+        doc.envelope(&l).unwrap().fingerprint(),
+        other.envelope(&l).unwrap().fingerprint()
+    );
+    for key in ["inputSchema", "outputSchema"] {
+        let mut bad = f.clone();
+        let mismatch =
+            JsonDocument::new(br#"{"type":"object","description":"altered"}"#, &l).unwrap();
+        change_descriptor(
+            &mut bad,
+            replace(descriptor, key, Some(mismatch.value().clone())),
+            &l,
+        );
+        expect_integrity_failure(bad, Error::ToolSchemaMismatch(key), &l);
+        for replacement in [
+            None,
+            Some(Value::Null),
+            Some(Value::Bool(true)),
+            Some(Value::Text("object".into())),
+        ] {
+            let mut bad = f.clone();
+            change_descriptor(&mut bad, replace(descriptor, key, replacement), &l);
+            expect_integrity_failure(bad, Error::InvalidDescriptor(key), &l);
+        }
+    }
+}
+
+#[test]
+fn every_binding_selection_matches_its_exact_descriptor_field() {
+    let l = Limits::default();
+    for (kind, key, selected) in [
+        (
+            McpBindingKind::Resource {
+                uri: "file:///Exact".into(),
+            },
+            "uri",
+            "file:///Exact",
+        ),
+        (
+            McpBindingKind::Template {
+                uri_template: "https://example.test/{Name}".into(),
+            },
+            "uriTemplate",
+            "https://example.test/{Name}",
+        ),
+        (
+            McpBindingKind::Prompt {
+                name: "Prompt/Exact".into(),
+            },
+            "name",
+            "Prompt/Exact",
+        ),
+        (
+            McpBindingKind::Tool {
+                name: "Tool/Exact".into(),
+                input_schema: d(0),
+                output_schema: d(0),
+            },
+            "name",
+            "Tool/Exact",
+        ),
+    ] {
+        let mut f = tool_fixture(&l);
+        let old = f.bindings.values().next().unwrap().clone();
+        if !matches!(kind, McpBindingKind::Tool { .. }) {
+            let value = Value::Map(
+                Map::try_from_entries([(key.to_owned(), Value::Text(selected.into()))]).unwrap(),
+            );
+            let json = JsonDocument::from_value(&value, &l).unwrap();
+            let binding = McpBinding::new(old.server().clone(), json.digest(), kind, &l).unwrap();
+            f.documents.insert(json.digest(), json);
+            select_binding(&mut f, binding, &l);
+        }
+        assert!(Doc::new(f.clone(), &l).is_ok());
+        let b = f.bindings.values().next().unwrap();
+        let value = f.documents[&b.descriptor()].value().clone();
+        for replacement in [
+            None,
+            Some(Value::Integer(1)),
+            Some(Value::Text(selected.to_lowercase())),
+            Some(Value::Text(format!(" {selected}"))),
+        ] {
+            let mut bad = f.clone();
+            change_descriptor(&mut bad, replace(&value, key, replacement), &l);
+            expect_integrity_failure(bad, Error::InvalidDescriptor(key), &l);
+        }
+        let mut bad = f;
+        change_descriptor(&mut bad, Value::Array(vec![]), &l);
+        expect_integrity_failure(bad, Error::InvalidDescriptor("object"), &l);
+    }
+}
+
+#[test]
+fn tool_ports_require_exact_schema_identity_and_required_presence() {
+    let l = Limits::default();
+    let f = tool_fixture(&l);
+    let original = f.scopes[&f.root_scope].fields().nodes[0].fields().clone();
+    for input in [
+        PortTable::default(),
+        ports("arguments", &l),
+        original.outputs.clone(),
+    ] {
+        let mut n = original.clone();
+        // Keep the locally valid arguments name even when selecting the output schema.
+        n.inputs = if input.get("value").is_some() {
+            PortTable::new(
+                vec![(
+                    "arguments".parse().unwrap(),
+                    input.get("value").unwrap().clone(),
+                )],
+                &l,
+            )
+            .unwrap()
+        } else {
+            input
+        };
+        let mut bad = f.clone();
+        root(
+            &mut bad,
+            ScopeFields {
+                nodes: vec![Node::new(n, C::Ordinary, &l).unwrap()],
+                ..ScopeFields::default()
+            },
+            &l,
+        );
+        expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+    }
+    let mut n = original;
+    n.outputs = ports("value", &l);
+    let mut bad = f;
+    root(
+        &mut bad,
+        ScopeFields {
+            nodes: vec![Node::new(n, C::Ordinary, &l).unwrap()],
+            ..ScopeFields::default()
+        },
+        &l,
+    );
+    expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
+}
+
+#[test]
+fn nested_schema_types_must_name_reached_tool_roots() {
+    use htlk_executable::{TypeContext, ValueTypeKind as K};
+    let l = Limits::default();
+    let mut f = base(&l);
+    let arbitrary = JsonDocument::new(br#"{"type":"object"}"#, &l).unwrap();
+    let id = arbitrary.digest();
+    f.documents.insert(id, arbitrary);
+    let schema = ValueType::new(K::Schema(id), TypeContext::Value, &l).unwrap();
+    let nested = ValueType::new(K::List(Box::new(schema)), TypeContext::Value, &l).unwrap();
+    let inputs = PortTable::new(
+        vec![("nested".parse().unwrap(), Port::new(nested.clone(), false))],
+        &l,
+    )
+    .unwrap();
+    root(
+        &mut f,
+        ScopeFields {
+            inputs,
+            ..ScopeFields::default()
+        },
+        &l,
+    );
+    expect_integrity_failure(f, Error::UnreachedSchemaType, &l);
+    let mut f = tool_fixture(&l);
+    let mut fields = f.scopes[&f.root_scope].fields().clone();
+    fields.inputs = PortTable::new(
+        vec![("nested".parse().unwrap(), Port::new(nested, false))],
+        &l,
+    )
+    .unwrap();
+    root(&mut f, fields, &l);
+    assert!(Doc::new(f, &l).is_ok());
+}
+
+#[test]
+fn schema_root_checks_cover_unused_functions_in_reached_manifests() {
+    use htlk_executable::{TypeContext, ValueTypeKind as K};
+    let l = Limits::default();
+    let mut f = tool_fixture(&l);
+    let arbitrary =
+        JsonDocument::new(br#"{"type":"object","title":"not a tool root"}"#, &l).unwrap();
+    let ty = ValueType::new(K::Schema(arbitrary.digest()), TypeContext::Signature, &l).unwrap();
+    let ty = ValueType::new(K::List(Box::new(ty)), TypeContext::Signature, &l).unwrap();
+    f.documents.insert(arbitrary.digest(), arbitrary);
+    let used = FunctionSignature::new(
+        vec![],
+        vec![],
+        Port::new(ValueType::primitive(PrimitiveType::String), true),
+        &l,
+    )
+    .unwrap();
+    let unused = FunctionSignature::new(vec![], vec![], Port::new(ty, true), &l).unwrap();
+    let library = Library::new(
+        "lib".into(),
+        "1".into(),
+        d(8),
+        vec![
+            ("used".parse().unwrap(), used),
+            ("unused".parse().unwrap(), unused),
+        ],
+        &l,
+    )
+    .unwrap();
+    f.libraries.insert(d(8), library);
+    let call = Expression::new(
+        ExpressionKind::Call {
+            function: FunctionId::Library {
+                library: d(8),
+                name: "used".parse().unwrap(),
+            },
+            arguments: vec![],
+        },
+        ExpressionContext::Eval,
+        &l,
+    )
+    .unwrap();
+    let mut node = NodeFields::new("worker".parse().unwrap(), Operation::Eval(call));
+    node.outputs = ports("value", &l);
+    let mut fields = f.scopes[&f.root_scope].fields().clone();
+    fields.nodes.push(Node::new(node, C::Ordinary, &l).unwrap());
+    root(&mut f, fields, &l);
+    expect_integrity_failure(f, Error::UnreachedSchemaType, &l);
 }

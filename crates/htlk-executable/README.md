@@ -660,8 +660,40 @@ role in which it is used. Scope interfaces and loop initializer coverage,
 types, and requiredness must match. All expression branches contribute static
 references, including function references; library function names/arity and
 render argument names are checked. Descriptor, tool-schema, schema-URI, and
-type-schema references must identify stored documents. Complete library manifests
+type-schema references must identify stored documents. Schema types must name
+reached tool input/output roots, including types nested inside library signatures.
+Complete library manifests
 are retained even when only one public function is used.
+
+### MCP descriptor and schema-root integrity
+
+Every reached binding's descriptor must be a JSON object whose selection field
+matches exactly: tool/prompt `name`, resource `uri`, or template `uriTemplate`.
+These are protocol-owned strings; trimming, case folding, and URI rewriting
+are not applied. Descriptor descriptions, extensions, and other contents remain
+part of the exact stored JCS identity.
+
+Tools require both `inputSchema` and HTLK-required `outputSchema` objects in the
+descriptor. Assembly canonicalizes each extracted object under the JSON limits
+and verifies its digest and bytes against the binding's stored schema document.
+Supplying individually valid documents under correct hashes does not permit a
+binding to substitute a different schema. Missing, null, scalar, or Boolean
+schema roots fail this callable-schema boundary. Full object-root admission,
+including schemas that establish the constraint through `$ref`, remains resolver
+work; an object-shaped schema alone does not establish that constraint.
+
+Tool nodes require one required `arguments` input with the exact input schema
+type and one required `value` output with the exact output schema type. Primitive
+or projected substitutes fail. Serialized schema types anywhere in the document
+must identify a reached tool input/output root; merely storing an arbitrary
+schema or extracting a nested subschema does not make it an admissible type root.
+The library manifest remains complete, so this rule also applies to unused public
+function signatures in a reached library.
+
+Failures report `InvalidDescriptor` with a static field label,
+`ToolSchemaMismatch`, `McpInterfaceMismatch`, or `UnreachedSchemaType`.
+Complete MCP protocol descriptor validation and resource/template/prompt interface
+checks remain separate verifier work.
 
 ### Policy structural bounds
 
@@ -701,9 +733,9 @@ task invocations or loop iterations. `envelope()` packages the canonical payload
 
 **This assembly stage is not full executable verification.** The shared verifier
 still must resolve expression names/types and hidden dependency cycles, enforce
-binding interfaces and graph observability, match linked implementation profiles,
-validate MCP descriptor schemas and extracted schema equality, restrict schema
-types to reached tool roots, derive nested schema resources, and prove exact
+remaining MCP interfaces and graph observability, match linked implementation profiles,
+validate complete MCP descriptor schemas and callable object-root constraints,
+derive nested schema resources, and prove exact
 external-document/retrieval-URI closure offline. Assembly currently accepts extra
 external documents/URI roots because their schema reachability needs that resolver.
 Registration and authorization remain runtime work. `DocumentError` preserves
