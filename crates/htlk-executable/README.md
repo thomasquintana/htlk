@@ -680,6 +680,57 @@ as `#Name` are not pointers. This API is a location primitive for the forthcomin
 offline schema resolver: it does not select nested `$id` resources, resolve
 anchors, fetch documents, or establish that a target is a schema-bearing location.
 
+## JSON Schema location discovery
+
+`SchemaLocations::new(&JsonDocument, &Limits)` builds a derived index of standard
+JSON Schema 2020-12 schema-bearing positions. It exposes the complete document's
+`document_digest()`, decoded-token-sorted `pointers()`, and `contains(&JsonPointer)`.
+The index preserves document context rather than extracting independent subschemas.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{JsonDocument, JsonPointer, SchemaLocations};
+
+let limits = Limits::default();
+let document = JsonDocument::new(br#"{
+  "properties": { "a/b": { "type": "string" } },
+  "examples": [{ "$id": "urn:instance-data" }]
+}"#, &limits)?;
+let locations = SchemaLocations::new(&document, &limits)?;
+assert_eq!(locations.document_digest(), document.digest());
+assert!(locations.contains(&JsonPointer::new("/properties/a~1b", &limits)?));
+assert!(!locations.contains(&JsonPointer::new("/examples/0", &limits)?));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Object and Boolean schemas are accepted. Discovery follows single-schema keywords
+such as `items`, `not`, `contains`, `contentSchema`, and `unevaluatedProperties`;
+schema arrays `allOf`, `anyOf`, `oneOf`, and `prefixItems`; and schema maps `$defs`,
+`properties`, `patternProperties`, and `dependentSchemas`. Container maps/arrays
+are not themselves schema locations. Malformed containers, empty schema arrays,
+and scalar/non-schema children fail. `examples`, `default`, `const`, `enum`, and
+unknown annotation contents are data and are not traversed for schema declarations.
+
+An omitted `$schema` selects 2020-12. Explicit declarations must identify
+`JSON_SCHEMA_DIALECT` (`https://json-schema.org/draft/2020-12/schema`); an empty URI
+fragment identifies the same resource. Other dialects fail, including declarations
+at nested schema positions. This check does not validate schema keywords beyond
+those needed for standard location discovery or establish vocabulary support.
+
+Input JSON is rechecked under effective limits. Discovery is iterative and charges
+all queued/indexed locations before allocating pointers: `max_collection_entries`
+bounds location count, `max_total_values` counts locations plus retained path tokens,
+and `max_total_payload_bytes` bounds their aggregate escaped-pointer bytes.
+Each pointer also observes its own pointer limits. Thus an individually valid
+JSON document may still exceed derived-index ceilings. Depth-128 discovery and
+cleanup are tested on 512 KiB and 2 MiB stacks. `SchemaLocationError` retains static
+categories and underlying JSON/pointer errors, without submitted schema contents.
+
+This is an explicit resolver foundation, not automatic full validation inside
+`CanonicalDocument`. The resolver still must select resource URIs, interpret
+`$id`, anchors and dynamic references, check custom vocabularies with the pinned
+validator, resolve reference targets, and prove offline document closure.
+
 ## Canonical document assembly
 
 `DocumentFields::new(graph_id, profile, root_scope)` starts empty authored tables.

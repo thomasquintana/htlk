@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bounded JSON Schema 2020-12 location discovery with exact JSON Pointers,
+  standard applicator traversal, instance-data exclusion, and derived-index limits.
 - Bounded RFC 6901 JSON Pointer and URI-fragment parsing with exact token decoding,
   strict array indices, borrowed JSON lookup, and structured location errors.
 - RFC 6570 resource-template syntax and exact variable-interface validation, with

@@ -15,6 +15,7 @@ mod metadata;
 mod options;
 mod policy;
 mod record_accounting;
+mod schema_locations;
 mod structure;
 mod types;
 mod uri_template;
@@ -38,5 +39,6 @@ pub use metadata::{
 };
 pub use options::{ExecutionLimits, ExecutionOptionsError, RetryPolicy};
 pub use policy::{EvaluatorLimits, PolicyDocument, PolicyError, PolicyFields};
+pub use schema_locations::{JSON_SCHEMA_DIALECT, SchemaLocationError, SchemaLocations};
 pub use structure::{StructuralLimit, StructuralSummary};
 pub use types::{Port, PrimitiveType, TypeContext, TypeError, ValueType, ValueTypeKind};
