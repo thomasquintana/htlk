@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Canonical `ValueType` and `Port` records, bounded normalization and serialization,
+  strict type decoding, and explicit value/signature context checks.
+- Validated local `Identifier` names and structured `ParseIdentifierError`
+  diagnostics, following the canonical ASCII spelling rule without normalization.
 - Version-0.1 executable envelopes with immutable payload access, explicit
   format/version checks, domain-separated fingerprints, and structured validation
   errors using the existing codec limits.

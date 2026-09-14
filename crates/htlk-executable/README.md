@@ -1,13 +1,151 @@
 # HTLK Executable
 
 Shared executable-format foundations for the HTLK compiler and runtime.
-Provides a checked version-0.1 executable envelope and SHA-256 digest primitives
-in the public `digest` module. Envelope checks cover the outer schema, supported
+Provides validated local identifiers, canonical types and ports, a checked
+version-0.1 executable envelope, and SHA-256 digest primitives in the public
+`digest` module. Envelope checks cover
+the outer schema, supported
 format/version, and fingerprint; registration separately verifies graph contents
 and producer trust.
 
 Depends on `htlk-cbor` for deterministic encoding and RustCrypto's `sha2` for
 SHA-256; the codec does not depend on this crate.
+
+## Local identifiers
+
+`Identifier` is an immutable local name with exact ASCII spelling
+`[a-z][a-z0-9]*(_[a-z0-9]+)*`. Names begin with a lowercase letter; later segments
+may begin with digits. Leading, trailing, and repeated underscores are invalid.
+Parsing performs no trimming, case folding, or Unicode normalization.
+
+```rust
+use std::collections::HashMap;
+use htlk_executable::{Identifier, ParseIdentifierError};
+
+let name = Identifier::new("draft_2".to_owned())?;
+assert_eq!(name.as_str(), "draft_2");
+assert!("Draft_2".parse::<Identifier>().is_err());
+let lookup = HashMap::from([(name.clone(), 42)]);
+assert_eq!(lookup.get("draft_2"), Some(&42));
+assert_eq!(name.into_string(), "draft_2");
+# Ok::<(), ParseIdentifierError>(())
+```
+
+Owned construction (`new` or `TryFrom<String>`) validates without copying.
+`FromStr` and `TryFrom<&str>` validate before fallible allocation. The type also
+supports Display, Debug, equality, lexical ordering, hashing, `AsRef<str>`, and
+`Borrow<str>`. Consuming `into_string` provides the exact name for serialization;
+there is no additional CBOR tag or wrapper.
+
+`ParseIdentifierError` distinguishes empty names, invalid first bytes, invalid
+characters, invalid underscore placement, and allocation failure. Character and
+separator errors carry zero-based byte offsets. Checks proceed left-to-right,
+then reject a trailing underscore. Errors contain no submitted name. Callers
+apply source/codec size ceilings; the lexical rule has no separate length cap.
+
+Identifier validity is not node/declaration validity. Reserved roots such as
+`inputs` and contextual keywords such as `graph` are lexically valid; consumers
+apply restrictions for node names, library aliases, declarations, or imports.
+Scope resolution and uniqueness are likewise separate checks. Qualified names,
+module paths, and arbitrary quoted record-field names need their own handling.
+Identifier ordering is ordinary ASCII/UTF-8 order; canonical CBOR map ordering
+is independently applied by the codec.
+
+## Canonical types and ports
+
+`ValueType` describes permitted data, whereas `htlk_cbor::Value` holds actual
+data. It exposes a read-only `ValueTypeKind`: primitive, list, map, record, union,
+enum, schema digest, signature variable, or function type. `PrimitiveType` contains
+the exact closed primitive names from the CDDL. Source aliases (including `text`)
+must be resolved by the compiler before reaching this canonical model.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{Port, PrimitiveType, TypeContext, ValueType, ValueTypeKind};
+
+let limits = Limits::default();
+let context = TypeContext::Value;
+let nullable = ValueType::new(ValueTypeKind::Union(vec![
+    ValueType::primitive(PrimitiveType::String),
+    ValueType::primitive(PrimitiveType::Null),
+]), context, &limits)?;
+let port = Port::new(nullable, false);
+assert!(!port.required());
+let bytes = port.encode(context, &limits)?;
+assert_eq!(Port::decode(&bytes, context, &limits)?, port);
+# Ok::<(), htlk_executable::TypeError>(())
+```
+
+Construction with `ValueType::new` normalizes authored shapes: record fields
+acquire canonical map order, unions flatten/sort/deduplicate, and enums sort by
+decoded UTF-8 bytes. The syntax specification requires **at least two distinct
+union members after normalization**: singleton/empty results are errors, not a
+coercion to their member. Enums must be nonempty and unique; duplicates are errors.
+Enum strings and record field names retain exact Unicode spelling, including
+empty strings. A record field is a `Port`; graph/node port-table names will use
+`Identifier` in their containing records.
+
+`decode` and `from_value` require canonical records and never normalize malformed
+or noncanonical type structure into acceptance. `to_value` produces the canonical
+CBOR value; `encode` produces its bytes. All these boundaries take `TypeContext`
+and the existing CBOR `Limits`. `Port::new` combines an already normalized type
+with its presence flag; context and whole-port limits are checked when it is
+encoded, decoded, or embedded in a larger type.
+
+| Model | Canonical representation |
+|---|---|
+| Primitive string | `"string"` |
+| List of strings | `["list", "string"]` |
+| String-keyed integer map | `["map", "integer"]` |
+| Nullable string | `["union", ["null", "string"]]` |
+| String enumeration | `["enum", ["brief", "detailed"]]` |
+| Record fields | `["record", { field_name: { type: ..., required: ... } }]` |
+| Schema reference | `["schema", "sha256:..."]` |
+| Signature variable | `["var", "t"]` |
+| Signature function | `["function", [parameter_ports...], return_port]` |
+
+Ports contain exactly `type` and `required`. Both fields are mandatory, including
+`required: false`; unknown metadata fields fail. Requiredness is independent of
+nullability: optional permits absence, while nullable permits a present null.
+Function parameter order is preserved, and result requiredness describes whether
+the function can return absence. Union members sort by encoded type bytes, not
+by their names; this differs from enum string ordering.
+
+### Context and validation boundary
+
+`TypeContext::Value` recursively prohibits variable and function constructors.
+`TypeContext::Signature` permits those shapes for library signatures. Context is
+chosen by the consuming schema, not supplied by a field in untrusted data.
+
+Schema lookup, reached-schema-root restrictions, generic-variable declarations,
+unification/recursive-type rejection, assignability, and validation of actual
+runtime values remain graph-verifier/evaluator work. A shape-valid schema digest
+does not prove that its document exists; a parsed signature variable does not
+prove that a library declared it.
+
+### Type resource accounting and errors
+
+Before allocating conversion strings or growing collections, a private builder
+checks the actual CBOR text/array/map/Boolean representation against codec limits,
+including map keys, tag strings, presence flags, encoded lengths, and depth.
+Parsing begins only after bounded CBOR decoding (or bounded encoding for an
+existing Value). Normalization temporarily holds source members and sorting keys,
+bounded by the checked input's total values/bytes; its final result must also fit
+the configured limits, including an expanded flattened-union array. Codec byte
+string limits do not constrain a type named `bytes`, which is text metadata.
+
+`TypeError` retains codec, digest, and identifier causes and static schema error
+categories. Codec errors preserve offsets; a graph/source consumer can attach its
+own record location to higher-level type errors. Errors contain no submitted
+field names, enum contents, or other input values. Conversion-limit errors are
+reported before constructing an oversized temporary CBOR value.
+
+Depth regression tests run in subprocesses on 512 KiB and 2 MiB thread stacks.
+They exercise the 128 codec-depth ceiling with list chains, function signatures,
+unions, construction/encoding/cloning/formatting, and cleanup after a nested field
+failure. Collection-specific parsing/conversion helpers keep recursive dispatch
+frames small. These tests provide headroom, not a guarantee for arbitrary caller
+stack sizes. Clone/Debug of caller-owned objects are ordinary Rust operations.
 
 ## Executable envelope API
 
