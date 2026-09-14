@@ -156,6 +156,15 @@ impl SchemaResources {
         reference: &str,
         limits: &Limits,
     ) -> Result<&JsonPointer, SchemaResourceError> {
+        let uri = self.reference_uri(from, reference, limits)?;
+        self.resolve_absolute(&uri, limits)
+    }
+    pub(crate) fn reference_uri(
+        &self,
+        from: &JsonPointer,
+        reference: &str,
+        limits: &Limits,
+    ) -> Result<String, SchemaResourceError> {
         limits
             .validate()
             .map_err(crate::JsonError::from)
@@ -163,8 +172,14 @@ impl SchemaResources {
         let base = self
             .base_uri(from)
             .ok_or(SchemaResourceError::UnknownLocation)?;
-        let uri = resolve_uri(base, reference, limits)?;
-        let (resource, fragment) = uri.split_once('#').unwrap_or((&uri, ""));
+        resolve_uri(base, reference, limits)
+    }
+    pub(crate) fn resolve_absolute(
+        &self,
+        uri: &str,
+        limits: &Limits,
+    ) -> Result<&JsonPointer, SchemaResourceError> {
+        let (resource, fragment) = uri.split_once('#').unwrap_or((uri, ""));
         let root = *self
             .resources
             .get(resource)
@@ -210,6 +225,28 @@ impl SchemaResources {
             .pointers()
             .binary_search_by(|v| v.tokens().cmp(p.tokens()))
             .ok()
+    }
+    // Account retained child-index metadata before the containing catalog keeps
+    // it. A failing child can temporarily occupy one additional bounded index.
+    pub(crate) fn stored_metadata(
+        &self,
+        mut record: impl FnMut(Option<&str>) -> Result<(), SchemaResourceError>,
+    ) -> Result<(), SchemaResourceError> {
+        for pointer in self.locations.pointers() {
+            record(None)?;
+            for token in pointer.tokens() {
+                record(Some(token))?;
+            }
+        }
+        for text in self.bases.iter().chain(self.resources.keys()) {
+            record(Some(text))?;
+        }
+        for anchors in self.anchors.values() {
+            for name in anchors.keys() {
+                record(Some(name))?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -488,6 +525,10 @@ pub enum SchemaResourceError {
     NonHierarchicalBase,
     /// Different locations claim one resource URI.
     ResourceConflict,
+    /// One retrieval URI is supplied with differing canonical documents.
+    RetrievalConflict,
+    /// Reference source retrieval URI is absent from the catalog.
+    UnknownDocument,
     /// Different locations claim one anchor within a resource.
     AnchorConflict,
     /// Reference source is not a discovered schema location.

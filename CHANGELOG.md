@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bounded multi-document schema catalogs with cross-document resource/anchor
+  lookup, context-checked resource-copy merging, and borrowed complete-document targets.
 - Per-document schema resource/base and anchor indexing with bounded RFC 3986
   reference lookup relative to actual nested resource roots, without network I/O.
 - Bounded JSON Schema 2020-12 location discovery with exact JSON Pointers,

@@ -785,9 +785,64 @@ or pointer errors, without submitted content.
 This is a **single-document resource index**, not full executable verification.
 Missing external resources return an error without I/O. `resolve` returns the
 initial target for either static or dynamic references; evaluation-time dynamic
-rebinding remains validator work. Multi-document resource merging/closure,
-embedded-tool base selection, vocabulary/keyword validation, and integration with
+rebinding remains validator work. Cross-document merging is provided by the catalog
+below. Graph-specific reference closure, embedded-tool base selection,
+vocabulary/keyword validation, and integration with
 the pinned validator and canonical-document verifier remain subsequent steps.
+
+## Cross-document schema catalog
+
+`SchemaCatalog::new(Vec<(String, JsonDocument)>, &Limits)` indexes an explicitly
+supplied set of retrieval snapshots. Retrieval URIs are sorted; repeated entries
+with identical canonical bytes coalesce, and conflicting retrieval content fails.
+All documents receive bounded resource indexes before their URI claims are merged.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{JsonDocument, JsonPointer, SchemaCatalog};
+
+let limits = Limits::default();
+let catalog = SchemaCatalog::new(vec![
+    ("https://example.test/root".into(), JsonDocument::new(b"{}", &limits)?),
+    ("https://example.test/other".into(),
+        JsonDocument::new(br#"{"$defs":{"item":{"$anchor":"Item","type":"object"}}}"#, &limits)?),
+], &limits)?;
+let target = catalog.resolve("https://example.test/root",
+    &JsonPointer::new("", &limits)?, "other#Item", &limits)?;
+assert_eq!(target.retrieval_uri(), "https://example.test/other");
+assert_eq!(target.pointer().to_string(), "/$defs/item");
+assert_eq!(target.document_digest(), target.document().digest());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`resolve` takes an explicit source retrieval context and schema pointer, resolves
+the reference against that location's base, and selects the target resource across
+the catalog. `ResolvedSchema` borrows the representative retrieval URI, complete
+document, and actual pointer; `value()` borrows the schema at that location.
+`retrieval_uris()`, `resource_uris()`, and `document()` expose read-only catalog
+contents. `is_dynamic_anchor()` reports initial-target metadata across documents.
+
+Two claims for one resource URI must have identical canonical resource-root
+content and equal effective base contexts. This permits an identical resource
+copy stored at a document root or nested pointer. Equivalent copies use the first
+sorted retrieval URI as their deterministic representative. Different descriptions,
+schema content, or base contexts fail with `ResourceConflict`; identical raw JSON
+alone is insufficient when relative IDs resolve differently. Explicit retrieval
+aliases retain their own indexed contexts. `RetrievalConflict` and `UnknownDocument`
+distinguish conflicting snapshots from missing source contexts.
+
+Aggregate accounting includes submitted URI/JSON bytes before duplicate coalescing,
+retained child-index paths/bases/anchors, and merged URI keys. Total values and
+payload ceilings bound derived storage, while collection limits bound the input
+snapshot and merged resource tables. Child indexes retain their individual limits;
+a failing child may temporarily occupy one additional bounded index. Returned
+targets borrow indexed data rather than allocating extracted schema copies.
+
+The catalog indexes the supplied set and performs initial target lookup without
+I/O. Graph-specific closure selection, used-retrieval-context tracking, and
+canonical pruning remain subsequent work; choosing an equivalent resource
+representative is not a substitute for those checks. Evaluation-time dynamic
+rebinding and full pinned-validator semantics also remain separate stages.
 
 ## Canonical document assembly
 
