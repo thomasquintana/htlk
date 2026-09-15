@@ -266,6 +266,8 @@ flowchart TD
 
 ## 6. Evaluator and pure nodes
 
+The evaluator is implemented directly in Rust over canonical expression records. Native JSON Schema validation uses the input/catalog and backend-supported limits defined in compiler section 3.1. Its internal computation is not represented as a general expression-fuel counter; unsupported hard enforcement must not be claimed by the linked profile.
+
 An **expression** is a calculation such as `length(inputs.question) > 0`. The **evaluator** is the code that calculates its result. A function's **signature** describes the inputs it accepts and the result it returns, including whether an input or result may be absent. The same evaluator is used for pure nodes and conditions. It returns a value, legitimate absence, pending, or an error. Pending and unavailable are execution conditions; they are never passed into user functions as ordinary data.
 
 Boolean operators are left-to-right and lazy. If the left operand is pending, evaluation waits; if it errors, the expression errors. `false and rhs` and `true or rhs` do not evaluate rhs. Static dependency analysis nevertheless includes both branches.

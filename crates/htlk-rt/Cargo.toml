@@ -19,10 +19,8 @@ actix.workspace = true
 async-openai.workspace = true
 htlk-cbor.workspace = true
 htlk-executable.workspace = true
-mlua.workspace = true
 rmcp.workspace = true
 sqlite-vec.workspace = true
-tera.workspace = true
 tokio-rusqlite.workspace = true
 
 [lints]

@@ -30,7 +30,9 @@ successfully decoded `CanonicalDocument` is not yet a fully verified runnable gr
   scalar/list-only or otherwise unproven roots under the draft's baseline rule.
 - [ ] Integrate the exact pinned JSON Schema 2020-12 validator through a shared
   interface, including schema/meta-schema keyword validation, required-vocabulary
-  support, recursive schemas, and finite validation-depth/work/output limits.
+  support and recursive schemas. Apply input/catalog limits and backend-supported
+  regex bounds; report supported capabilities without claiming a general native
+  validation-fuel counter or hard in-process execution deadline.
 - [ ] Implement evaluation-time `$dynamicRef`/`$dynamicAnchor` semantics. Current
   resource lookup and closure record only initial targets and declarations.
 - [ ] Validate schema regexes with the pinned schema validator's dialect; preserve

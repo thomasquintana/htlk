@@ -68,6 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Defined the native-engine direction and its supported-limit contract separately
+  from deterministic work accounting in the Rust expression evaluator.
 - Updated the locked `rustls` dependency to 0.23.45 to address RUSTSEC-2026-0285.
 - Aligned executable envelopes and draft specifications on `htlk.executable.graph`,
   `version: "0.1"`, and SHA-256 of the newline-terminated format/version prefix
@@ -83,6 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Embedded Lua and the unused Tera scripting/template dependency. The execution
+  plan uses native Rust expression evaluation, rendering, and JSON Schema validation.
 - The placeholder `htlk-ir` crate and its facade export.
 
 ## [0.1.0] - TBD
