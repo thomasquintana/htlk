@@ -26,6 +26,7 @@ htlk-executable = { version = "=0.1.0", path = "crates/htlk-executable" }
 htlk-rt = { version = "=0.1.0", path = "crates/htlk-rt" }
 iri-string = "0.7.14"
 jsonschema = { version = "=0.56.0", default-features = false }
+regex = "=1.13.1"
 logos = "0.16.1"
 miette = "7.6.0"
 rmcp = { version = "3.1.4", default-features = false, features = [

@@ -6,6 +6,7 @@ pub mod digest;
 mod binding_validation;
 mod document;
 mod envelope;
+mod evaluate;
 mod expression;
 mod graph;
 mod identifier;
@@ -26,6 +27,11 @@ mod uri_template;
 
 pub use document::{CanonicalDocument, DocumentError, DocumentFields};
 pub use envelope::{EXECUTABLE_FORMAT, EXECUTABLE_VERSION, EnvelopeError, ExecutableEnvelope};
+pub use evaluate::{
+    ConditionResult, ConditionValue, EvaluationArgument, EvaluationContext, EvaluationError,
+    EvaluationFrame, EvaluationMeter, EvaluationOutcome, EvaluationResult, EvaluationUsage,
+    EvaluationValue, evaluate, evaluate_condition,
+};
 pub use expression::{
     BinaryOperator, CoreFunction, Expression, ExpressionContext, ExpressionError, ExpressionKind,
     FunctionId, PathStep, PromptTemplate, ScalarLiteral, TemplatePart, ValueReference,

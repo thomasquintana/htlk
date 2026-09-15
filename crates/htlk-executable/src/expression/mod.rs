@@ -53,7 +53,7 @@ pub enum ScalarLiteral {
 }
 
 /// A statically named value root, resolved relative to the owning scope/node.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ValueReference {
     /// The owning input named by its port.
     Input(Identifier),
@@ -73,7 +73,7 @@ pub enum ValueReference {
 }
 
 /// One literal field/index selection in a projection path.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PathStep {
     /// Exact field name, including arbitrary Unicode or empty text.
     Field(String),

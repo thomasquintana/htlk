@@ -850,6 +850,7 @@ dependencies = [
  "htlk-cbor",
  "iri-string",
  "jsonschema",
+ "regex",
  "ryu-js",
  "serde",
  "serde_json",

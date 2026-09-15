@@ -161,6 +161,74 @@ stack sizes. Clone/Debug of caller-owned objects are ordinary Rust operations.
 
 ## Canonical expressions
 
+### Native evaluation
+
+`evaluate` interprets the existing canonical AST directly in Rust. It returns an
+`EvaluationResult` containing a present value, legitimate absence, or pending, plus
+`EvaluationUsage`. `evaluate_condition` additionally requires a Boolean and returns
+`ConditionValue::Ready(bool)` or `Pending`; it never applies truthiness or changes
+an error into false. The coordinator owns node skipping, pre/postcondition error
+codes, settled-boundary checks, scheduling, and output acceptance.
+
+`EvaluationFrame` supplies frozen values, outcomes, and templates without requiring
+an embedded language runtime. Bindings can include explicit projected-path results
+for verified optional fields. Fallback field/index lookup is strict: an unknown key
+does not become optional merely because it is missing. `EvaluationContext` connects
+the evaluator to runtime data, verified projection plans, and exactly linked Rust
+functions. Native functions receive `EvaluationMeter` and must charge their own work.
+
+```rust
+use htlk_cbor::{Limits, Value};
+use htlk_executable::{ConditionValue, EvaluationFrame, EvaluationValue,
+    EvaluatorLimits, Expression, ExpressionContext, ExpressionKind,
+    CoreFunction, FunctionId, ValueReference, evaluate_condition};
+
+let codec = Limits::default();
+let policy = EvaluatorLimits {
+    max_expression_depth: 64, max_value_bytes: 65536, max_collection_visits: 10000,
+    max_regex_bytes: 1024, max_regex_compiled_bytes: 4096,
+    max_output_bytes: 65536, max_steps: 100000,
+};
+let mut frame = EvaluationFrame::default();
+frame.bind(ValueReference::Input("answer".parse()?), vec![],
+    Ok(EvaluationValue::Present(Value::Null)), &codec)?;
+let input = Expression::new(ExpressionKind::Ref {
+    source: ValueReference::Input("answer".parse()?), path: vec![],
+}, ExpressionContext::Preconditions, &codec)?;
+let condition = Expression::new(ExpressionKind::Call {
+    function: FunctionId::Core(CoreFunction::Present), arguments: vec![input],
+}, ExpressionContext::Preconditions, &codec)?;
+assert_eq!(evaluate_condition(&condition, ExpressionContext::Preconditions,
+    &frame, &codec, &policy)?.value, ConditionValue::Ready(true));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Boolean operators evaluate left-to-right and short circuit. Pending and errors
+stop that evaluation path. Absent operands fail outside explicitly optional native
+arguments and `present`; record construction omits absent members, while lists
+reject absent elements. Present null is retained. Comparisons enforce exact scalar
+representations; there is no integer/float coercion or compound-value equality.
+`length` counts Unicode scalars, bytes, list elements, or map keys as appropriate.
+
+Rendering checks exact argument coverage and primitive types, preserves ordered
+template parts, and bounds growing text. Static function references are direct
+call-argument metadata and cannot be returned as ordinary values. The default
+frame has no application libraries; their native implementations and signatures
+must be supplied by the linked registry, not installed by expression data.
+
+Each evaluation starts fresh policy accounting. Work includes AST visits, inspected
+encoded-value bytes, lookup/comparison work, collection traversal, and rendering.
+Values are bounded before copying; construction is bounded incrementally. The final
+output has its own ceiling, so a small Boolean result may inspect larger permitted
+inputs. Regex compilation reserves its configured compiled-size allowance as a
+deterministic upper-bound fuel charge before calling the native compiler. Limits
+produce `E_EXPRESSION_LIMIT`, and absence misuse produces `E_EXPRESSION_ABSENT`.
+
+The evaluator validates representation/context and actual operand behavior. Full
+name/type verification, generic inference, callback compatibility, and schema-aware
+projection plans are still part of the continuing task-3 verifier work. A standalone
+evaluation is not proof that an entire graph is valid.
+
 `Expression` is an immutable normalized tree with a read-only `ExpressionKind`.
 Supporting types are `ScalarLiteral`, `ValueReference`, `PathStep`, `FunctionId`,
 `CoreFunction`, and `BinaryOperator`. Scalar literals hold text, bytes, signed
