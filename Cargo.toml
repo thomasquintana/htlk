@@ -11,7 +11,7 @@ repository = "https://github.com/thomasquintana/htlk"
 
 [workspace.dependencies]
 actix = "0.13.5"
-async-openai = { version = "0.41.3", default-features = false, features = [
+async-openai = { version = "0.42.0", default-features = false, features = [
     "byot",
     "chat-completion",
     "embedding",
@@ -37,9 +37,9 @@ rmcp = { version = "3.1.4", default-features = false, features = [
 ryu-js = "1.0.3"
 serde = "1.0.229"
 serde_json = { version = "1.0.151", features = ["float_roundtrip", "unbounded_depth"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 sqlite-vec = "0.1.9"
-tokio-rusqlite = { version = "0.7.0", default-features = false, features = [
+tokio-rusqlite = { version = "0.8.0", default-features = false, features = [
     "bundled",
 ] }
 url = "2.5.8"
