@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Install actionlint through its Go module in CI instead of falling back to a
+  nonexistent crates.io package.
+
 ### Added
 
 - Downloadable CI/release rustdoc artifacts, manual release dry runs, verified crate
