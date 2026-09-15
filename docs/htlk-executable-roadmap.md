@@ -25,25 +25,26 @@ successfully decoded `CanonicalDocument` is not yet a fully verified runnable gr
 
 ### 1. Finish schema admission and validation
 
-- [ ] Enforce callable input/output **object-root** constraints: accept a direct
+- [x] Enforce callable input/output **object-root** constraints: accept a direct
   `type: "object"` constraint or an admissible reference chain to one, and reject
   scalar/list-only or otherwise unproven roots under the draft's baseline rule.
-- [ ] Integrate the exact pinned JSON Schema 2020-12 validator through a shared
+- [x] Integrate a shipped native JSON Schema 2020-12 validator through a shared
   interface, including schema/meta-schema keyword validation, required-vocabulary
   support and recursive schemas. Apply input/catalog limits and backend-supported
   regex bounds; report supported capabilities without claiming a general native
   validation-fuel counter or hard in-process execution deadline.
-- [ ] Implement evaluation-time `$dynamicRef`/`$dynamicAnchor` semantics. Current
-  resource lookup and closure record only initial targets and declarations.
-- [ ] Validate schema regexes with the pinned schema validator's dialect; preserve
+- [x] Implement evaluation-time `$dynamicRef`/`$dynamicAnchor` semantics through
+  native validation; standalone resource lookup/closure still records initial targets.
+- [x] Validate schema regexes with the native schema validator's dialect; preserve
   `format` as annotation, and reject unsupported required behavior rather than
   silently treating it as successful validation.
-- [ ] Validate actual JSON/native values against schema constraints without
+- [x] Validate actual JSON/native values against schema constraints without
   introducing coercion, defaults, omitted-null behavior, or renamed external keys.
-- [ ] Complete verifier integration of schema bases, resource conflicts, reference
+- [x] Integrate schema bases, resource conflicts, reference
   targets, and exact external closure, including all resources potentially used
   by supported dynamic/vocabulary semantics. Current document-level closure is
-  deliberately conservative and its executable check is an explicit stage.
+  deliberately conservative. `CanonicalDocument::native_schemas` composes these
+  checks with native validation; the final unified verifier API remains task 6.
 
 ### 2. Complete MCP descriptor conformance
 

@@ -948,6 +948,61 @@ in reached complete documents, as described above.
 
 ## Canonical document assembly
 
+### Native schema validation
+
+`NativeSchemas::compile(&SchemaCatalog, NativeSchemaOptions, &Limits)` compiles the
+supplied catalog with the shipped native Rust `jsonschema` 0.56.0 dependency. Its
+HTTP/file retrieval features are disabled, and both registry preparation and
+validator construction use an offline retriever. Each required retrieval root is
+compiled explicitly; compilation failures are propagated.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{JsonDocument, NativeSchemaOptions, NativeSchemas, SchemaCatalog};
+
+let limits = Limits::default();
+let catalog = SchemaCatalog::new(vec![("urn:example".into(),
+    JsonDocument::new(br#"{"type":"object","required":["name"]}"#, &limits)?)], &limits)?;
+let schemas = NativeSchemas::compile(&catalog, NativeSchemaOptions::default(), &limits)?;
+schemas.require_object_root("urn:example")?;
+assert!(schemas.validate("urn:example", &JsonDocument::new(br#"{"name":"Ada"}"#, &limits)?, &limits)?);
+assert!(!schemas.validate("urn:example", &JsonDocument::new(b"{}", &limits)?, &limits)?);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The backend performs 2020-12 meta-schema and instance validation, including
+conditional applicators, unevaluated properties/items, recursive references, and
+evaluation-time dynamic-reference rebinding. `format` stays an annotation. Unknown
+required vocabularies, including format-assertion, fail; optional unknown keywords
+retain annotation behavior. Original JCS data and document digests remain intact.
+
+HTLK resolves resource IDs/references before native compilation. Private compiler
+copies replace resource URIs with opaque keys so the native library cannot change
+their meaning by normalizing percent-encoded dot segments. Optional unknown
+annotations are removed from those compiler copies to prevent legacy keyword
+extensions from introducing unindexed resources. These copies are not serialized
+executables or alternate document identities.
+
+Schema patterns use the library's ECMA conversion with its linear `regex` backend.
+Every declared pattern is checked, including patterns in unused definitions.
+`NativeSchemaOptions` bounds pattern text and supported compiled-regex storage;
+constructs requiring the backtracking backend are rejected at compilation. There
+is no general native validation-fuel, memory, or deadline guarantee. Input/catalog
+limits and private compilation-input byte ceilings are enforced, and backend
+failures are errors rather than ordinary instance rejection.
+
+`validate_value` uses a temporary JSON representation to apply JSON numeric semantics
+without mutating the original native value or replacing its integer/float type.
+`document_digest` reports the original root document identity; `identity` describes
+the shipped adapter/profile, separate from caller-supplied schema identities.
+
+`CanonicalDocument::native_schemas` composes the executable schema-catalog stage
+with native compilation and callable object-root admission. A callable root needs
+an explicit `type: "object"` constraint, locally or through a direct static `$ref`
+chain; general schema implication is not attempted. The returned compiled validators
+are reusable. Graph/expression verification and linked-profile admission are still
+separate stages.
+
 `DocumentFields::new(graph_id, profile, root_scope)` starts empty authored tables.
 Insert scope, template, binding, complete supplied library-manifest, schema-URI,
 and JSON-document entries as needed, then call `CanonicalDocument::new`.

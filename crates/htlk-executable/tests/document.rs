@@ -1705,3 +1705,45 @@ fn executable_schema_snapshot_copies_are_preflighted_before_catalog_construction
         }
     );
 }
+
+#[test]
+fn executable_native_schemas_enforce_callable_roots_and_validate_instances() {
+    use htlk_executable::{NativeSchemaError, NativeSchemaOptions};
+    let l = Limits::default();
+    let input =
+        JsonDocument::new(br#"{"$id":"https://e.test/input","$ref":"object"}"#, &l).unwrap();
+    let output = JsonDocument::new(br#"{"type":"object"}"#, &l).unwrap();
+    let mut f = tool_schemas(input, output.clone(), &l);
+    f.schema_uris
+        .insert("https://e.test/object".into(), output.digest());
+    let doc = Doc::new(f, &l).unwrap();
+    let native = doc
+        .native_schemas(NativeSchemaOptions::default(), &l)
+        .unwrap();
+    assert!(
+        native
+            .validate(
+                "https://e.test/input",
+                &JsonDocument::new(b"{}", &l).unwrap(),
+                &l
+            )
+            .unwrap()
+    );
+    assert!(
+        !native
+            .validate(
+                "https://e.test/input",
+                &JsonDocument::new(b"[]", &l).unwrap(),
+                &l
+            )
+            .unwrap()
+    );
+    let invalid_root = JsonDocument::new(br#"{"type":"array"}"#, &l).unwrap();
+    let f = tool_schemas(invalid_root, output, &l);
+    assert!(matches!(
+        Doc::new(f, &l)
+            .unwrap()
+            .native_schemas(NativeSchemaOptions::default(), &l),
+        Err(Error::NativeSchema(NativeSchemaError::ObjectRootRequired))
+    ));
+}

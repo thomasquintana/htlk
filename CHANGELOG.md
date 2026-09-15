@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Native JSON Schema 2020-12 compilation and validation, offline resource linking,
+  object-root admission, dynamic references, and supported pattern/input limits.
 - Downloadable CI/release rustdoc artifacts, manual release dry runs, verified crate
   archives, workflow/specification checks, and all-feature docs.rs build metadata.
 - A focused Draft 0.1 completion checklist for the shared executable/verifier crate.

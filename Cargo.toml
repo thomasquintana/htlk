@@ -24,6 +24,7 @@ htlk-compiler = { version = "=0.1.0", path = "crates/htlk-compiler" }
 htlk-executable = { version = "=0.1.0", path = "crates/htlk-executable" }
 htlk-rt = { version = "=0.1.0", path = "crates/htlk-rt" }
 iri-string = "0.7.14"
+jsonschema = { version = "=0.56.0", default-features = false }
 logos = "0.16.1"
 miette = "7.6.0"
 rmcp = { version = "3.1.4", default-features = false, features = [
@@ -34,7 +35,8 @@ rmcp = { version = "3.1.4", default-features = false, features = [
     "transport-streamable-http-client-reqwest",
 ] }
 ryu-js = "1.0.3"
-serde_json = "1.0.151"
+serde = "1.0.229"
+serde_json = { version = "1.0.151", features = ["float_roundtrip", "unbounded_depth"] }
 sha2 = "0.10.9"
 sqlite-vec = "0.1.9"
 tokio-rusqlite = { version = "0.7.0", default-features = false, features = [

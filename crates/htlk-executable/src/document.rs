@@ -188,6 +188,35 @@ impl CanonicalDocument {
         }
         Ok(catalog)
     }
+    /// Compiles the checked offline schema catalog with the shipped native backend
+    /// and enforces object-root admission for every callable input/output schema.
+    /// This is schema verification; expression/graph/profile checks remain separate.
+    ///
+    /// # Errors
+    /// Returns document/catalog failures, invalid or unsupported native schemas,
+    /// missing object-root constraints, and supported input/regex limits.
+    pub fn native_schemas(
+        &self,
+        options: crate::NativeSchemaOptions,
+        limits: &Limits,
+    ) -> Result<crate::NativeSchemas, DocumentError> {
+        let catalog = self.schema_catalog(limits)?;
+        let schemas = crate::NativeSchemas::compile(&catalog, options, limits)?;
+        for binding in self.fields.bindings.values() {
+            if let McpBindingKind::Tool {
+                input_schema,
+                output_schema,
+                ..
+            } = binding.kind()
+            {
+                for id in [input_schema, output_schema] {
+                    let base = crate::embedded_schema_base(&self.fields.documents[id], limits)?;
+                    schemas.require_object_root(&base)?;
+                }
+            }
+        }
+        Ok(schemas)
+    }
     /// Produces canonical document data under this call's limits.
     ///
     /// # Errors
@@ -935,6 +964,8 @@ fn closed(v: &Value) -> Result<&Map, DocumentError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DocumentError {
+    /// Shipped native schema validation or callable admission failed.
+    NativeSchema(crate::NativeSchemaError),
     /// Offline schema catalog/resource/reference validation failed.
     Schema(crate::SchemaResourceError),
     /// A tool schema is absent or mismatched at its prescribed retrieval base.
@@ -1032,6 +1063,7 @@ convert!(ParseDigestError, Digest);
 convert!(JsonError, Json);
 convert!(PolicyError, Policy);
 convert!(crate::SchemaResourceError, Schema);
+convert!(crate::NativeSchemaError, NativeSchema);
 impl From<EncodingLimitError> for DocumentError {
     fn from(e: EncodingLimitError) -> Self {
         Self::LimitExceeded {
@@ -1058,6 +1090,7 @@ impl std::error::Error for DocumentError {
             Self::Json(e) => Some(e),
             Self::Policy(e) => Some(e),
             Self::Schema(e) => Some(e),
+            Self::NativeSchema(e) => Some(e),
             _ => None,
         }
     }

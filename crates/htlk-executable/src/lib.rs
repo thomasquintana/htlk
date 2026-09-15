@@ -12,6 +12,7 @@ mod identifier;
 mod json;
 mod json_pointer;
 mod metadata;
+mod native_schema;
 mod options;
 mod policy;
 mod record_accounting;
@@ -39,6 +40,7 @@ pub use metadata::{
     CORE_VERSION, EngineIdentity, ExecutionProfile, FunctionSignature, Library,
     MCP_PROTOCOL_VERSION, McpBinding, McpBindingKind, McpTransport, MetadataError, ServerIdentity,
 };
+pub use native_schema::{NativeSchemaError, NativeSchemaOptions, NativeSchemas};
 pub use options::{ExecutionLimits, ExecutionOptionsError, RetryPolicy};
 pub use policy::{EvaluatorLimits, PolicyDocument, PolicyError, PolicyFields};
 pub use schema_catalog::{
