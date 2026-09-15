@@ -142,6 +142,12 @@ impl SchemaResources {
     pub fn base_uri(&self, location: &JsonPointer) -> Option<&str> {
         self.index(location).map(|i| self.bases[i].as_str())
     }
+    pub(crate) fn pointers(&self) -> &[JsonPointer] {
+        self.locations.pointers()
+    }
+    pub(crate) fn has_resource(&self, uri: &str) -> bool {
+        self.resources.contains_key(uri)
+    }
     /// Resolves an initial reference target from a known schema location. Pointer
     /// fragments start at the selected resource's pointer, not the document root.
     /// Static and dynamic anchors both have an initial target; dynamic rebinding
@@ -529,6 +535,8 @@ pub enum SchemaResourceError {
     RetrievalConflict,
     /// Reference source retrieval URI is absent from the catalog.
     UnknownDocument,
+    /// A schema reference keyword contains a non-string value.
+    InvalidReference(&'static str),
     /// Different locations claim one anchor within a resource.
     AnchorConflict,
     /// Reference source is not a discovered schema location.

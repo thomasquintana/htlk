@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Conservative offline schema reference closure with explicit retrieval-context
+  tracking, cycle-safe traversal, borrowed reference records, and bounded pointer work.
 - Bounded multi-document schema catalogs with cross-document resource/anchor
   lookup, context-checked resource-copy merging, and borrowed complete-document targets.
 - Per-document schema resource/base and anchor indexing with bounded RFC 3986

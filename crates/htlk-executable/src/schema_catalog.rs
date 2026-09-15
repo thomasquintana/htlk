@@ -5,7 +5,7 @@ use crate::{
     JsonDocument, JsonPointer, SchemaLocationError, SchemaResourceError as Error, SchemaResources,
 };
 use htlk_cbor::{LimitKind, Limits, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Entry {
@@ -150,6 +150,268 @@ impl SchemaCatalog {
             .binary_search_by(|e| e.retrieval.as_str().cmp(uri))
             .ok()
             .map(|i| &self.entries[i])
+    }
+    /// Discovers a conservative document-level closure from exact retrieval roots.
+    /// Every standard schema location in a reached document is scanned, including
+    /// unused definitions; references in instance/annotation data are ignored.
+    /// Schema cycles terminate without recursively expanding their occurrences.
+    ///
+    /// # Errors
+    /// Returns malformed/missing references, unknown roots, non-schema targets,
+    /// or bounded work/storage failures. Dynamic references record initial targets
+    /// only. This does not enforce canonical executable closure or evaluate schemas.
+    pub fn reference_closure<'a>(
+        &'a self,
+        roots: &[&str],
+        limits: &Limits,
+    ) -> Result<SchemaClosure<'a>, Error> {
+        limits
+            .validate()
+            .map_err(crate::JsonError::from)
+            .map_err(SchemaLocationError::from)?;
+        check(
+            roots.len(),
+            limits.max_collection_entries,
+            LimitKind::CollectionEntries,
+        )?;
+        check(roots.len(), limits.max_total_values, LimitKind::TotalValues)?;
+        let mut work = ClosureWork {
+            accounting: Accounting {
+                limits,
+                values: 0,
+                payload: 0,
+            },
+            reached: BTreeSet::new(),
+            pending: BTreeSet::new(),
+            resources: BTreeMap::new(),
+        };
+        for root in roots {
+            let i = self
+                .entries
+                .binary_search_by(|e| e.retrieval.as_str().cmp(root))
+                .map_err(|_| Error::UnknownDocument)?;
+            work.enqueue(i, &self.entries[i])?;
+        }
+        let mut pending = Vec::new();
+        while let Some(i) = work.pending.pop_first() {
+            let entry = &self.entries[i];
+            for pointer in entry.index.pointers() {
+                work.accounting.record(None)?;
+                account_pointer(&mut work.accounting, pointer)?;
+                let Value::Map(m) = pointer.resolve(&entry.document)? else {
+                    continue;
+                };
+                for kind in [SchemaReferenceKind::DynamicRef, SchemaReferenceKind::Ref] {
+                    let Some(value) = m.get(kind.as_str()) else {
+                        continue;
+                    };
+                    let Value::Text(reference) = value else {
+                        return Err(Error::InvalidReference(kind.as_str()));
+                    };
+                    check(
+                        pending.len() + 1,
+                        limits.max_collection_entries,
+                        LimitKind::CollectionEntries,
+                    )?;
+                    work.accounting.record(None)?;
+                    let uri = entry.index.reference_uri(pointer, reference, limits)?;
+                    work.accounting.bytes(uri.len())?;
+                    let resource = uri.split_once('#').map_or(uri.as_str(), |(r, _)| r);
+                    if !work.resources.contains_key(resource)
+                        && let Ok(target) = self
+                            .entries
+                            .binary_search_by(|e| e.retrieval.as_str().cmp(resource))
+                    {
+                        work.enqueue(target, &self.entries[target])?;
+                    }
+                    // A referenced resource can become known through a later
+                    // reached document. Check missing targets after discovery.
+                    pending.try_reserve(1).map_err(allocation)?;
+                    pending.push((i, pointer, kind, reference.as_str(), uri));
+                }
+            }
+        }
+        let mut references = Vec::new();
+        references
+            .try_reserve_exact(pending.len())
+            .map_err(allocation)?;
+        for (source, pointer, kind, reference, uri) in pending {
+            let resource = uri.split_once('#').map_or(uri.as_str(), |(r, _)| r);
+            let target = if self.entries[source].index.has_resource(resource) {
+                source
+            } else {
+                *work.resources.get(resource).ok_or(Error::MissingResource)?
+            };
+            let entry = &self.entries[target];
+            let fragment = uri.split_once('#').map_or("", |(_, fragment)| fragment);
+            if fragment.starts_with('/')
+                || fragment
+                    .get(..3)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("%2f"))
+            {
+                // Joining a short reference to a long resource-root pointer must
+                // not amplify work beyond the closure's aggregate allowance.
+                let root = entry.index.resolve_absolute(resource, limits)?;
+                account_pointer(&mut work.accounting, root)?;
+            }
+            let target_pointer = entry.index.resolve_absolute(&uri, limits)?;
+            references.push(SchemaReference {
+                source_retrieval: &self.entries[source].retrieval,
+                source_pointer: pointer,
+                kind,
+                reference,
+                target: ResolvedSchema {
+                    retrieval: &entry.retrieval,
+                    document: &entry.document,
+                    digest: entry.index.document_digest(),
+                    pointer: target_pointer,
+                },
+            });
+        }
+        references.sort_unstable_by(|a, b| {
+            a.source_retrieval
+                .cmp(b.source_retrieval)
+                .then_with(|| a.source_pointer.tokens().cmp(b.source_pointer.tokens()))
+                .then_with(|| a.kind.as_str().cmp(b.kind.as_str()))
+        });
+        let mut retrievals = Vec::new();
+        retrievals
+            .try_reserve_exact(work.reached.len())
+            .map_err(allocation)?;
+        retrievals.extend(
+            work.reached
+                .into_iter()
+                .map(|i| self.entries[i].retrieval.as_str()),
+        );
+        Ok(SchemaClosure {
+            retrievals,
+            references,
+        })
+    }
+}
+
+struct ClosureWork<'a, 'l> {
+    accounting: Accounting<'l>,
+    reached: BTreeSet<usize>,
+    pending: BTreeSet<usize>,
+    resources: BTreeMap<&'a str, usize>,
+}
+fn account_pointer(accounting: &mut Accounting<'_>, pointer: &JsonPointer) -> Result<(), Error> {
+    for token in pointer.tokens() {
+        accounting.bytes(token.len())?;
+        accounting.bytes(1)?;
+        accounting.bytes(token.bytes().filter(|b| matches!(b, b'~' | b'/')).count())?;
+    }
+    Ok(())
+}
+impl<'a> ClosureWork<'a, '_> {
+    fn enqueue(&mut self, i: usize, entry: &'a Entry) -> Result<(), Error> {
+        if self.reached.contains(&i) {
+            return Ok(());
+        }
+        let l = self.accounting.limits;
+        check(
+            entry.retrieval.len(),
+            l.max_text_bytes,
+            LimitKind::TextBytes,
+        )?;
+        check(
+            entry.retrieval.len(),
+            l.max_document_bytes,
+            LimitKind::DocumentBytes,
+        )?;
+        check(
+            self.reached.len() + 1,
+            l.max_collection_entries,
+            LimitKind::CollectionEntries,
+        )?;
+        self.accounting.record(Some(&entry.retrieval))?;
+        self.accounting.bytes(entry.document.as_bytes().len())?;
+        JsonDocument::decode(entry.document.as_bytes(), l).map_err(SchemaLocationError::from)?;
+        for (uri, _) in entry.index.resources() {
+            check(uri.len(), l.max_text_bytes, LimitKind::TextBytes)?;
+            check(uri.len(), l.max_document_bytes, LimitKind::DocumentBytes)?;
+            if let Some(previous) = self.resources.get_mut(uri) {
+                *previous = (*previous).min(i);
+            } else {
+                check(
+                    self.resources.len() + 1,
+                    l.max_collection_entries,
+                    LimitKind::CollectionEntries,
+                )?;
+                self.accounting.record(Some(uri))?;
+                self.resources.insert(uri, i);
+            }
+        }
+        self.reached.insert(i);
+        self.pending.insert(i);
+        Ok(())
+    }
+}
+
+/// Reference keyword category; a dynamic reference still has an initial target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchemaReferenceKind {
+    /// Standard static reference.
+    Ref,
+    /// Dynamic reference, before evaluation-time rebinding.
+    DynamicRef,
+}
+impl SchemaReferenceKind {
+    /// Exact JSON Schema keyword spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ref => "$ref",
+            Self::DynamicRef => "$dynamicRef",
+        }
+    }
+}
+/// Borrowed reference metadata retaining exact source and initial target context.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SchemaReference<'a> {
+    source_retrieval: &'a str,
+    source_pointer: &'a JsonPointer,
+    kind: SchemaReferenceKind,
+    reference: &'a str,
+    target: ResolvedSchema<'a>,
+}
+impl<'a> SchemaReference<'a> {
+    /// Exact retrieval context containing the reference.
+    pub const fn source_retrieval_uri(self) -> &'a str {
+        self.source_retrieval
+    }
+    /// Schema object carrying the reference keyword.
+    pub const fn source_pointer(self) -> &'a JsonPointer {
+        self.source_pointer
+    }
+    /// Static or dynamic reference keyword.
+    pub const fn kind(self) -> SchemaReferenceKind {
+        self.kind
+    }
+    /// Exact stored URI reference string.
+    pub const fn reference(self) -> &'a str {
+        self.reference
+    }
+    /// Initial target; no dynamic-scope rebinding has been performed.
+    pub const fn target(self) -> ResolvedSchema<'a> {
+        self.target
+    }
+}
+/// Conservative closure over complete reached documents, not an executable
+/// acceptance result or a minimal validation-path subgraph.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SchemaClosure<'a> {
+    retrievals: Vec<&'a str>,
+    references: Vec<SchemaReference<'a>>,
+}
+impl<'a> SchemaClosure<'a> {
+    /// Reached retrieval contexts in exact URI string order.
+    pub fn retrieval_uris(&self) -> &[&'a str] {
+        &self.retrievals
+    }
+    /// References sorted by source retrieval, decoded pointer tokens, and keyword.
+    pub fn references(&self) -> &[SchemaReference<'a>] {
+        &self.references
     }
 }
 

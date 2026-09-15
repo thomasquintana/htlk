@@ -844,6 +844,62 @@ canonical pruning remain subsequent work; choosing an equivalent resource
 representative is not a substitute for those checks. Evaluation-time dynamic
 rebinding and full pinned-validator semantics also remain separate stages.
 
+## Conservative schema reference closure
+
+`SchemaCatalog::reference_closure(&[root_retrieval_uris], &Limits)` discovers
+document-level dependencies from explicit supplied roots. `SchemaClosure` exposes
+sorted reached `retrieval_uris()` and borrowed `references()`. Each `SchemaReference`
+retains its source retrieval context, source schema pointer, exact reference string,
+`SchemaReferenceKind`, and initial `ResolvedSchema` target.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{JsonDocument, SchemaCatalog, SchemaReferenceKind};
+
+let limits = Limits::default();
+let catalog = SchemaCatalog::new(vec![
+    ("https://example.test/root".into(),
+        JsonDocument::new(br#"{"$ref":"other#Item"}"#, &limits)?),
+    ("https://example.test/other".into(),
+        JsonDocument::new(br#"{"$anchor":"Item","type":"object"}"#, &limits)?),
+], &limits)?;
+let closure = catalog.reference_closure(&["https://example.test/root"], &limits)?;
+assert_eq!(closure.retrieval_uris().len(), 2);
+assert_eq!(closure.references()[0].kind(), SchemaReferenceKind::Ref);
+assert_eq!(closure.references()[0].target().retrieval_uri(), "https://example.test/other");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Traversal scans `$ref` and `$dynamicRef` at every standard schema location in each
+reached complete document, including `$defs`. Instance/annotation data is ignored.
+References must be strings. Recursive schema references are permitted: each
+retrieval context is visited once, with an ordered iterative work queue rather
+than recursive expansion. Reference records are sorted by source URI, decoded
+pointer tokens, and keyword, independently of root argument order.
+
+Resources become available when their retrieval context is reached. An unknown
+resource URI can load only its exact supplied retrieval entry, never an arbitrary
+unreached parent document or equivalent catalog alias. Target checks are deferred
+until discovery finishes, so a nested resource may be provided through another
+reached reference path. Targets prefer the source's own resource context, then a
+deterministic reached context. Consequently a local reference does not pull an
+unused equivalent alias into the closure merely because that alias sorts earlier.
+
+Every call uses fresh limits and rechecks reached JSON snapshots. Collection
+ceilings bound roots, contexts, known resource URIs, and reference records; total
+values account contexts, resources, schema visits, and reference processing.
+Payload accounting covers reached URI/snapshot bytes, constructed absolute
+references, source pointer paths, and target-root paths needed for pointer joins.
+This bounds repeated short-reference lookups into large resource-root pointers.
+No document bytes or extracted schema values are copied into returned references.
+
+This is **conservative document-level closure**, not minimal validation-path
+reachability or final executable closure enforcement. All standard subschemas of
+a reached document contribute references. Dynamic references retain their initial
+targets; evaluation-time rebinding remains validator work. Embedded-tool base
+selection and canonical `documents`/`schema_uris` integration still require the
+shared executable verifier.
+
 ## Canonical document assembly
 
 `DocumentFields::new(graph_id, profile, root_scope)` starts empty authored tables.

@@ -41,7 +41,9 @@ pub use metadata::{
 };
 pub use options::{ExecutionLimits, ExecutionOptionsError, RetryPolicy};
 pub use policy::{EvaluatorLimits, PolicyDocument, PolicyError, PolicyFields};
-pub use schema_catalog::{ResolvedSchema, SchemaCatalog};
+pub use schema_catalog::{
+    ResolvedSchema, SchemaCatalog, SchemaClosure, SchemaReference, SchemaReferenceKind,
+};
 pub use schema_locations::{JSON_SCHEMA_DIALECT, SchemaLocationError, SchemaLocations};
 pub use schema_resources::{SchemaResourceError, SchemaResources};
 pub use structure::{StructuralLimit, StructuralSummary};
