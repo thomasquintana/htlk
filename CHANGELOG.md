@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Native validation against pinned MCP 2025-11-25 protocol data, consistent binding
+  selections, normalized result checks, and bounded RFC 6570 scalar expansion.
 - Native JSON Schema 2020-12 compilation and validation, offline resource linking,
   object-root admission, dynamic references, and supported pattern/input limits.
 - Downloadable CI/release rustdoc artifacts, manual release dry runs, verified crate

@@ -1747,3 +1747,51 @@ fn executable_native_schemas_enforce_callable_roots_and_validate_instances() {
         Err(Error::NativeSchema(NativeSchemaError::ObjectRootRequired))
     ));
 }
+
+#[test]
+fn executable_mcp_stage_rejects_conflicting_pinned_selections() {
+    let l = Limits::default();
+    let mut f = tool_fixture(&l);
+    Doc::new(f.clone(), &l)
+        .unwrap()
+        .validate_mcp_descriptors(&l)
+        .unwrap();
+    let old = f.bindings.values().next().unwrap().clone();
+    let descriptor = JsonDocument::from_value(
+        &replace(
+            f.documents[&old.descriptor()].value(),
+            "description",
+            Some(Value::Text("different descriptor".into())),
+        ),
+        &l,
+    )
+    .unwrap();
+    let binding = McpBinding::new(
+        old.server().clone(),
+        descriptor.digest(),
+        old.kind().clone(),
+        &l,
+    )
+    .unwrap();
+    let id = binding.digest(&l).unwrap();
+    f.documents.insert(descriptor.digest(), descriptor);
+    f.bindings.insert(id, binding);
+    let mut fields = f.scopes[&f.root_scope].fields().clone();
+    let mut second = fields.nodes[0].fields().clone();
+    second.id = "second".parse().unwrap();
+    second.operation = Operation::Mcp {
+        binding: id,
+        retry: RetryPolicy::no_retry(),
+    };
+    fields
+        .nodes
+        .push(Node::new(second, C::Ordinary, &l).unwrap());
+    root(&mut f, fields, &l);
+    assert_eq!(
+        Doc::new(f, &l)
+            .unwrap()
+            .validate_mcp_descriptors(&l)
+            .unwrap_err(),
+        Error::ConflictingMcpSelection
+    );
+}

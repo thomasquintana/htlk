@@ -48,15 +48,15 @@ successfully decoded `CanonicalDocument` is not yet a fully verified runnable gr
 
 ### 2. Complete MCP descriptor conformance
 
-- [ ] Validate full selected descriptors against MCP **2025-11-25** protocol schemas,
+- [x] Validate full selected descriptors against MCP **2025-11-25** protocol schemas,
   including optional metadata/content fields and kind-specific requirements.
   Selection fields, tool schema identity, and operation interfaces are implemented.
-- [ ] Check consistency of repeated selections of the same compound server and
+- [x] Check consistency of repeated selections of the same compound server and
   descriptor identity across the executable, rejecting conflicting pinned facts.
-- [ ] Connect resource-template expansion to the exact pinned implementation and
+- [x] Connect resource-template expansion to the native implementation and
   verify scalar expansion, Unicode prefix limits, percent encoding, and modifiers.
-  The current RFC 6570 code checks syntax and interfaces, not expansion.
-- [ ] Provide shared validation contracts for normalized `ResourceSnapshot` and
+  RFC 6570 syntax, interfaces, and bounded scalar expansion are implemented.
+- [x] Provide shared validation contracts for normalized `ResourceSnapshot` and
   `McpPromptResult` values; the runtime still owns live MCP calls and drift handling.
 
 ### 3. Resolve and type-check expressions

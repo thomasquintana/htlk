@@ -217,6 +217,47 @@ impl CanonicalDocument {
         }
         Ok(schemas)
     }
+    /// Checks full pinned MCP descriptor schemas and consistency of repeated
+    /// selections of the same compound server/kind/name. No service is contacted.
+    ///
+    /// # Errors
+    /// Returns protocol conformance, conflicting selection, or codec failures.
+    pub fn validate_mcp_descriptors(&self, limits: &Limits) -> Result<(), DocumentError> {
+        self.to_value(limits)?;
+        let mut selections = BTreeMap::new();
+        let mut checked = BTreeSet::new();
+        for binding in self.fields.bindings.values() {
+            let (kind, tag, selected) = match binding.kind() {
+                McpBindingKind::Tool { name, .. } => (crate::McpDescriptorKind::Tool, "tool", name),
+                McpBindingKind::Resource { uri } => {
+                    (crate::McpDescriptorKind::Resource, "resource", uri)
+                }
+                McpBindingKind::Template { uri_template } => (
+                    crate::McpDescriptorKind::ResourceTemplate,
+                    "template",
+                    uri_template,
+                ),
+                McpBindingKind::Prompt { name } => {
+                    (crate::McpDescriptorKind::Prompt, "prompt", name)
+                }
+            };
+            if checked.insert((tag, binding.descriptor())) {
+                crate::validate_mcp_descriptor(
+                    kind,
+                    &self.fields.documents[&binding.descriptor()],
+                    limits,
+                )?;
+            }
+            let key = (binding.server().digest(limits)?, tag, selected.as_str());
+            if selections
+                .insert(key, binding.descriptor())
+                .is_some_and(|previous| previous != binding.descriptor())
+            {
+                return Err(DocumentError::ConflictingMcpSelection);
+            }
+        }
+        Ok(())
+    }
     /// Produces canonical document data under this call's limits.
     ///
     /// # Errors
@@ -964,6 +1005,10 @@ fn closed(v: &Value) -> Result<&Map, DocumentError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DocumentError {
+    /// Full MCP protocol/value conformance failure.
+    Mcp(crate::McpValidationError),
+    /// One compound server/kind/selection is pinned to conflicting descriptors.
+    ConflictingMcpSelection,
     /// Shipped native schema validation or callable admission failed.
     NativeSchema(crate::NativeSchemaError),
     /// Offline schema catalog/resource/reference validation failed.
@@ -1064,6 +1109,7 @@ convert!(JsonError, Json);
 convert!(PolicyError, Policy);
 convert!(crate::SchemaResourceError, Schema);
 convert!(crate::NativeSchemaError, NativeSchema);
+convert!(crate::McpValidationError, Mcp);
 impl From<EncodingLimitError> for DocumentError {
     fn from(e: EncodingLimitError) -> Self {
         Self::LimitExceeded {
@@ -1091,6 +1137,7 @@ impl std::error::Error for DocumentError {
             Self::Policy(e) => Some(e),
             Self::Schema(e) => Some(e),
             Self::NativeSchema(e) => Some(e),
+            Self::Mcp(e) => Some(e),
             _ => None,
         }
     }

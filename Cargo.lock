@@ -845,6 +845,7 @@ dependencies = [
 name = "htlk-executable"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "half",
  "htlk-cbor",
  "iri-string",

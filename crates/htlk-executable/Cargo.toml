@@ -15,6 +15,7 @@ categories = ["encoding", "cryptography"]
 all-features = true
 
 [dependencies]
+base64.workspace = true
 half.workspace = true
 htlk-cbor.workspace = true
 iri-string.workspace = true

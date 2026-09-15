@@ -11,6 +11,7 @@ mod graph;
 mod identifier;
 mod json;
 mod json_pointer;
+mod mcp_protocol;
 mod metadata;
 mod native_schema;
 mod options;
@@ -36,6 +37,10 @@ pub use graph::{
 pub use identifier::{Identifier, ParseIdentifierError};
 pub use json::{JsonDocument, JsonError};
 pub use json_pointer::{JsonPointer, JsonPointerError};
+pub use mcp_protocol::{
+    McpDescriptorKind, McpValidationError, validate_mcp_descriptor, validate_mcp_prompt_result,
+    validate_resource_snapshot,
+};
 pub use metadata::{
     CORE_VERSION, EngineIdentity, ExecutionProfile, FunctionSignature, Library,
     MCP_PROTOCOL_VERSION, McpBinding, McpBindingKind, McpTransport, MetadataError, ServerIdentity,
@@ -50,3 +55,4 @@ pub use schema_locations::{JSON_SCHEMA_DIALECT, SchemaLocationError, SchemaLocat
 pub use schema_resources::{SchemaResourceError, SchemaResources, embedded_schema_base};
 pub use structure::{StructuralLimit, StructuralSummary};
 pub use types::{Port, PrimitiveType, TypeContext, TypeError, ValueType, ValueTypeKind};
+pub use uri_template::expand_uri_template;

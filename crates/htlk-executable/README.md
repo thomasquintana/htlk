@@ -948,6 +948,42 @@ in reached complete documents, as described above.
 
 ## Canonical document assembly
 
+### Native MCP conformance and URI expansion
+
+`validate_mcp_descriptor` checks Tool, Resource, ResourceTemplate, or Prompt
+descriptors against the published MCP 2025-11-25 JSON Schema. The pinned source
+commit, checksum, and upstream license accompany the declarative snapshot in
+`assets/`. Native validators compile this trusted data once; no schema is fetched
+while checking submitted descriptors. Protocol extension fields remain preserved.
+
+`CanonicalDocument::validate_mcp_descriptors` composes this with existing binding
+integrity and rejects conflicting descriptors selected under the same compound
+server/kind/name. Identical descriptor checks are shared across bindings.
+`validate_mcp_prompt_result` checks complete prompt messages/content and validates
+binary content encoding with a bounded streaming decoder. `validate_resource_snapshot`
+checks the closed normalized snapshot fields against a frozen binding/request;
+binary content uses native `data: bytes`, and timestamps are not added.
+
+`expand_uri_template` uses the native `iri-string` RFC 6570 implementation with
+the exact required string argument record and bounded output. Unicode prefixes,
+reserved expansion, percent encoding, named parameters, empty values, and scalar
+explode modifiers follow the pinned implementation. There is no script runtime.
+
+```rust
+use htlk_cbor::{Limits, Map, Value};
+use htlk_executable::expand_uri_template;
+
+let arguments = Value::Map(Map::try_from_entries([
+    ("query".into(), Value::Text("hello world".into())),
+])?);
+assert_eq!(expand_uri_template("https://e.test/search{?query}", &arguments, &Limits::default())?,
+    "https://e.test/search?query=hello%20world");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+These checks establish protocol/value conformance. Live capability negotiation,
+authorization, delivery/retry decisions, and service drift remain runtime work.
+
 ### Native schema validation
 
 `NativeSchemas::compile(&SchemaCatalog, NativeSchemaOptions, &Limits)` compiles the
