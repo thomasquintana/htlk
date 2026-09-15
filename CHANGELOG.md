@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Static expression name/type analysis with generic inference, callback compatibility,
+  presence tracking, bounded metadata, and explicit actual-value obligations.
 - Native expression evaluation with lazy conditions, explicit absence/pending/errors,
   prompt rendering, outcomes, Rust function dispatch, and deterministic evaluator limits.
 - Native validation against pinned MCP 2025-11-25 protocol data, consistent binding

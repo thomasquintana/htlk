@@ -22,6 +22,7 @@ mod schema_catalog;
 mod schema_locations;
 mod schema_resources;
 mod structure;
+mod type_check;
 mod types;
 mod uri_template;
 
@@ -60,5 +61,9 @@ pub use schema_catalog::{
 pub use schema_locations::{JSON_SCHEMA_DIALECT, SchemaLocationError, SchemaLocations};
 pub use schema_resources::{SchemaResourceError, SchemaResources, embedded_schema_base};
 pub use structure::{StructuralLimit, StructuralSummary};
+pub use type_check::{
+    ExpressionAnalysis, ExpressionNodeType, ExpressionTypeEnvironment, ExpressionTypeError,
+    RuntimeTypeCheck, RuntimeTypeCheckKind, check_condition, check_expression,
+};
 pub use types::{Port, PrimitiveType, TypeContext, TypeError, ValueType, ValueTypeKind};
 pub use uri_template::expand_uri_template;

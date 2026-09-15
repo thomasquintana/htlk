@@ -229,6 +229,62 @@ name/type verification, generic inference, callback compatibility, and schema-aw
 projection plans are still part of the continuing task-3 verifier work. A standalone
 evaluation is not proof that an entire graph is valid.
 
+### Static expression checking
+
+`check_expression` resolves and analyzes every AST branch against an
+`ExpressionTypeEnvironment` containing the owning context's value declarations,
+permitted outcomes, complete library manifests, and templates. `check_condition`
+adds a required Boolean result boundary. Unknown names are rejected even inside
+a branch that would short circuit during execution.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{Expression, ExpressionContext, ExpressionKind,
+    ExpressionTypeEnvironment, Port, PrimitiveType, ValueReference, ValueType,
+    check_condition};
+
+let limits = Limits::default();
+let source = ValueReference::Input("allowed".parse()?);
+let mut environment = ExpressionTypeEnvironment::default();
+environment.references.insert(source.clone(),
+    Port::new(ValueType::primitive(PrimitiveType::Boolean), true));
+let expression = Expression::new(ExpressionKind::Ref { source, path: vec![] },
+    ExpressionContext::Preconditions, &limits)?;
+let analysis = check_condition(&expression, ExpressionContext::Preconditions,
+    &environment, &limits)?;
+assert_eq!(analysis.result().value_type(), &ValueType::primitive(PrimitiveType::Boolean));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`ExpressionAnalysis` exposes the inferred root port, per-node type metadata, and
+`RuntimeTypeCheck` obligations at child-index AST paths. It preserves requiredness
+independently of nullability. Disjoint types fail statically; overlapping JSON,
+schema, union, and optional cases retain value/presence/projection checks. Structural
+records permit extra fields while required declared destination fields must be
+covered. Union projections retain optionality when only some record variants
+declare a field. Built-in error, regex, snapshot, and prompt-result fields expose
+their known structural information.
+
+Library signatures are instantiated with fresh variables per call and callback,
+so identically named generic parameters cannot capture one another. Constraints
+from arguments and an optional expected result type drive inference. Deferred
+union constraints can be resolved by later arguments. Unresolved, ambiguous, and
+recursive generic equations fail. Callbacks require provable parameter/result
+compatibility, including contravariant parameters and covariant returns; static
+function references remain direct argument metadata, not ordinary values.
+
+Analysis rechecks environment and expression bounds and meters inference work,
+type copying/comparison, lookups, and stored metadata paths. Its derived output
+must also fit configured limits. Controlled-stack tests cover deep unary and
+binary expressions at the codec depth ceiling.
+
+This result is **analysis, not a verified executable**. Runtime obligations are
+not automatically enforced by producing the report. Schema-aware projection
+refinement is explicitly marked by `SchemaProjection`; those plans, full graph
+verification, and exact implementation-registry matching still require integration.
+The existing evaluator consumes frozen data and verified projection/function
+contexts; this analysis provides the metadata for that continuing work.
+
 `Expression` is an immutable normalized tree with a read-only `ExpressionKind`.
 Supporting types are `ScalarLiteral`, `ValueReference`, `PathStep`, `FunctionId`,
 `CoreFunction`, and `BinaryOperator`. Scalar literals hold text, bytes, signed
