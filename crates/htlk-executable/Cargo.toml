@@ -11,6 +11,9 @@ documentation = "https://docs.rs/htlk-executable"
 keywords = ["cbor", "sha256", "digest", "htlk"]
 categories = ["encoding", "cryptography"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 half.workspace = true
 htlk-cbor.workspace = true

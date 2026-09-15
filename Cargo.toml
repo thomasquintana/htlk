@@ -67,6 +67,9 @@ documentation = "https://docs.rs/htlk"
 keywords = ["harness", "compiler", "runtime", "toolkit"]
 categories = ["compilers", "development-tools"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 htlk-compiler.workspace = true
 htlk-rt.workspace = true

@@ -11,6 +11,9 @@ documentation = "https://docs.rs/htlk-cbor"
 keywords = ["cbor", "encoding", "htlk"]
 categories = ["encoding"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 half.workspace = true
 

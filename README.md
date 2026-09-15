@@ -37,6 +37,8 @@ directly.
 - [IR grammar](docs/ir-grammar.md)
 - [Deterministic CBOR profile and API](crates/htlk-cbor/README.md)
 - [Executable foundations and digest API](crates/htlk-executable/README.md)
+- [Remaining executable/verifier work](docs/htlk-executable-roadmap.md)
+- [CI documentation artifacts and crates.io releases](CONTRIBUTING.md#releases)
 
 ## Development
 

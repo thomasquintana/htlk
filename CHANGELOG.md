@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Downloadable CI/release rustdoc artifacts, manual release dry runs, verified crate
+  archives, workflow/specification checks, and all-feature docs.rs build metadata.
+- A focused Draft 0.1 completion checklist for the shared executable/verifier crate.
+- Prescribed embedded-schema base selection and explicit executable schema-catalog
+  validation for required roots, reference closure, unused entries, and snapshot-copy limits.
 - Conservative offline schema reference closure with explicit retrieval-context
   tracking, cycle-safe traversal, borrowed reference records, and bounded pointer work.
 - Bounded multi-document schema catalogs with cross-document resource/anchor

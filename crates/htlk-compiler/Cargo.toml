@@ -11,6 +11,9 @@ documentation = "https://docs.rs/htlk-compiler"
 keywords = ["harness", "compiler", "toolkit"]
 categories = ["compilers", "development-tools"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 chumsky.workspace = true
 htlk-cbor.workspace = true

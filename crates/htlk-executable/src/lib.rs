@@ -45,6 +45,6 @@ pub use schema_catalog::{
     ResolvedSchema, SchemaCatalog, SchemaClosure, SchemaReference, SchemaReferenceKind,
 };
 pub use schema_locations::{JSON_SCHEMA_DIALECT, SchemaLocationError, SchemaLocations};
-pub use schema_resources::{SchemaResourceError, SchemaResources};
+pub use schema_resources::{SchemaResourceError, SchemaResources, embedded_schema_base};
 pub use structure::{StructuralLimit, StructuralSummary};
 pub use types::{Port, PrimitiveType, TypeContext, TypeError, ValueType, ValueTypeKind};

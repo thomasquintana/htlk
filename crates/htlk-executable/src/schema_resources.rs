@@ -1,6 +1,42 @@
 //! Offline resource/anchor indexing within one supplied schema document.
 
 use crate::digest::Digest;
+
+/// Selects the prescribed retrieval base for an embedded input/output schema.
+/// An absolute root `$id` is used exactly (removing an empty fragment); otherwise
+/// the base is `urn:htlk:schema:` plus the raw JCS digest's 64 lowercase hex digits.
+/// No catalog alias participates in this choice and the JSON is not rewritten.
+///
+/// # Errors
+/// Returns invalid JSON/URI metadata or resource-limit errors. Relative root IDs
+/// select the synthetic base here; indexing then applies normal ID resolution and
+/// rejects non-fragment relative IDs against that opaque base.
+pub fn embedded_schema_base(
+    document: &JsonDocument,
+    limits: &Limits,
+) -> Result<String, SchemaResourceError> {
+    JsonDocument::decode(document.as_bytes(), limits).map_err(SchemaLocationError::from)?;
+    let id = match document.value() {
+        Value::Map(m) => m.get("$id"),
+        Value::Bool(_) => None,
+        _ => return Err(SchemaLocationError::InvalidSchema.into()),
+    };
+    if let Some(id) = id {
+        let Value::Text(id) = id else {
+            return Err(SchemaResourceError::InvalidKeyword("$id"));
+        };
+        text_limit(id, limits)?;
+        let parsed =
+            UriReferenceStr::new(id).map_err(|_| SchemaResourceError::InvalidKeyword("$id"))?;
+        if parsed.scheme_str().is_some() {
+            let base = id.strip_suffix('#').unwrap_or(id);
+            UriAbsoluteStr::new(base).map_err(|_| SchemaResourceError::InvalidKeyword("$id"))?;
+            return owned(base);
+        }
+    }
+    let digest = document.digest().to_string();
+    bounded(format_args!("urn:htlk:schema:{}", &digest[7..]), limits)
+}
 use crate::{JsonDocument, JsonPointer, JsonPointerError, SchemaLocationError, SchemaLocations};
 use htlk_cbor::{LimitKind, Limits, Value};
 use iri_string::types::{UriAbsoluteStr, UriReferenceStr};

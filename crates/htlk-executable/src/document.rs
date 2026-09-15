@@ -107,6 +107,87 @@ impl CanonicalDocument {
     pub const fn structural_summary(&self) -> crate::StructuralSummary {
         self.structure
     }
+    /// Builds the executable's offline schema catalog and checks its known external
+    /// closure. Tool schema roots must use their prescribed absolute/synthetic bases.
+    /// Unused retrieval aliases or JSON documents fail rather than being pruned.
+    ///
+    /// This is an explicit stage beyond record assembly, not complete executable
+    /// verification: callable object-root admission, pinned validator semantics,
+    /// expression/graph verification, and authorization remain separate checks.
+    ///
+    /// # Errors
+    /// Returns missing/mismatched roots, schema/resource/reference failures,
+    /// unreachable entries, or aggregate input/derived-index limits.
+    pub fn schema_catalog(&self, limits: &Limits) -> Result<crate::SchemaCatalog, DocumentError> {
+        self.to_value(limits)?;
+        let f = &self.fields;
+        let mut roots = BTreeMap::new();
+        for binding in f.bindings.values() {
+            if let McpBindingKind::Tool {
+                input_schema,
+                output_schema,
+                ..
+            } = binding.kind()
+            {
+                for id in [input_schema, output_schema] {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = roots.entry(*id) {
+                        let document = f
+                            .documents
+                            .get(id)
+                            .ok_or(DocumentError::MissingRecord("tool schema document"))?;
+                        let base = crate::embedded_schema_base(document, limits)?;
+                        if f.schema_uris.get(&base) != Some(id) {
+                            return Err(DocumentError::SchemaRootMismatch);
+                        }
+                        entry.insert(base);
+                    }
+                }
+            }
+        }
+        // One stored JSON document can have many retrieval aliases. Bound all
+        // repeated copies before materializing catalog-owned snapshots.
+        let mut bytes = 0usize;
+        for (uri, id) in &f.schema_uris {
+            let document = f
+                .documents
+                .get(id)
+                .ok_or(DocumentError::MissingRecord("schema URI document"))?;
+            for n in [uri.len(), document.as_bytes().len()] {
+                bytes = bytes.checked_add(n).ok_or(DocumentError::LimitExceeded {
+                    limit: LimitKind::TotalPayloadBytes,
+                    maximum: limits.max_total_payload_bytes,
+                })?;
+                check(
+                    bytes,
+                    limits.max_total_payload_bytes,
+                    LimitKind::TotalPayloadBytes,
+                )?;
+            }
+        }
+        let mut documents = Vec::new();
+        for (uri, id) in &f.schema_uris {
+            let snapshot = JsonDocument::decode(f.documents[id].as_bytes(), limits)?;
+            documents.try_reserve(1).map_err(allocation)?;
+            documents.push((owned(uri)?, snapshot));
+        }
+        let catalog = crate::SchemaCatalog::new(documents, limits)?;
+        let mut root_uris = Vec::new();
+        root_uris
+            .try_reserve_exact(roots.len())
+            .map_err(allocation)?;
+        root_uris.extend(roots.values().map(String::as_str));
+        let closure = catalog.reference_closure(&root_uris, limits)?;
+        if closure.retrieval_uris().len() != f.schema_uris.len() {
+            return Err(DocumentError::UnreachableRecord("schema URI"));
+        }
+        let mut used_documents: BTreeSet<_> = f.schema_uris.values().copied().collect();
+        used_documents.insert(f.profile.policy_document());
+        used_documents.extend(f.bindings.values().map(McpBinding::descriptor));
+        if f.documents.keys().any(|id| !used_documents.contains(id)) {
+            return Err(DocumentError::UnreachableRecord("JSON document"));
+        }
+        Ok(catalog)
+    }
     /// Produces canonical document data under this call's limits.
     ///
     /// # Errors
@@ -854,6 +935,10 @@ fn closed(v: &Value) -> Result<&Map, DocumentError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DocumentError {
+    /// Offline schema catalog/resource/reference validation failed.
+    Schema(crate::SchemaResourceError),
+    /// A tool schema is absent or mismatched at its prescribed retrieval base.
+    SchemaRootMismatch,
     /// Codec error.
     Codec(htlk_cbor::Error),
     /// Envelope error.
@@ -946,6 +1031,7 @@ convert!(TypeError, Type);
 convert!(ParseDigestError, Digest);
 convert!(JsonError, Json);
 convert!(PolicyError, Policy);
+convert!(crate::SchemaResourceError, Schema);
 impl From<EncodingLimitError> for DocumentError {
     fn from(e: EncodingLimitError) -> Self {
         Self::LimitExceeded {
@@ -971,6 +1057,7 @@ impl std::error::Error for DocumentError {
             Self::Digest(e) => Some(e),
             Self::Json(e) => Some(e),
             Self::Policy(e) => Some(e),
+            Self::Schema(e) => Some(e),
             _ => None,
         }
     }

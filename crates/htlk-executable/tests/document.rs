@@ -1524,3 +1524,184 @@ fn repeated_template_variables_obey_tighter_per_call_limits() {
     assert_eq!(doc.encode(&tight).unwrap_err(), expected);
     assert_eq!(Doc::decode(&bytes, &tight).unwrap_err(), expected);
 }
+
+fn schema_root_uris(f: &mut DocumentFields, l: &Limits) {
+    for binding in f.bindings.values() {
+        if let McpBindingKind::Tool {
+            input_schema,
+            output_schema,
+            ..
+        } = binding.kind()
+        {
+            for id in [input_schema, output_schema] {
+                let uri = htlk_executable::embedded_schema_base(&f.documents[id], l).unwrap();
+                f.schema_uris.insert(uri, *id);
+            }
+        }
+    }
+}
+fn tool_schemas(input: JsonDocument, output: JsonDocument, l: &Limits) -> DocumentFields {
+    let mut f = tool_fixture(l);
+    let old = f.bindings.values().next().unwrap().clone();
+    let value = f.documents[&old.descriptor()].value();
+    let descriptor = JsonDocument::from_value(
+        &replace(
+            &replace(value, "inputSchema", Some(input.value().clone())),
+            "outputSchema",
+            Some(output.value().clone()),
+        ),
+        l,
+    )
+    .unwrap();
+    if let McpBindingKind::Tool {
+        input_schema,
+        output_schema,
+        ..
+    } = old.kind()
+    {
+        f.documents.remove(input_schema);
+        f.documents.remove(output_schema);
+    }
+    f.documents.remove(&old.descriptor());
+    let binding = McpBinding::new(
+        old.server().clone(),
+        descriptor.digest(),
+        McpBindingKind::Tool {
+            name: "Tool/Exact".into(),
+            input_schema: input.digest(),
+            output_schema: output.digest(),
+        },
+        l,
+    )
+    .unwrap();
+    for doc in [input, output, descriptor] {
+        f.documents.insert(doc.digest(), doc);
+    }
+    select_binding(&mut f, binding, l);
+    schema_root_uris(&mut f, l);
+    f
+}
+
+#[test]
+fn executable_schema_catalog_requires_prescribed_roots_and_rejects_unused_entries() {
+    let l = Limits::default();
+    assert!(
+        Doc::new(base(&l), &l)
+            .unwrap()
+            .schema_catalog(&l)
+            .unwrap()
+            .retrieval_uris()
+            .next()
+            .is_none()
+    );
+    let mut f = tool_fixture(&l);
+    assert_eq!(
+        Doc::new(f.clone(), &l)
+            .unwrap()
+            .schema_catalog(&l)
+            .unwrap_err(),
+        Error::SchemaRootMismatch
+    );
+    schema_root_uris(&mut f, &l);
+    let doc = Doc::new(f.clone(), &l).unwrap();
+    let catalog = doc.schema_catalog(&l).unwrap();
+    assert_eq!(catalog.retrieval_uris().count(), 2);
+    let decoded = Doc::from_envelope(&doc.envelope(&l).unwrap(), &l).unwrap();
+    assert_eq!(decoded.schema_catalog(&l).unwrap(), catalog);
+    let mut wrong = f.clone();
+    let key = wrong.schema_uris.keys().next().unwrap().clone();
+    wrong
+        .schema_uris
+        .insert(key, wrong.profile.policy_document());
+    assert_eq!(
+        Doc::new(wrong, &l).unwrap().schema_catalog(&l).unwrap_err(),
+        Error::SchemaRootMismatch
+    );
+    let mut extra = f.clone();
+    let id = *extra.schema_uris.values().next().unwrap();
+    extra
+        .schema_uris
+        .insert("https://unused.test/alias".into(), id);
+    assert_eq!(
+        Doc::new(extra, &l).unwrap().schema_catalog(&l).unwrap_err(),
+        Error::UnreachableRecord("schema URI")
+    );
+    let mut extra = f;
+    let json = JsonDocument::new(br#"{"extra":"document"}"#, &l).unwrap();
+    extra.documents.insert(json.digest(), json);
+    assert_eq!(
+        Doc::new(extra, &l).unwrap().schema_catalog(&l).unwrap_err(),
+        Error::UnreachableRecord("JSON document")
+    );
+}
+
+#[test]
+fn executable_schema_dependencies_use_declared_bases_not_catalog_aliases() {
+    let l = Limits::default();
+    let input = JsonDocument::new(
+        br#"{"$id":"https://e.test/root","type":"object","$ref":"dep"}"#,
+        &l,
+    )
+    .unwrap();
+    let output = JsonDocument::new(br#"{"type":"object","description":"output"}"#, &l).unwrap();
+    let mut f = tool_schemas(input, output.clone(), &l);
+    assert!(matches!(
+        Doc::new(f.clone(), &l).unwrap().schema_catalog(&l),
+        Err(Error::Schema(
+            htlk_executable::SchemaResourceError::MissingResource
+        ))
+    ));
+    let dep = JsonDocument::new(br#"{"type":"object"}"#, &l).unwrap();
+    f.schema_uris
+        .insert("https://e.test/dep".into(), dep.digest());
+    f.documents.insert(dep.digest(), dep.clone());
+    let catalog = Doc::new(f, &l).unwrap().schema_catalog(&l).unwrap();
+    assert_eq!(catalog.retrieval_uris().count(), 3);
+    let input = JsonDocument::new(br#"{"type":"object","$ref":"dep"}"#, &l).unwrap();
+    let id = input.digest();
+    let mut f = tool_schemas(input, output, &l);
+    // Supplying an HTTP alias cannot replace the required synthetic embedded base.
+    f.schema_uris.insert("https://e.test/root".into(), id);
+    f.schema_uris
+        .insert("https://e.test/dep".into(), dep.digest());
+    f.documents.insert(dep.digest(), dep);
+    assert!(matches!(
+        Doc::new(f, &l).unwrap().schema_catalog(&l),
+        Err(Error::Schema(
+            htlk_executable::SchemaResourceError::NonHierarchicalBase
+        ))
+    ));
+}
+
+#[test]
+fn executable_schema_snapshot_copies_are_preflighted_before_catalog_construction() {
+    let l = Limits::default();
+    let input = JsonDocument::new(
+        format!(
+            r#"{{"type":"object","description":"{}"}}"#,
+            "x".repeat(2000)
+        )
+        .as_bytes(),
+        &l,
+    )
+    .unwrap();
+    let id = input.digest();
+    let output = JsonDocument::new(br#"{"type":"object"}"#, &l).unwrap();
+    let mut f = tool_schemas(input, output, &l);
+    for i in 0..20 {
+        f.schema_uris.insert(format!("https://copy.test/{i}"), id);
+    }
+    let doc = Doc::new(f, &l).unwrap();
+    let tight = Limits {
+        max_total_payload_bytes: 10000,
+        ..l
+    };
+    assert!(doc.to_value(&tight).is_ok());
+    assert_eq!(
+        doc.schema_catalog(&tight).unwrap_err(),
+        Error::LimitExceeded {
+            limit: LimitKind::TotalPayloadBytes,
+            maximum: 10000
+        }
+    );
+}

@@ -11,6 +11,9 @@ documentation = "https://docs.rs/htlk-rt"
 keywords = ["harness", "runtime", "toolkit"]
 categories = ["development-tools"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 actix.workspace = true
 async-openai.workspace = true

@@ -242,3 +242,52 @@ fn schema_resources_on_controlled_stacks() {
         );
     }
 }
+
+#[test]
+fn embedded_bases_use_absolute_root_ids_or_raw_jcs_identity() {
+    use htlk_executable::embedded_schema_base as base;
+    let l = Limits::default();
+    let doc = J::new(b"{}", &l).unwrap();
+    assert_eq!(
+        base(&doc, &l).unwrap(),
+        "urn:htlk:schema:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    );
+    for (json, expected) in [
+        (r#"{"$id":"https://e.test/root"}"#, "https://e.test/root"),
+        (r#"{"$id":"https://e.test/root#"}"#, "https://e.test/root"),
+        (r#"{"$id":"urn:Exact"}"#, "urn:Exact"),
+    ] {
+        let doc = J::new(json.as_bytes(), &l).unwrap();
+        let before = doc.clone();
+        assert_eq!(base(&doc, &l).unwrap(), expected);
+        assert_eq!(doc, before);
+    }
+    let relative = J::new(br#"{"$id":"relative"}"#, &l).unwrap();
+    let synthetic = base(&relative, &l).unwrap();
+    assert!(synthetic.starts_with("urn:htlk:schema:"));
+    assert_eq!(
+        R::new(&relative, &synthetic, &l).unwrap_err(),
+        E::NonHierarchicalBase
+    );
+    for json in [
+        r#"{"$id":1}"#,
+        r#"{"$id":"bad uri"}"#,
+        r#"{"$id":"https://e.test/root#anchor"}"#,
+    ] {
+        assert_eq!(
+            base(&J::new(json.as_bytes(), &l).unwrap(), &l).unwrap_err(),
+            E::InvalidKeyword("$id")
+        );
+    }
+    let tight = Limits {
+        max_text_bytes: 10,
+        ..l
+    };
+    assert!(matches!(
+        base(&doc, &tight),
+        Err(E::LimitExceeded {
+            limit: LimitKind::TextBytes,
+            ..
+        })
+    ));
+}

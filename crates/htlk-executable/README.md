@@ -900,6 +900,52 @@ targets; evaluation-time rebinding remains validator work. Embedded-tool base
 selection and canonical `documents`/`schema_uris` integration still require the
 shared executable verifier.
 
+## Embedded bases and executable schema checks
+
+`embedded_schema_base(&JsonDocument, &Limits)` selects the prescribed base for an
+embedded tool input/output schema. An absolute root `$id` is used exactly, with
+an empty fragment removed. Otherwise the base is `urn:htlk:schema:` followed by
+the 64 lowercase hexadecimal digits of the schema's raw JCS digest. The JSON
+bytes are preserved, and a catalog alias cannot influence this selection.
+
+```rust
+use htlk_cbor::Limits;
+use htlk_executable::{JsonDocument, embedded_schema_base};
+
+let limits = Limits::default();
+let schema = JsonDocument::new(br#"{"type":"object"}"#, &limits)?;
+let base = embedded_schema_base(&schema, &limits)?;
+assert_eq!(base, format!("urn:htlk:schema:{}", &schema.digest().to_string()[7..]));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Malformed URI metadata and absolute IDs with nonempty fragments fail. A relative
+root ID selects the synthetic base, after which normal resource indexing applies:
+a non-fragment relative ID cannot resolve against that opaque base. Similarly,
+non-fragment relative `$ref` values require a declared hierarchical base; adding
+an HTTP catalog alias cannot repair an embedded schema lacking that base.
+
+After record assembly or decoding, call `CanonicalDocument::schema_catalog(&Limits)`
+to perform the explicit offline schema stage and obtain a reusable `SchemaCatalog`.
+It requires every tool input/output schema at its prescribed base in `schema_uris`,
+with the correct document digest. It then traverses reference closure from those
+roots, requires every supplied schema retrieval context to be reached, and rejects
+JSON documents outside the policy, descriptor, and reached-schema roles.
+Entries are checked as assertions, never silently pruned or rekeyed.
+
+The stage rechecks whole-document limits and preflights the aggregate URI/snapshot
+bytes before copying catalog inputs, including repeated copies of a document under
+multiple aliases. The catalog and closure retain their own derived-index/work
+ceilings. `SchemaRootMismatch` distinguishes missing or incorrect root placement;
+`DocumentError::Schema` preserves schema/resource/reference failures, and unused
+entries use `UnreachableRecord`.
+
+This schema-catalog stage remains explicit rather than being implied by successful
+record decoding. Callable object-root admission, full keyword/vocabulary validation,
+dynamic evaluation, linked-profile checks, graph semantics, and runtime registration
+remain subsequent verifier stages. Closure follows all standard schema locations
+in reached complete documents, as described above.
+
 ## Canonical document assembly
 
 `DocumentFields::new(graph_id, profile, root_scope)` starts empty authored tables.
@@ -1039,8 +1085,9 @@ still must resolve expression names/types and hidden dependency cycles, enforce
 remaining MCP interfaces and graph observability, match linked implementation profiles,
 validate complete MCP descriptor schemas and callable object-root constraints,
 derive nested schema resources, and prove exact
-external-document/retrieval-URI closure offline. Assembly currently accepts extra
-external documents/URI roots because their schema reachability needs that resolver.
+external-document/retrieval-URI closure offline. Record assembly accepts extra
+external documents/URI roots; the explicit `schema_catalog` stage rejects those
+outside its rooted schema closure and policy/descriptor roles.
 Registration and authorization remain runtime work. `DocumentError` preserves
 structured causes and static diagnostics without retaining submitted values.
 
