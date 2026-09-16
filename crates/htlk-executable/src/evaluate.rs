@@ -100,6 +100,25 @@ pub trait EvaluationContext {
     ) -> Result<EvaluationValue, EvaluationError> {
         self.call(library, name, arguments, meter)
     }
+    /// Dispatches an admitted native call with concrete parameter/result constraints,
+    /// including instantiated callback signatures. Checked evaluation validates
+    /// ordinary arguments before dispatch and the result afterward. The native
+    /// implementation remains responsible for callback invocations.
+    fn call_typed(
+        &self,
+        expression: &Expression,
+        boundary: &crate::ExpressionCallType,
+        arguments: &[EvaluationArgument],
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<EvaluationValue, EvaluationError> {
+        self.call_at(
+            expression,
+            boundary.library,
+            &boundary.name,
+            arguments,
+            meter,
+        )
+    }
     /// Projects a computed value. The default supports literal record/list
     /// declarations and strict dynamic lookup. A verified execution context may
     /// use richer projection plans for library/schema-constrained results.

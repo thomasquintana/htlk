@@ -274,6 +274,15 @@ recursive generic equations fail. Callbacks require provable parameter/result
 compatibility, including contravariant parameters and covariant returns; static
 function references remain direct argument metadata, not ordinary values.
 
+`ExpressionAnalysis::calls` exposes each native call's fully instantiated
+`ExpressionCallType`, ordered by canonical AST path. It includes the exact library
+identity/function name, parameter ports (including concrete callback signatures),
+and return port. `CheckedExpression` enforces ordinary arguments before dispatch
+and return values afterward. Native contexts receive these constraints through
+`EvaluationContext::call_typed`; the default dispatches through `call_at` and `call`.
+Invalid arguments prevent invocation, pending dependencies postpone it, and a
+native function returning pending is rejected.
+
 Analysis rechecks environment and expression bounds and meters inference work,
 type copying/comparison, lookups, and stored metadata paths. Its derived output
 must also fit configured limits. Controlled-stack tests cover deep unary and

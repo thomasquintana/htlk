@@ -20,6 +20,7 @@ pub struct CheckedExpression<'a> {
     analysis: ExpressionAnalysis,
     nodes: BTreeMap<usize, usize>,
     checks: BTreeMap<usize, Vec<usize>>,
+    calls: BTreeMap<usize, usize>,
     limits: Limits,
 }
 impl<'a> CheckedExpression<'a> {
@@ -49,6 +50,10 @@ impl<'a> CheckedExpression<'a> {
                 .or_default()
                 .push(index);
         }
+        let mut calls = BTreeMap::new();
+        for (index, call) in analysis.calls().iter().enumerate() {
+            calls.insert(key(at(expression, &call.expression_path)?), index);
+        }
         Ok(Self {
             expression,
             context,
@@ -56,6 +61,7 @@ impl<'a> CheckedExpression<'a> {
             analysis,
             nodes,
             checks,
+            calls,
             limits: limits.clone(),
         })
     }
@@ -229,7 +235,39 @@ impl<C: EvaluationContext> EvaluationContext for CheckedContext<'_, '_, C> {
         arguments: &[EvaluationArgument],
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<V, Error> {
-        self.inner
-            .call_at(expression, library, name, arguments, meter)
+        meter.charge(u64::from(
+            (usize::BITS - self.plan.calls.len().leading_zeros()).max(1),
+        ))?;
+        let index = self
+            .plan
+            .calls
+            .get(&key(expression))
+            .ok_or(Error::UnresolvedType)?;
+        let boundary = &self.plan.analysis.calls()[*index];
+        if boundary.library != library
+            || &boundary.name != name
+            || boundary.parameters.len() != arguments.len()
+        {
+            return Err(Error::UnresolvedType);
+        }
+        for (argument, expected) in arguments.iter().zip(&boundary.parameters) {
+            meter.visit(1)?;
+            match (argument, expected.value_type().kind()) {
+                (EvaluationArgument::Function { .. }, crate::ValueTypeKind::Function { .. }) => (),
+                (EvaluationArgument::Value(V::Pending), _) => return Err(Error::OperandType),
+                (EvaluationArgument::Value(value), _) => {
+                    port(value, expected, self.schemas, meter)?
+                }
+                _ => return Err(Error::CallableAsValue),
+            }
+        }
+        let value = self
+            .inner
+            .call_typed(expression, boundary, arguments, meter)?;
+        if matches!(value, V::Pending) {
+            return Err(Error::OperandType);
+        }
+        port(&value, &boundary.returns, self.schemas, meter)?;
+        Ok(value)
     }
 }

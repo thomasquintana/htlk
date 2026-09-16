@@ -73,6 +73,20 @@ pub struct ExpressionNodeType {
     /// True only for a direct static function-reference argument.
     pub callable: bool,
 }
+/// A native call's fully instantiated boundary, after generic inference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpressionCallType {
+    /// Canonical child-index path of the call expression.
+    pub expression_path: Vec<usize>,
+    /// Declared implementation identity.
+    pub library: Digest,
+    /// Exact declared function name.
+    pub name: Identifier,
+    /// Positional parameter constraints, including static callback signatures.
+    pub parameters: Vec<Port>,
+    /// Result value and presence constraint.
+    pub returns: Port,
+}
 /// Static analysis result, not a verified executable or an automatically enforced
 /// runtime plan. Schema projection obligations must be resolved by the schema layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +94,7 @@ pub struct ExpressionAnalysis {
     result: Port,
     nodes: Vec<ExpressionNodeType>,
     checks: Vec<RuntimeTypeCheck>,
+    calls: Vec<ExpressionCallType>,
 }
 impl ExpressionAnalysis {
     /// Inferred root type and presence, independent of an expected boundary type.
@@ -93,6 +108,10 @@ impl ExpressionAnalysis {
     /// Runtime obligations in stable analysis order.
     pub fn runtime_checks(&self) -> &[RuntimeTypeCheck] {
         &self.checks
+    }
+    /// Instantiated native call boundaries in canonical AST path order.
+    pub fn calls(&self) -> &[ExpressionCallType] {
+        &self.calls
     }
 }
 
@@ -127,6 +146,7 @@ pub fn check_expression(
         holes: BTreeSet::new(),
         nodes: Vec::new(),
         checks: Vec::new(),
+        calls: Vec::new(),
         constraints: Vec::new(),
         operations: Vec::new(),
         deferred: Vec::new(),
@@ -223,10 +243,21 @@ pub fn check_expression(
             _ => (),
         }
     }
+    let mut calls = std::mem::take(&mut checker.calls);
+    for call in &mut calls {
+        for parameter in &mut call.parameters {
+            *parameter = checker.substitute_port(parameter, 0)?;
+            parameter.to_value(TypeContext::Signature, limits)?;
+        }
+        call.returns = checker.substitute_port(&call.returns, 0)?;
+        call.returns.to_value(TypeContext::Value, limits)?;
+    }
+    calls.sort_unstable_by(|a, b| a.expression_path.cmp(&b.expression_path));
     Ok(ExpressionAnalysis {
         result,
         nodes,
         checks,
+        calls,
     })
 }
 /// Checks a guard/contract as Boolean while retaining any required presence checks.
@@ -325,6 +356,7 @@ struct Checker<'a> {
     holes: BTreeSet<Identifier>,
     nodes: Vec<ExpressionNodeType>,
     checks: Vec<RuntimeTypeCheck>,
+    calls: Vec<ExpressionCallType>,
     constraints: Vec<Constraint>,
     operations: Vec<OperationConstraint>,
     deferred: Vec<(T, T, usize)>,
@@ -822,6 +854,20 @@ impl Checker<'_> {
                 self.constraint(&actual, expected, &child, false)?;
             }
         }
+        self.account(size_of_val(path))?;
+        self.account(name.as_str().len() + size_of::<ExpressionCallType>())?;
+        if self.calls.len() >= self.limits.max_collection_entries {
+            return Err(ExpressionTypeError::InferenceLimit);
+        }
+        let return_constraint = self.copy_port(&returns)?;
+        self.calls.try_reserve(1).map_err(allocation)?;
+        self.calls.push(ExpressionCallType {
+            expression_path: path.to_vec(),
+            library,
+            name: name.clone(),
+            parameters,
+            returns: return_constraint,
+        });
         Ok(returns)
     }
     fn instantiate(
