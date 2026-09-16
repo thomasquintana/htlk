@@ -4,6 +4,7 @@
 pub mod digest;
 
 mod binding_validation;
+mod checked_evaluate;
 mod document;
 mod envelope;
 mod evaluate;
@@ -18,6 +19,7 @@ mod native_schema;
 mod options;
 mod policy;
 mod record_accounting;
+mod runtime_type;
 mod schema_catalog;
 mod schema_locations;
 mod schema_resources;
@@ -26,6 +28,7 @@ mod type_check;
 mod types;
 mod uri_template;
 
+pub use checked_evaluate::CheckedExpression;
 pub use document::{CanonicalDocument, DocumentError, DocumentFields};
 pub use envelope::{EXECUTABLE_FORMAT, EXECUTABLE_VERSION, EnvelopeError, ExecutableEnvelope};
 pub use evaluate::{
@@ -55,6 +58,7 @@ pub use metadata::{
 pub use native_schema::{NativeSchemaError, NativeSchemaOptions, NativeSchemas};
 pub use options::{ExecutionLimits, ExecutionOptionsError, RetryPolicy};
 pub use policy::{EvaluatorLimits, PolicyDocument, PolicyError, PolicyFields};
+pub use runtime_type::{project_typed_value, validate_typed_value};
 pub use schema_catalog::{
     ResolvedSchema, SchemaCatalog, SchemaClosure, SchemaReference, SchemaReferenceKind,
 };

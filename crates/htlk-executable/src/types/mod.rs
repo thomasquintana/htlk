@@ -219,6 +219,64 @@ pub struct Port {
     required: bool,
 }
 
+pub(crate) fn builtin_record_type(
+    primitive: PrimitiveType,
+    limits: &Limits,
+) -> Result<Option<ValueType>, TypeError> {
+    use PrimitiveType as P;
+    use ValueTypeKind as K;
+    let make = |kind| ValueType::new(kind, TypeContext::Value, limits);
+    let string = || Port::new(ValueType::primitive(P::String), true);
+    let fields = match primitive {
+        P::Error => vec![("code".into(), string()), ("message".into(), string())],
+        P::Regex => vec![("pattern".into(), string()), ("flags".into(), string())],
+        P::ResourceSnapshot => {
+            let mut variants = Vec::new();
+            for (kind, field, ty) in [("text", "text", P::String), ("bytes", "data", P::Bytes)] {
+                let tag = make(K::Enum(vec![kind.into()]))?;
+                variants.push(make(K::Record(vec![
+                    ("kind".into(), Port::new(tag, true)),
+                    ("uri".into(), string()),
+                    (
+                        "mime_type".into(),
+                        Port::new(ValueType::primitive(P::String), false),
+                    ),
+                    (field.into(), Port::new(ValueType::primitive(ty), true)),
+                ]))?);
+            }
+            let contents = make(K::List(Box::new(make(K::Union(variants))?)))?;
+            vec![
+                ("server_identity".into(), string()),
+                ("descriptor_digest".into(), string()),
+                ("requested_uri".into(), string()),
+                ("contents".into(), Port::new(contents, true)),
+            ]
+        }
+        P::McpPromptResult => {
+            let role = make(K::Enum(vec!["user".into(), "assistant".into()]))?;
+            let message = make(K::Record(vec![
+                ("role".into(), Port::new(role, true)),
+                (
+                    "content".into(),
+                    Port::new(ValueType::primitive(P::Json), true),
+                ),
+            ]))?;
+            let messages = make(K::List(Box::new(message)))?;
+            let meta = make(K::Map(Box::new(ValueType::primitive(P::Json))))?;
+            vec![
+                ("messages".into(), Port::new(messages, true)),
+                (
+                    "description".into(),
+                    Port::new(ValueType::primitive(P::String), false),
+                ),
+                ("_meta".into(), Port::new(meta, false)),
+            ]
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(make(K::Record(fields))?))
+}
+
 impl Port {
     /// Combines an already normalized type and a presence flag. Use-site context
     /// and whole-record resource limits are checked on encoding or embedding.

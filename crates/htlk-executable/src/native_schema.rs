@@ -42,6 +42,7 @@ struct Root {
 /// have resource URIs replaced with opaque keys to preserve HTLK URI resolution.
 pub struct NativeSchemas {
     roots: BTreeMap<String, Root>,
+    schema_types: BTreeMap<Digest, String>,
 }
 impl NativeSchemas {
     /// Compiles all supplied schema documents without filesystem/network retrieval.
@@ -134,9 +135,16 @@ impl NativeSchemas {
             .prepare()
             .map_err(|_| NativeSchemaError::InvalidSchema)?;
         let mut roots = BTreeMap::new();
+        let mut schema_types = BTreeMap::new();
         let mut admission_work = 0usize;
         let mut admission_bytes = 0usize;
         for (uri, schema) in &documents {
+            let original = catalog
+                .document(uri)
+                .ok_or(NativeSchemaError::UnknownRoot)?;
+            if crate::embedded_schema_base(original, limits)? == *uri {
+                schema_types.insert(original.digest(), uri.clone());
+            }
             let object_only = object_root(
                 catalog,
                 uri,
@@ -169,7 +177,10 @@ impl NativeSchemas {
                 },
             );
         }
-        Ok(Self { roots })
+        Ok(Self {
+            roots,
+            schema_types,
+        })
     }
     /// Validates a JSON instance without mutating it or inserting defaults.
     ///
@@ -232,6 +243,23 @@ impl NativeSchemas {
     /// Original JCS identity of a compiled retrieval root.
     pub fn document_digest(&self, root_uri: &str) -> Option<Digest> {
         self.roots.get(root_uri).map(|r| r.digest)
+    }
+    /// Validates a schema-typed native value at its prescribed embedded root,
+    /// preserving the original native representation.
+    ///
+    /// # Errors
+    /// Returns missing prescribed root, input limits, or native engine failure.
+    pub fn validate_schema_value(
+        &self,
+        schema: &Digest,
+        value: &Value,
+        limits: &Limits,
+    ) -> Result<bool, NativeSchemaError> {
+        let uri = self
+            .schema_types
+            .get(schema)
+            .ok_or(NativeSchemaError::UnknownRoot)?;
+        self.validate_value(uri, value, limits)
     }
     /// Native implementation/profile identity (not a hash of caller-supplied schemas).
     ///

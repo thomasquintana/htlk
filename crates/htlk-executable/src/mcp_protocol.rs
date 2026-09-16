@@ -165,12 +165,25 @@ pub fn validate_resource_snapshot(
     requested_uri: &str,
     limits: &Limits,
 ) -> Result<(), McpValidationError> {
-    htlk_cbor::encode(value, limits)?;
     match binding.kind() {
         McpBindingKind::Resource { uri } if uri == requested_uri => (),
         McpBindingKind::Template { .. } => (),
         _ => return Err(McpValidationError::SnapshotIdentity),
     }
+    let m = snapshot_shape(value, limits)?;
+    if digest(m.get("server_identity"))? != binding.server().digest(limits)?
+        || digest(m.get("descriptor_digest"))? != binding.descriptor()
+        || text(m.get("requested_uri"))? != requested_uri
+    {
+        return Err(McpValidationError::SnapshotIdentity);
+    }
+    Ok(())
+}
+pub(crate) fn snapshot_shape<'a>(
+    value: &'a Value,
+    limits: &Limits,
+) -> Result<&'a Map, McpValidationError> {
+    htlk_cbor::encode(value, limits)?;
     let m = closed(
         value,
         &[
@@ -181,12 +194,9 @@ pub fn validate_resource_snapshot(
         ],
         &[],
     )?;
-    if digest(m.get("server_identity"))? != binding.server().digest(limits)?
-        || digest(m.get("descriptor_digest"))? != binding.descriptor()
-        || text(m.get("requested_uri"))? != requested_uri
-    {
-        return Err(McpValidationError::SnapshotIdentity);
-    }
+    digest(m.get("server_identity"))?;
+    digest(m.get("descriptor_digest"))?;
+    text(m.get("requested_uri"))?;
     let Some(Value::Array(contents)) = m.get("contents") else {
         return Err(McpValidationError::SnapshotShape);
     };
@@ -209,7 +219,7 @@ pub fn validate_resource_snapshot(
             _ => return Err(McpValidationError::SnapshotShape),
         }
     }
-    Ok(())
+    Ok(m)
 }
 fn closed<'a>(
     v: &'a Value,

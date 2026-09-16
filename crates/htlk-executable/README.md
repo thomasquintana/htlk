@@ -224,10 +224,11 @@ inputs. Regex compilation reserves its configured compiled-size allowance as a
 deterministic upper-bound fuel charge before calling the native compiler. Limits
 produce `E_EXPRESSION_LIMIT`, and absence misuse produces `E_EXPRESSION_ABSENT`.
 
-The evaluator validates representation/context and actual operand behavior. Full
-name/type verification, generic inference, callback compatibility, and schema-aware
-projection plans are still part of the continuing task-3 verifier work. A standalone
-evaluation is not proof that an entire graph is valid.
+The evaluator validates representation/context and actual operand behavior.
+`CheckedExpression` connects static name/type analysis to runtime enforcement.
+Schema-aware projection plans and exact native-registry matching remain part of
+the continuing task-3 verifier work. A standalone evaluation is not proof that
+an entire graph is valid.
 
 ### Static expression checking
 
@@ -282,8 +283,25 @@ This result is **analysis, not a verified executable**. Runtime obligations are
 not automatically enforced by producing the report. Schema-aware projection
 refinement is explicitly marked by `SchemaProjection`; those plans, full graph
 verification, and exact implementation-registry matching still require integration.
-The existing evaluator consumes frozen data and verified projection/function
-contexts; this analysis provides the metadata for that continuing work.
+`CheckedExpression::new` borrows immutable syntax and declarations, analyzes all
+branches, and rejects unresolved schema-projection obligations. Its `evaluate`
+method validates evaluated node results, actual-value boundary constraints, and
+declared reference roots, while retaining lazy Boolean and pending behavior.
+References must provide root bindings; typed projection derives optional-field
+absence from declarations instead of trusting independently supplied projected
+bindings. Templates come from the analyzed declaration environment.
+
+`validate_typed_value` admits actual native values without coercion, including
+structural records, unions, JSON, protocol values, and schema identities linked
+to their prescribed embedded roots. `project_typed_value` applies declared
+record/list/map/union projections. Undeclared extra fields cannot become visible
+through a union variant that does not declare them; missing map keys and invalid
+indices remain errors. Evaluator work and copy limits apply; native JSON Schema
+validation retains the native resource contract described above.
+
+The supplied execution context remains responsible for exact native function
+linkage and enforcing callback invocations. This adapter does not supply a linked
+registry or whole-graph verification.
 
 `Expression` is an immutable normalized tree with a read-only `ExpressionKind`.
 Supporting types are `ScalarLiteral`, `ValueReference`, `PathStep`, `FunctionId`,

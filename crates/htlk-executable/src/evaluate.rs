@@ -57,6 +57,16 @@ pub enum EvaluationOutcome {
 /// must preserve verified scope/type/projection rules and charge native work via
 /// the supplied meter. This is a context interface, not a replacement evaluator.
 pub trait EvaluationContext {
+    /// Checks an evaluated node against a verified type/boundary plan. Raw contexts
+    /// have no plan; checked contexts override this without changing evaluation order.
+    fn check_result(
+        &self,
+        _expression: &Expression,
+        _value: &EvaluationValue,
+        _meter: &mut EvaluationMeter<'_>,
+    ) -> Result<(), EvaluationError> {
+        Ok(())
+    }
     /// Resolves a reference and its verified projection, charging copies/work.
     fn resolve(
         &self,
@@ -78,6 +88,17 @@ pub trait EvaluationContext {
         _meter: &mut EvaluationMeter<'_>,
     ) -> Result<EvaluationValue, EvaluationError> {
         Err(EvaluationError::UnknownFunction)
+    }
+    /// Call-site-aware dispatch for contexts enforcing instantiated signatures.
+    fn call_at(
+        &self,
+        _expression: &Expression,
+        library: Digest,
+        name: &Identifier,
+        arguments: &[EvaluationArgument],
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<EvaluationValue, EvaluationError> {
+        self.call(library, name, arguments, meter)
     }
     /// Projects a computed value. The default supports literal record/list
     /// declarations and strict dynamic lookup. A verified execution context may
@@ -252,7 +273,53 @@ pub struct EvaluationMeter<'a> {
     usage: EvaluationUsage,
     depth: u64,
 }
-impl EvaluationMeter<'_> {
+impl<'a> EvaluationMeter<'a> {
+    pub(crate) fn new(
+        policy: &'a EvaluatorLimits,
+        codec: &Limits,
+    ) -> Result<Self, EvaluationError> {
+        codec.validate()?;
+        if [
+            policy.max_expression_depth,
+            policy.max_value_bytes,
+            policy.max_collection_visits,
+            policy.max_regex_bytes,
+            policy.max_regex_compiled_bytes,
+            policy.max_output_bytes,
+            policy.max_steps,
+        ]
+        .contains(&0)
+        {
+            return Err(EvaluationError::InvalidLimits);
+        }
+        let mut limits = codec.clone();
+        limits.max_document_bytes = limits
+            .max_document_bytes
+            .min(usize::try_from(policy.max_value_bytes).unwrap_or(usize::MAX));
+        Ok(Self {
+            policy,
+            codec: limits,
+            program_codec: codec.clone(),
+            usage: EvaluationUsage::default(),
+            depth: 0,
+        })
+    }
+    pub(crate) fn usage(&self) -> EvaluationUsage {
+        self.usage
+    }
+    pub(crate) fn program_limits(&self) -> &Limits {
+        &self.program_codec
+    }
+    pub(crate) fn intermediate<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, EvaluationError>,
+    ) -> Result<T, EvaluationError> {
+        let depth = self.depth;
+        self.depth = self.depth.max(2);
+        let result = operation(self);
+        self.depth = depth;
+        result
+    }
     /// Charges deterministic work before a native operation performs it.
     ///
     /// # Errors
@@ -296,7 +363,7 @@ impl EvaluationMeter<'_> {
         self.size(size)?;
         Ok(value.clone())
     }
-    fn inspect(&mut self, value: &Value) -> Result<usize, EvaluationError> {
+    pub(crate) fn inspect(&mut self, value: &Value) -> Result<usize, EvaluationError> {
         let size = htlk_cbor::encode(value, &self.codec)?.len();
         if size as u64 > self.policy.max_value_bytes {
             return Err(EvaluationError::Limit("value bytes"));
@@ -391,31 +458,8 @@ pub fn evaluate(
     codec: &Limits,
     policy: &EvaluatorLimits,
 ) -> Result<EvaluationResult, EvaluationError> {
-    if [
-        policy.max_expression_depth,
-        policy.max_value_bytes,
-        policy.max_collection_visits,
-        policy.max_regex_bytes,
-        policy.max_regex_compiled_bytes,
-        policy.max_output_bytes,
-        policy.max_steps,
-    ]
-    .contains(&0)
-    {
-        return Err(EvaluationError::InvalidLimits);
-    }
+    let mut meter = EvaluationMeter::new(policy, codec)?;
     expression.to_value(context, codec)?;
-    let mut limits = codec.clone();
-    limits.max_document_bytes = limits
-        .max_document_bytes
-        .min(usize::try_from(policy.max_value_bytes).unwrap_or(usize::MAX));
-    let mut meter = EvaluationMeter {
-        policy,
-        codec: limits,
-        program_codec: codec.clone(),
-        usage: EvaluationUsage::default(),
-        depth: 0,
-    };
     let value = run(expression, environment, &mut meter, 1)?;
     Ok(EvaluationResult {
         value,
@@ -439,6 +483,7 @@ fn run(
             let size = meter.inspect(v)?;
             meter.size(size)?;
         }
+        env.check_result(expr, &value, meter)?;
         Ok(value)
     });
     meter.depth = previous;
@@ -490,7 +535,7 @@ fn run_inner(
         E::Call {
             function,
             arguments,
-        } => call(function, arguments, env, meter, depth),
+        } => call(expr, function, arguments, env, meter, depth),
         E::FunctionRef { .. } => Err(EvaluationError::CallableAsValue),
         E::Render {
             template,
@@ -508,12 +553,28 @@ fn regex_literal(
     flags: &str,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<EvaluationValue, EvaluationError> {
-    if pattern.len() as u64 > meter.policy.max_regex_bytes {
-        return Err(EvaluationError::Limit("regex bytes"));
-    }
     meter.size(
         1 + 8 + header(pattern.len()) + pattern.len() + 6 + header(flags.len()) + flags.len(),
     )?;
+    compile_regex(pattern, flags, meter)?;
+    let value = Value::Map(Map::try_from_entries([
+        ("pattern".into(), Value::Text(meter.text(pattern)?)),
+        ("flags".into(), Value::Text(meter.text(flags)?)),
+    ])?);
+    meter.inspect(&value)?;
+    Ok(EvaluationValue::Present(value))
+}
+pub(crate) fn compile_regex(
+    pattern: &str,
+    flags: &str,
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<(), EvaluationError> {
+    if pattern.len() as u64 > meter.policy.max_regex_bytes {
+        return Err(EvaluationError::Limit("regex bytes"));
+    }
+    if !matches!(flags, "" | "i" | "m" | "s" | "im" | "is" | "ms" | "ims") {
+        return Err(EvaluationError::Regex);
+    }
     meter.charge(pattern.len() as u64)?;
     let compiled_limit =
         usize::try_from(meter.policy.max_regex_compiled_bytes).unwrap_or(usize::MAX);
@@ -531,12 +592,7 @@ fn regex_literal(
             regex::Error::CompiledTooBig(_) => EvaluationError::Limit("regex compiled bytes"),
             _ => EvaluationError::Regex,
         })?;
-    let value = Value::Map(Map::try_from_entries([
-        ("pattern".into(), Value::Text(meter.text(pattern)?)),
-        ("flags".into(), Value::Text(meter.text(flags)?)),
-    ])?);
-    meter.inspect(&value)?;
-    Ok(EvaluationValue::Present(value))
+    Ok(())
 }
 #[inline(never)]
 fn sequence(
@@ -659,6 +715,7 @@ fn binary(
 }
 #[inline(never)]
 fn call(
+    origin: &Expression,
     function: &crate::FunctionId,
     expressions: &[Expression],
     env: &impl EvaluationContext,
@@ -718,7 +775,7 @@ fn call(
         args.try_reserve(1).map_err(allocation)?;
         args.push(arg);
     }
-    let result = env.call(*library, name, &args, meter)?;
+    let result = env.call_at(origin, *library, name, &args, meter)?;
     if result == EvaluationValue::Pending {
         return Err(EvaluationError::OperandType);
     }
@@ -899,6 +956,14 @@ fn allocation(_: std::collections::TryReserveError) -> EvaluationError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvaluationError {
+    /// Static expression admission failed.
+    Analysis(crate::ExpressionTypeError),
+    /// Invalid ordinary value type metadata.
+    Type(crate::TypeError),
+    /// Native schema validation failed operationally.
+    NativeSchema(crate::NativeSchemaError),
+    /// A required schema or projection plan is unavailable.
+    UnresolvedType,
     /// Codec failure.
     Codec(htlk_cbor::Error),
     /// Expression/context failure.
@@ -956,6 +1021,21 @@ impl From<ExpressionError> for EvaluationError {
         Self::Expression(e)
     }
 }
+impl From<crate::TypeError> for EvaluationError {
+    fn from(e: crate::TypeError) -> Self {
+        Self::Type(e)
+    }
+}
+impl From<crate::NativeSchemaError> for EvaluationError {
+    fn from(e: crate::NativeSchemaError) -> Self {
+        Self::NativeSchema(e)
+    }
+}
+impl From<crate::ExpressionTypeError> for EvaluationError {
+    fn from(e: crate::ExpressionTypeError) -> Self {
+        Self::Analysis(e)
+    }
+}
 impl fmt::Display for EvaluationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {self:?}", self.code())
@@ -966,6 +1046,9 @@ impl std::error::Error for EvaluationError {
         match self {
             Self::Codec(e) => Some(e),
             Self::Expression(e) => Some(e),
+            Self::Type(e) => Some(e),
+            Self::Analysis(e) => Some(e),
+            Self::NativeSchema(e) => Some(e),
             _ => None,
         }
     }

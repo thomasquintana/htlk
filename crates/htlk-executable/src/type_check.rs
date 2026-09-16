@@ -1176,54 +1176,11 @@ impl Checker<'_> {
         Ok(Port::new(self.union(projected)?, !optional))
     }
     fn builtin_record(&mut self, primitive: P) -> Result<T, ExpressionTypeError> {
-        let string = || Port::new(T::primitive(P::String), true);
-        let fields = match primitive {
-            P::Error => vec![("code".into(), string()), ("message".into(), string())],
-            P::Regex => vec![("pattern".into(), string()), ("flags".into(), string())],
-            P::ResourceSnapshot => {
-                let mut variants = Vec::new();
-                for (kind, field, ty) in [("text", "text", P::String), ("bytes", "data", P::Bytes)]
-                {
-                    let tag = self.make(K::Enum(vec![kind.into()]))?;
-                    variants.push(self.make(K::Record(vec![
-                        ("kind".into(), Port::new(tag, true)),
-                        ("uri".into(), string()),
-                        (
-                            "mime_type".into(),
-                            Port::new(T::primitive(P::String), false),
-                        ),
-                        (field.into(), Port::new(T::primitive(ty), true)),
-                    ]))?);
-                }
-                let content = self.union(variants)?;
-                let contents = self.make(K::List(Box::new(content)))?;
-                vec![
-                    ("server_identity".into(), string()),
-                    ("descriptor_digest".into(), string()),
-                    ("requested_uri".into(), string()),
-                    ("contents".into(), Port::new(contents, true)),
-                ]
-            }
-            P::McpPromptResult => {
-                let role = self.make(K::Enum(vec!["user".into(), "assistant".into()]))?;
-                let message = self.make(K::Record(vec![
-                    ("role".into(), Port::new(role, true)),
-                    ("content".into(), Port::new(T::primitive(P::Json), true)),
-                ]))?;
-                let messages = self.make(K::List(Box::new(message)))?;
-                let meta = self.make(K::Map(Box::new(T::primitive(P::Json))))?;
-                vec![
-                    ("messages".into(), Port::new(messages, true)),
-                    (
-                        "description".into(),
-                        Port::new(T::primitive(P::String), false),
-                    ),
-                    ("_meta".into(), Port::new(meta, false)),
-                ]
-            }
-            _ => return Err(ExpressionTypeError::InvalidProjection),
-        };
-        self.make(K::Record(fields))
+        self.step(0)?;
+        let ty = crate::types::builtin_record_type(primitive, self.limits)?
+            .ok_or(ExpressionTypeError::InvalidProjection)?;
+        self.charge_type(&ty)?;
+        Ok(ty)
     }
     fn compatible(
         &mut self,
