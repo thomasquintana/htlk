@@ -14,12 +14,11 @@ harnesses. The root crate is a facade over two focused libraries:
 Both components depend on [`htlk-cbor`](crates/htlk-cbor/README.md), the shared
 deterministic CBOR codec. It provides validated values, bounded encoding,
 strict decoding, and structured errors. They also share
-[`htlk-executable`](crates/htlk-executable/README.md), whose `digest` module provides
-typed SHA-256 digests, strict digest parsing, and hashing raw bytes or canonical
-CBOR. Its `ExecutableEnvelope` API implements the version-0.1 outer package
-contract, including format/version and fingerprint checks. The compiler and
-runtime domain APIs are being defined; executable
-production and registration will use these shared components.
+[`htlk-executable`](crates/htlk-executable/README.md), which provides canonical
+Draft 0.1 graph records, offline schema/MCP validation, native expression execution,
+and the composed `verify_executable` boundary. It returns an immutable verified
+graph with checked runtime plans after exact host-policy and implementation linking.
+Compiler production and runtime registration call sites remain consumer work.
 
 ## Installation
 
@@ -36,8 +35,8 @@ directly.
 
 - [Draft 0.1 specifications and IR grammar](specs/README.md)
 - [Deterministic CBOR profile and API](crates/htlk-cbor/README.md)
-- [Executable foundations and digest API](crates/htlk-executable/README.md)
-- [Remaining executable/verifier work](docs/htlk-executable-roadmap.md)
+- [Executable verifier, native evaluation, and digest API](crates/htlk-executable/README.md)
+- [Executable/verifier completion checklist](docs/htlk-executable-roadmap.md)
 - [CI documentation artifacts and crates.io releases](CONTRIBUTING.md#releases)
 
 ## Development

@@ -851,6 +851,8 @@ dependencies = [
  "iri-string",
  "jsonschema",
  "regex",
+ "regex-automata",
+ "regex-syntax",
  "ryu-js",
  "serde",
  "serde_json",

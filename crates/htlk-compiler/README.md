@@ -1,12 +1,14 @@
 # htlk-compiler
 
-Natural-language compiler for the [Harness Toolkit](https://crates.io/crates/htlk).
+HTLK IR compiler foundations for the [Harness Toolkit](https://crates.io/crates/htlk).
 
-This crate compiles natural-language harness definitions into Harness Toolkit
-IR. Its domain API will be introduced as the compiler requirements are defined.
+The planned domain API compiles `.htlk` source and source bundles into canonical
+executable graphs. Source collection and natural-language planning are host work.
+Source parsing, imports, inspection, and graph composition remain to be implemented.
 
 The shared `htlk-cbor` dependency supplies deterministic encoding for future
-executable production. Graph payload schemas and compiler call sites are pending.
+executable production. `htlk-executable` supplies graph schemas and the composed
+`verify_executable` API; compiler production call sites remain pending.
 `htlk-executable::digest` supplies typed SHA-256 digests and canonical-CBOR hashing;
 the compiler will construct its specified graph identity preimages. The
 `ExecutableEnvelope` API packages payload bytes under the shared version-0.1

@@ -365,3 +365,114 @@ fn runtime_type_depth_on_controlled_stacks() {
         );
     }
 }
+
+#[test]
+fn optional_parent_presence_does_not_require_the_final_optional_member() {
+    use htlk_executable::{
+        CheckedExpression, EvaluationFrame, Expression, ExpressionContext as C,
+        ExpressionKind as E, ExpressionTypeEnvironment, ValueReference,
+    };
+    let codec = Limits::default();
+    let source = ValueReference::Input("value".parse().unwrap());
+    let mut env = ExpressionTypeEnvironment::default();
+    env.references.insert(
+        source.clone(),
+        Port::new(
+            record(vec![(
+                "parent",
+                record(vec![("child", T::primitive(P::Boolean), false)]),
+                false,
+            )]),
+            true,
+        ),
+    );
+    let expression = Expression::new(
+        E::Ref {
+            source: source.clone(),
+            path: vec![
+                PathStep::Field("parent".into()),
+                PathStep::Field("child".into()),
+            ],
+        },
+        C::Eval,
+        &codec,
+    )
+    .unwrap();
+    let checked = CheckedExpression::new(&expression, C::Eval, &env, None, &codec).unwrap();
+    let mut frame = EvaluationFrame::default();
+    frame
+        .bind(
+            source,
+            vec![],
+            Ok(EvaluationValue::Present(map(vec![("parent", map(vec![]))]))),
+            &codec,
+        )
+        .unwrap();
+    assert_eq!(
+        checked.evaluate(&frame, None, &policy()).unwrap().value,
+        EvaluationValue::Absent
+    );
+}
+
+#[test]
+fn declared_json_result_rejects_non_json_extra_fields_on_structural_error_values() {
+    use htlk_executable::{
+        CheckedExpression, EvaluationFrame, Expression, ExpressionContext as C,
+        ExpressionKind as E, ExpressionTypeEnvironment, ValueReference,
+    };
+    let limits = Limits::default();
+    let source = ValueReference::Input("error".parse().unwrap());
+    let mut env = ExpressionTypeEnvironment::default();
+    env.references
+        .insert(source.clone(), Port::new(T::primitive(P::Error), true));
+    let expression = Expression::new(
+        E::Ref {
+            source: source.clone(),
+            path: vec![],
+        },
+        C::Eval,
+        &limits,
+    )
+    .unwrap();
+    let expected = Port::new(T::primitive(P::Json), true);
+    let checked =
+        CheckedExpression::new(&expression, C::Eval, &env, Some(&expected), &limits).unwrap();
+    let mut frame = EvaluationFrame::default();
+    frame
+        .bind(
+            source,
+            vec![],
+            Ok(EvaluationValue::Present(map(vec![
+                ("code", Value::Text("test".into())),
+                ("message", Value::Text("test".into())),
+                ("extra", Value::Bytes(vec![1])),
+            ]))),
+            &limits,
+        )
+        .unwrap();
+    assert_eq!(
+        checked.evaluate(&frame, None, &policy()),
+        Err(Error::OperandType)
+    );
+}
+
+#[test]
+fn json_preparation_counts_collection_work_and_keeps_native_value_size_distinct() {
+    let value = Value::Text("\0".repeat(20));
+    let limits = Limits::default();
+    let mut budget = policy();
+    budget.max_value_bytes = htlk_cbor::encode(&value, &limits).unwrap().len() as u64;
+    validate_typed_value(&value, &T::primitive(P::Json), None, &limits, &budget).unwrap();
+    budget = policy();
+    budget.max_collection_visits = 1;
+    assert!(matches!(
+        validate_typed_value(
+            &Value::Array(vec![Value::Null, Value::Null]),
+            &T::primitive(P::Json),
+            None,
+            &limits,
+            &budget
+        ),
+        Err(Error::Limit(_))
+    ));
+}

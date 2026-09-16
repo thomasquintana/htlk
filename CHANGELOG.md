@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Composed `verify_executable` admission with an immutable verified graph, borrowed
+  checked execution plans, structured diagnostics, and exact host policy/profile linking.
+- Full scope binding coverage, whole-port compatibility, wait-dependency cycles,
+  observability, and per-use loop-body verification with deterministic derived plans.
+- Native host-library registry with complete manifest checks, prepaid work charges,
+  and checked higher-order callback forwarding without callable application values.
+- Schema-context-preserving projections, permitted dynamic-field access, optional
+  declaration tracking, and conservative schema-family refinement without coercion.
 - Static expression name/type analysis with generic inference, callback compatibility,
   presence tracking, bounded metadata, and explicit actual-value obligations.
 - Native expression evaluation with lazy conditions, explicit absence/pending/errors,

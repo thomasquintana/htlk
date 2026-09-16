@@ -119,6 +119,27 @@ pub trait EvaluationContext {
             meter,
         )
     }
+    /// Dispatches a checked callback by its admitted identity and actual signature.
+    /// Called by ExpressionCallType::invoke_callback after argument validation.
+    fn call_callback(
+        &self,
+        callback: &crate::ExpressionCallbackType,
+        arguments: &[EvaluationArgument],
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<EvaluationValue, EvaluationError> {
+        self.call(callback.library, &callback.name, arguments, meter)
+    }
+    /// Dispatches a checked callback with its concrete forwarding boundary. Hosts
+    /// implementing higher-order callbacks retain this boundary for nested calls.
+    fn call_callback_typed(
+        &self,
+        callback: &crate::ExpressionCallbackType,
+        _boundary: &crate::ExpressionCallType,
+        arguments: &[EvaluationArgument],
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<EvaluationValue, EvaluationError> {
+        self.call_callback(callback, arguments, meter)
+    }
     /// Projects a computed value. The default supports literal record/list
     /// declarations and strict dynamic lookup. A verified execution context may
     /// use richer projection plans for library/schema-constrained results.
@@ -291,6 +312,8 @@ pub struct EvaluationMeter<'a> {
     program_codec: Limits,
     usage: EvaluationUsage,
     depth: u64,
+    native_depth: u64,
+    expression_path: Vec<usize>,
 }
 impl<'a> EvaluationMeter<'a> {
     pub(crate) fn new(
@@ -321,10 +344,20 @@ impl<'a> EvaluationMeter<'a> {
             program_codec: codec.clone(),
             usage: EvaluationUsage::default(),
             depth: 0,
+            native_depth: 0,
+            expression_path: Vec::new(),
         })
     }
     pub(crate) fn usage(&self) -> EvaluationUsage {
         self.usage
+    }
+    pub(crate) fn remaining_steps(&self) -> u64 {
+        self.policy.max_steps.saturating_sub(self.usage.steps)
+    }
+    /// Current canonical child-index path during AST execution. Native callback
+    /// origins are supplied separately through their admitted call metadata.
+    pub fn expression_path(&self) -> &[usize] {
+        &self.expression_path
     }
     pub(crate) fn program_limits(&self) -> &Limits {
         &self.program_codec
@@ -337,6 +370,27 @@ impl<'a> EvaluationMeter<'a> {
         self.depth = self.depth.max(2);
         let result = operation(self);
         self.depth = depth;
+        result
+    }
+    pub(crate) fn callback<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, EvaluationError>,
+    ) -> Result<T, EvaluationError> {
+        self.charge(1)?;
+        let depth = self
+            .native_depth
+            .checked_add(1)
+            .ok_or(EvaluationError::Limit("callback depth"))?;
+        let maximum = self
+            .policy
+            .max_expression_depth
+            .min(self.program_codec.max_depth as u64);
+        if self.depth.checked_add(depth).is_none_or(|n| n > maximum) {
+            return Err(EvaluationError::Limit("callback depth"));
+        }
+        self.native_depth = depth;
+        let result = self.intermediate(operation);
+        self.native_depth -= 1;
         result
     }
     /// Charges deterministic work before a native operation performs it.
@@ -479,7 +533,20 @@ pub fn evaluate(
 ) -> Result<EvaluationResult, EvaluationError> {
     let mut meter = EvaluationMeter::new(policy, codec)?;
     expression.to_value(context, codec)?;
-    let value = run(expression, environment, &mut meter, 1)?;
+    let value = run(expression, environment, &mut meter, 1, None)?;
+    Ok(EvaluationResult {
+        value,
+        usage: meter.usage,
+    })
+}
+pub(crate) fn evaluate_admitted(
+    expression: &Expression,
+    environment: &impl EvaluationContext,
+    codec: &Limits,
+    policy: &EvaluatorLimits,
+) -> Result<EvaluationResult, EvaluationError> {
+    let mut meter = EvaluationMeter::new(policy, codec)?;
+    let value = run(expression, environment, &mut meter, 1, None)?;
     Ok(EvaluationResult {
         value,
         usage: meter.usage,
@@ -490,11 +557,16 @@ fn run(
     env: &impl EvaluationContext,
     meter: &mut EvaluationMeter<'_>,
     depth: u64,
+    child: Option<usize>,
 ) -> Result<EvaluationValue, EvaluationError> {
     if depth > meter.policy.max_expression_depth {
         return Err(EvaluationError::Limit("expression depth"));
     }
     meter.charge(1)?;
+    if let Some(index) = child {
+        meter.expression_path.try_reserve(1).map_err(allocation)?;
+        meter.expression_path.push(index);
+    }
     let previous = meter.depth;
     meter.depth = depth;
     let result = run_inner(expr, env, meter, depth).and_then(|value| {
@@ -506,6 +578,9 @@ fn run(
         Ok(value)
     });
     meter.depth = previous;
+    if child.is_some() {
+        meter.expression_path.pop();
+    }
     result
 }
 fn run_inner(
@@ -531,7 +606,7 @@ fn run_inner(
             Ok(EvaluationValue::Present(value))
         }
         E::Ref { source, path } => env.resolve(source, path, meter),
-        E::Get { value, path } => match run(value, env, meter, depth + 1)? {
+        E::Get { value, path } => match run(value, env, meter, depth + 1, Some(0))? {
             EvaluationValue::Present(result) => env.project(value, &result, path, meter),
             EvaluationValue::Pending => Ok(EvaluationValue::Pending),
             EvaluationValue::Absent => Err(EvaluationError::AbsentOperand),
@@ -543,7 +618,7 @@ fn run_inner(
             left,
             right,
         } => binary(*operator, left, right, env, meter, depth),
-        E::Not(value) => match run(value, env, meter, depth + 1)? {
+        E::Not(value) => match run(value, env, meter, depth + 1, Some(0))? {
             EvaluationValue::Present(Value::Bool(v)) => {
                 Ok(EvaluationValue::Present(Value::Bool(!v)))
             }
@@ -623,9 +698,9 @@ fn sequence(
     let mut output = Vec::new();
     let mut size = header(values.len());
     meter.size(size)?;
-    for expr in values {
+    for (index, expr) in values.iter().enumerate() {
         meter.visit(1)?;
-        match run(expr, env, meter, depth + 1)? {
+        match run(expr, env, meter, depth + 1, Some(index))? {
             EvaluationValue::Present(value) => {
                 size = size
                     .checked_add(meter.inspect(&value)?)
@@ -649,9 +724,9 @@ fn record(
 ) -> Result<EvaluationValue, EvaluationError> {
     let mut output = Vec::new();
     let mut payload = 0usize;
-    for (key, expr) in fields {
+    for (index, (key, expr)) in fields.iter().enumerate() {
         meter.visit(1)?;
-        match run(expr, env, meter, depth + 1)? {
+        match run(expr, env, meter, depth + 1, Some(index))? {
             EvaluationValue::Present(value) => {
                 for n in [key.len(), header(key.len()), meter.inspect(&value)?] {
                     payload = payload
@@ -683,7 +758,7 @@ fn binary(
     meter: &mut EvaluationMeter<'_>,
     depth: u64,
 ) -> Result<EvaluationValue, EvaluationError> {
-    let left = match run(left, env, meter, depth + 1)? {
+    let left = match run(left, env, meter, depth + 1, Some(0))? {
         EvaluationValue::Present(v) => v,
         EvaluationValue::Pending => return Ok(EvaluationValue::Pending),
         EvaluationValue::Absent => return Err(EvaluationError::AbsentOperand),
@@ -696,7 +771,7 @@ fn binary(
             return Ok(EvaluationValue::Present(Value::Bool(value)));
         }
     }
-    let right = match run(right, env, meter, depth + 1)? {
+    let right = match run(right, env, meter, depth + 1, Some(1))? {
         EvaluationValue::Present(v) => v,
         EvaluationValue::Pending => return Ok(EvaluationValue::Pending),
         EvaluationValue::Absent => return Err(EvaluationError::AbsentOperand),
@@ -742,7 +817,7 @@ fn call(
     depth: u64,
 ) -> Result<EvaluationValue, EvaluationError> {
     if let crate::FunctionId::Core(core) = function {
-        let value = run(&expressions[0], env, meter, depth + 1)?;
+        let value = run(&expressions[0], env, meter, depth + 1, Some(0))?;
         if value == EvaluationValue::Pending {
             return Ok(value);
         }
@@ -773,7 +848,7 @@ fn call(
         return Err(EvaluationError::UnknownFunction);
     };
     let mut args = Vec::new();
-    for expr in expressions {
+    for (index, expr) in expressions.iter().enumerate() {
         meter.visit(1)?;
         let arg = if let E::FunctionRef { library, name } = expr.kind() {
             if depth + 1 > meter.policy.max_expression_depth {
@@ -785,7 +860,7 @@ fn call(
                 name: name.clone(),
             }
         } else {
-            let value = run(expr, env, meter, depth + 1)?;
+            let value = run(expr, env, meter, depth + 1, Some(index))?;
             if value == EvaluationValue::Pending {
                 return Ok(value);
             }
@@ -825,9 +900,11 @@ fn render(
         return Err(EvaluationError::TemplateArguments);
     }
     let mut args = BTreeMap::new();
-    for ((name, port), (_, expr)) in template.parameters().iter().zip(expressions) {
+    for (index, ((name, port), (_, expr))) in
+        template.parameters().iter().zip(expressions).enumerate()
+    {
         meter.visit(1)?;
-        let value = match run(expr, env, meter, depth + 1)? {
+        let value = match run(expr, env, meter, depth + 1, Some(index))? {
             EvaluationValue::Present(v) => v,
             EvaluationValue::Pending => return Ok(EvaluationValue::Pending),
             EvaluationValue::Absent => return Err(EvaluationError::AbsentOperand),
@@ -975,6 +1052,10 @@ fn allocation(_: std::collections::TryReserveError) -> EvaluationError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvaluationError {
+    /// Requested scope-use/expression site is not part of the admitted executable.
+    UnknownExpression,
+    /// Exact host-linked library admission failed.
+    Registry(Box<crate::NativeRegistryError>),
     /// Static expression admission failed.
     Analysis(crate::ExpressionTypeError),
     /// Invalid ordinary value type metadata.
@@ -1055,6 +1136,11 @@ impl From<crate::ExpressionTypeError> for EvaluationError {
         Self::Analysis(e)
     }
 }
+impl From<crate::NativeRegistryError> for EvaluationError {
+    fn from(e: crate::NativeRegistryError) -> Self {
+        Self::Registry(Box::new(e))
+    }
+}
 impl fmt::Display for EvaluationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {self:?}", self.code())
@@ -1067,6 +1153,7 @@ impl std::error::Error for EvaluationError {
             Self::Expression(e) => Some(e),
             Self::Type(e) => Some(e),
             Self::Analysis(e) => Some(e),
+            Self::Registry(e) => Some(e.as_ref()),
             Self::NativeSchema(e) => Some(e),
             _ => None,
         }

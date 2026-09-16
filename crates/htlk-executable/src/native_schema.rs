@@ -43,6 +43,7 @@ struct Root {
 pub struct NativeSchemas {
     roots: BTreeMap<String, Root>,
     schema_types: BTreeMap<Digest, String>,
+    catalog: SchemaCatalog,
 }
 impl NativeSchemas {
     /// Compiles all supplied schema documents without filesystem/network retrieval.
@@ -56,12 +57,34 @@ impl NativeSchemas {
         options: NativeSchemaOptions,
         limits: &Limits,
     ) -> Result<Self, NativeSchemaError> {
+        Self::compile_diagnostic(catalog, options, limits).map_err(|diagnostic| diagnostic.error)
+    }
+    /// Compiles with original schema-document/pointer locations on failures.
+    ///
+    /// # Errors
+    /// Returns redacted schema/profile/resource errors and their location when known.
+    pub fn compile_diagnostic(
+        catalog: &SchemaCatalog,
+        options: NativeSchemaOptions,
+        limits: &Limits,
+    ) -> Result<Self, NativeSchemaDiagnostic> {
+        let mut location = None;
+        Self::compile_at(catalog, options, limits, &mut location)
+            .map_err(|error| NativeSchemaDiagnostic { location, error })
+    }
+    fn compile_at(
+        catalog: &SchemaCatalog,
+        options: NativeSchemaOptions,
+        limits: &Limits,
+        location: &mut Option<SchemaDiagnosticLocation>,
+    ) -> Result<Self, NativeSchemaError> {
         if options.max_pattern_bytes == 0 || options.max_regex_compiled_bytes == 0 {
             return Err(NativeSchemaError::InvalidOptions);
         }
         let uris: Vec<_> = catalog.retrieval_uris().collect();
         catalog.reference_closure(&uris, limits)?;
         let mut documents = BTreeMap::new();
+        let mut projection_admission = crate::schema_projection::ProjectionAdmission::default();
         let mut plan_size = PlanSize {
             total: 0,
             document: 0,
@@ -71,19 +94,38 @@ impl NativeSchemas {
             let document = catalog
                 .document(uri)
                 .ok_or(SchemaResourceError::UnknownDocument)?;
+            *location = Some(SchemaDiagnosticLocation {
+                document: document.digest(),
+                pointer: JsonPointer::new("", limits).map_err(SchemaResourceError::from)?,
+            });
             let locations =
                 SchemaLocations::new(document, limits).map_err(SchemaResourceError::from)?;
             let resources = SchemaResources::new(document, uri, limits)?;
             let mut native = parse(document, limits)?;
             for pointer in locations.pointers() {
+                *location = Some(SchemaDiagnosticLocation {
+                    document: document.digest(),
+                    pointer: pointer.clone(),
+                });
                 let value = pointer
                     .resolve(document)
                     .map_err(SchemaResourceError::from)?;
                 check_profile(value, options)?;
             }
-            jsonschema::draft202012::meta::validate(&native)
-                .map_err(|_| NativeSchemaError::InvalidSchema)?;
+            jsonschema::draft202012::meta::validate(&native).map_err(|error| {
+                if let Ok(pointer) = JsonPointer::new(error.instance_path().as_str(), limits) {
+                    *location = Some(SchemaDiagnosticLocation {
+                        document: document.digest(),
+                        pointer,
+                    });
+                }
+                NativeSchemaError::InvalidSchema
+            })?;
             for pointer in locations.pointers() {
+                *location = Some(SchemaDiagnosticLocation {
+                    document: document.digest(),
+                    pointer: pointer.clone(),
+                });
                 let Some(map) = native
                     .pointer_mut(&pointer.to_string())
                     .and_then(Json::as_object_mut)
@@ -94,6 +136,19 @@ impl NativeSchemas {
                 // them from compiler copies so legacy keyword extensions cannot
                 // introduce resources absent from the standard location index.
                 map.retain(|key, _| standard_keyword(key));
+                // Private, non-asserting annotations preserve declared-field
+                // presence through the native evaluator's reference/dynamic scope.
+                // Authored unknown annotations were removed above, so they cannot
+                // impersonate this marker. Original JCS bytes are unchanged.
+                let fields = projection_admission
+                    .fields(catalog, uri, pointer, limits)?
+                    .into_iter()
+                    .map(Json::String)
+                    .collect();
+                map.insert(
+                    crate::schema_projection::DECLARED_FIELDS.into(),
+                    Json::Array(fields),
+                );
                 if pointer.tokens().is_empty() || map.contains_key("$id") {
                     map.insert(
                         "$id".into(),
@@ -126,6 +181,7 @@ impl NativeSchemas {
         let mut registry = jsonschema::Registry::new()
             .draft(jsonschema::Draft::Draft202012)
             .retriever(NoRetrieval);
+        *location = None;
         for (uri, schema) in &documents {
             registry = registry
                 .add(internal_uri(uri), schema)
@@ -142,6 +198,10 @@ impl NativeSchemas {
             let original = catalog
                 .document(uri)
                 .ok_or(NativeSchemaError::UnknownRoot)?;
+            *location = Some(SchemaDiagnosticLocation {
+                document: original.digest(),
+                pointer: JsonPointer::new("", limits).map_err(SchemaResourceError::from)?,
+            });
             if crate::embedded_schema_base(original, limits)? == *uri {
                 schema_types.insert(original.digest(), uri.clone());
             }
@@ -180,6 +240,7 @@ impl NativeSchemas {
         Ok(Self {
             roots,
             schema_types,
+            catalog: catalog.clone(),
         })
     }
     /// Validates a JSON instance without mutating it or inserting defaults.
@@ -260,6 +321,53 @@ impl NativeSchemas {
             .get(schema)
             .ok_or(NativeSchemaError::UnknownRoot)?;
         self.validate_value(uri, value, limits)
+    }
+    pub(crate) fn validate_schema_document(
+        &self,
+        schema: &Digest,
+        value: &JsonDocument,
+        limits: &Limits,
+    ) -> Result<bool, NativeSchemaError> {
+        let uri = self
+            .schema_types
+            .get(schema)
+            .ok_or(NativeSchemaError::UnknownRoot)?;
+        self.validate(uri, value, limits)
+    }
+    pub(crate) fn has_schema_type(&self, schema: &Digest) -> bool {
+        self.schema_types.contains_key(schema)
+    }
+    pub(crate) fn projection_type(
+        &self,
+        schema: &Digest,
+        path: &[crate::PathStep],
+        limits: &Limits,
+    ) -> Result<crate::ValueType, NativeSchemaError> {
+        let uri = self
+            .schema_types
+            .get(schema)
+            .ok_or(NativeSchemaError::UnknownRoot)?;
+        crate::schema_hints::projection_type(&self.catalog, uri, path, limits)
+    }
+    pub(crate) fn projection_evaluation(
+        &self,
+        schema: &Digest,
+        instance: &JsonDocument,
+        output: &mut impl std::io::Write,
+        limits: &Limits,
+    ) -> Result<(), NativeSchemaError> {
+        let uri = self
+            .schema_types
+            .get(schema)
+            .ok_or(NativeSchemaError::UnknownRoot)?;
+        let root = self.roots.get(uri).ok_or(NativeSchemaError::UnknownRoot)?;
+        let value = parse(instance, limits)?;
+        let evaluation = root.validator.evaluate(&value);
+        if !evaluation.is_valid() {
+            return Err(NativeSchemaError::EngineFailure);
+        }
+        serde_json::to_writer(output, &evaluation.hierarchical())
+            .map_err(|_| NativeSchemaError::EngineFailure)
     }
     /// Native implementation/profile identity (not a hash of caller-supplied schemas).
     ///
@@ -520,8 +628,36 @@ impl jsonschema::Retrieve for NoRetrieval {
 
 /// Native validation failures contain no submitted schema/instance contents.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchemaDiagnosticLocation {
+    /// Original raw JCS document digest, never a private rewritten resource URI.
+    pub document: Digest,
+    /// Schema location within the original document.
+    pub pointer: JsonPointer,
+}
+/// Redacted native schema admission failure with an original canonical location.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeSchemaDiagnostic {
+    /// Location when the failure belongs to one known schema node/document.
+    pub location: Option<SchemaDiagnosticLocation>,
+    /// Underlying native schema failure.
+    pub error: NativeSchemaError,
+}
+impl fmt::Display for NativeSchemaDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "schema at {:?}: {}", self.location, self.error)
+    }
+}
+impl std::error::Error for NativeSchemaDiagnostic {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+/// Native validation failures contain no submitted schema/instance contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NativeSchemaError {
+    /// A derived ordinary type exceeded its representation limits.
+    Type(crate::TypeError),
     /// Private native compilation input exceeds document/aggregate byte ceilings.
     CompilationInputLimit,
     /// JSON input limit/profile failure.
@@ -550,6 +686,11 @@ impl From<JsonError> for NativeSchemaError {
         Self::Json(e)
     }
 }
+impl From<crate::TypeError> for NativeSchemaError {
+    fn from(e: crate::TypeError) -> Self {
+        Self::Type(e)
+    }
+}
 impl From<SchemaResourceError> for NativeSchemaError {
     fn from(e: SchemaResourceError) -> Self {
         Self::Resources(e)
@@ -564,6 +705,7 @@ impl std::error::Error for NativeSchemaError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Json(e) => Some(e),
+            Self::Type(e) => Some(e),
             Self::Resources(e) => Some(e),
             _ => None,
         }

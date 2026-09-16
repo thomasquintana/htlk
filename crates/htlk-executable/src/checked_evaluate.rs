@@ -2,12 +2,12 @@
 use crate::{
     EvaluationArgument, EvaluationContext, EvaluationError as Error, EvaluationMeter,
     EvaluationOutcome, EvaluationResult, EvaluationValue as V, EvaluatorLimits, Expression,
-    ExpressionAnalysis, ExpressionContext, ExpressionKind as E, ExpressionTypeEnvironment,
-    Identifier, NativeSchemas, PathStep, Port, PromptTemplate, RuntimeTypeCheckKind as Check,
-    ValueReference, digest::Digest,
+    ExpressionAnalysis, ExpressionContext, ExpressionTypeEnvironment, Identifier, NativeSchemas,
+    PathStep, Port, PromptTemplate, RuntimeTypeCheckKind as Check, ValueReference, digest::Digest,
 };
 use htlk_cbor::{Limits, Value};
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::{cell::RefCell, collections::BTreeMap};
 
 /// A statically admitted expression with enforced actual-value constraints.
 /// Borrows immutable syntax/declarations and rejects unresolved schema projections.
@@ -16,12 +16,10 @@ use std::collections::BTreeMap;
 pub struct CheckedExpression<'a> {
     expression: &'a Expression,
     context: ExpressionContext,
-    environment: &'a ExpressionTypeEnvironment,
-    analysis: ExpressionAnalysis,
-    nodes: BTreeMap<usize, usize>,
-    checks: BTreeMap<usize, Vec<usize>>,
-    calls: BTreeMap<usize, usize>,
+    pub(crate) environment: &'a ExpressionTypeEnvironment,
+    analysis: Cow<'a, ExpressionAnalysis>,
     limits: Limits,
+    pub(crate) schemas: Option<&'a NativeSchemas>,
 }
 impl<'a> CheckedExpression<'a> {
     /// Analyzes all branches and prepares node-local runtime enforcement.
@@ -35,35 +33,81 @@ impl<'a> CheckedExpression<'a> {
         expected: Option<&Port>,
         limits: &Limits,
     ) -> Result<Self, Error> {
-        let analysis = crate::check_expression(expression, context, environment, expected, limits)?;
-        let mut nodes = BTreeMap::new();
-        let mut checks: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for (index, node) in analysis.nodes().iter().enumerate() {
-            nodes.insert(key(at(expression, &node.expression_path)?), index);
-        }
-        for (index, check) in analysis.runtime_checks().iter().enumerate() {
-            if matches!(check.kind, Check::SchemaProjection { .. }) {
+        Self::prepare(expression, context, environment, expected, None, limits)
+    }
+    /// Admits schema projections against immutable offline validators. The admitted
+    /// validators remain pinned for evaluation, including native callback checks.
+    ///
+    /// # Errors
+    /// Returns static typing, missing prescribed schema roots, or resource errors.
+    pub fn with_schemas(
+        expression: &'a Expression,
+        context: ExpressionContext,
+        environment: &'a ExpressionTypeEnvironment,
+        expected: Option<&Port>,
+        schemas: &'a NativeSchemas,
+        limits: &Limits,
+    ) -> Result<Self, Error> {
+        Self::prepare(
+            expression,
+            context,
+            environment,
+            expected,
+            Some(schemas),
+            limits,
+        )
+    }
+    fn prepare(
+        expression: &'a Expression,
+        context: ExpressionContext,
+        environment: &'a ExpressionTypeEnvironment,
+        expected: Option<&Port>,
+        schemas: Option<&'a NativeSchemas>,
+        limits: &Limits,
+    ) -> Result<Self, Error> {
+        let analysis = match schemas {
+            Some(schemas) => crate::check_expression_with_schemas(
+                expression,
+                context,
+                environment,
+                expected,
+                schemas,
+                limits,
+            )?,
+            None => crate::check_expression(expression, context, environment, expected, limits)?,
+        };
+        for check in analysis.runtime_checks() {
+            if let Check::SchemaProjection { schema, .. } = check.kind
+                && !schemas.is_some_and(|schemas| schemas.has_schema_type(&schema))
+            {
                 return Err(Error::UnresolvedType);
             }
-            checks
-                .entry(key(at(expression, &check.expression_path)?))
-                .or_default()
-                .push(index);
-        }
-        let mut calls = BTreeMap::new();
-        for (index, call) in analysis.calls().iter().enumerate() {
-            calls.insert(key(at(expression, &call.expression_path)?), index);
         }
         Ok(Self {
             expression,
             context,
             environment,
-            analysis,
-            nodes,
-            checks,
-            calls,
+            analysis: Cow::Owned(analysis),
             limits: limits.clone(),
+            schemas,
         })
+    }
+    pub(crate) fn borrow_admitted(
+        expression: &'a Expression,
+        context: ExpressionContext,
+        environment: &'a ExpressionTypeEnvironment,
+        analysis: &'a ExpressionAnalysis,
+        schemas: &'a NativeSchemas,
+        limits: &Limits,
+    ) -> Self {
+        Self {
+            expression,
+            context,
+            environment,
+            analysis: Cow::Borrowed(analysis),
+            schemas: Some(schemas),
+            limits: limits.clone(),
+        }
     }
     /// The complete static analysis used by this adapter.
     pub fn analysis(&self) -> &ExpressionAnalysis {
@@ -80,44 +124,481 @@ impl<'a> CheckedExpression<'a> {
         schemas: Option<&NativeSchemas>,
         policy: &EvaluatorLimits,
     ) -> Result<EvaluationResult, Error> {
-        crate::evaluate(
+        crate::evaluate::evaluate_admitted(
             self.expression,
-            self.context,
             &CheckedContext {
                 plan: self,
                 inner: context,
-                schemas,
+                schemas: self.schemas.or(schemas),
+                trace: RefCell::new(SchemaTrace::default()),
             },
             &self.limits,
             policy,
         )
     }
-}
-fn key(expression: &Expression) -> usize {
-    std::ptr::from_ref(expression) as usize
-}
-fn at<'a>(mut expression: &'a Expression, path: &[usize]) -> Result<&'a Expression, Error> {
-    for &index in path {
-        expression = match expression.kind() {
-            E::Not(value) | E::Get { value, .. } if index == 0 => value,
-            E::Binary { left, .. } if index == 0 => left,
-            E::Binary { right, .. } if index == 1 => right,
-            E::Call { arguments, .. } | E::List(arguments) => {
-                arguments.get(index).ok_or(Error::UnresolvedType)?
-            }
-            E::Record(fields) => &fields.get(index).ok_or(Error::UnresolvedType)?.1,
-            E::Render {
-                arguments: fields, ..
-            } => &fields.get(index).ok_or(Error::UnresolvedType)?.1,
-            _ => return Err(Error::UnresolvedType),
-        };
+    /// Context admitted during construction; evaluation cannot change it.
+    pub fn context(&self) -> ExpressionContext {
+        self.context
     }
-    Ok(expression)
+}
+impl crate::ExpressionCallType {
+    /// Invokes a callback with values and/or other already admitted static
+    /// callbacks. Function arguments name slots of this enclosing call, never
+    /// function identities read from application values. Forwarded signatures are
+    /// checked against both actual and receiving higher-order parameter types.
+    ///
+    /// # Errors
+    /// Returns invalid slots/arity/types/presence, pending state, or shared limits.
+    pub fn invoke_callback_with(
+        &self,
+        index: usize,
+        arguments: &[CallbackArgument<'_>],
+        context: &(impl EvaluationContext + ?Sized),
+        schemas: Option<&NativeSchemas>,
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<V, Error> {
+        meter.callback(|meter| {
+            let invocation = prepare_forwarded_callback(self, index, arguments, schemas, meter)?;
+            let result = context.call_callback_typed(
+                invocation.callback,
+                &invocation.boundary,
+                &invocation.arguments,
+                meter,
+            )?;
+            if matches!(result, V::Pending) {
+                return Err(Error::OperandType);
+            }
+            port(&result, &invocation.boundary.returns, schemas, meter)?;
+            port(&result, invocation.expected_return, schemas, meter)?;
+            Ok(result)
+        })
+    }
+    /// Invokes an admitted direct callback with ordinary value arguments. Enforces
+    /// both the receiving parameter's function type and the callback's actual
+    /// instantiated signature, including presence and variance-sensitive results.
+    /// Shares the caller's meter and bounds recursive callback depth by both the
+    /// expression policy and codec depth ceiling. Callback
+    /// intermediates use the value ceiling; the enclosing expression owns the
+    /// final output ceiling. Exact native implementation linkage remains the
+    /// supplied context's responsibility.
+    ///
+    /// # Errors
+    /// Returns unknown callback/arity, invalid or pending arguments/results,
+    /// schema/type errors, or exhausted evaluator limits. This value-argument
+    /// entry point does not accept higher-order callable arguments.
+    pub fn invoke_callback(
+        &self,
+        argument_index: usize,
+        arguments: &[V],
+        context: &(impl EvaluationContext + ?Sized),
+        schemas: Option<&NativeSchemas>,
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<V, Error> {
+        meter.callback(|meter| {
+            let invocation = prepare_callback(self, argument_index, arguments, schemas, meter)?;
+            let result =
+                context.call_callback(invocation.callback, &invocation.arguments, meter)?;
+            if matches!(result, V::Pending) {
+                return Err(Error::OperandType);
+            }
+            port(&result, invocation.actual_return, schemas, meter)?;
+            port(&result, invocation.expected_return, schemas, meter)?;
+            Ok(result)
+        })
+    }
+}
+/// Arguments to checked callback invocation; callable capabilities stay separate
+/// from native application values and refer only to statically admitted slots.
+pub enum CallbackArgument<'a> {
+    /// Borrowed native value or settled absence; pending is rejected.
+    Value(&'a V),
+    /// Positional function-reference argument of the enclosing native call.
+    Function(usize),
+}
+struct ForwardedInvocation<'a> {
+    callback: &'a crate::ExpressionCallbackType,
+    boundary: crate::ExpressionCallType,
+    arguments: Vec<EvaluationArgument>,
+    expected_return: &'a Port,
+}
+#[inline(never)]
+fn prepare_forwarded_callback<'a>(
+    boundary: &'a crate::ExpressionCallType,
+    index: usize,
+    arguments: &[CallbackArgument<'_>],
+    schemas: Option<&NativeSchemas>,
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<ForwardedInvocation<'a>, Error> {
+    use crate::ValueTypeKind as K;
+    meter.visit(1)?;
+    let lookup = |index| {
+        boundary
+            .callbacks
+            .binary_search_by_key(&index, |c| c.argument_index)
+            .ok()
+            .and_then(|i| boundary.callbacks.get(i))
+            .ok_or(Error::UnknownFunction)
+    };
+    let callback = lookup(index)?;
+    let expected = boundary
+        .parameters
+        .get(index)
+        .ok_or(Error::UnresolvedType)?;
+    for ty in [&callback.signature, expected.value_type()] {
+        meter.charge(
+            ty.encode(crate::TypeContext::Signature, meter.program_limits())?
+                .len() as u64,
+        )?;
+    }
+    let K::Function {
+        parameters: actual,
+        returns,
+    } = callback.signature.kind()
+    else {
+        return Err(Error::UnresolvedType);
+    };
+    let K::Function {
+        parameters: expected,
+        returns: expected_return,
+    } = expected.value_type().kind()
+    else {
+        return Err(Error::UnresolvedType);
+    };
+    if arguments.len() != actual.len() || arguments.len() != expected.len() {
+        return Err(Error::OperandType);
+    }
+    meter.charge(
+        callback.name.as_str().len() as u64
+            + (callback.expression_path.len() as u64).saturating_mul(size_of::<usize>() as u64),
+    )?;
+    let mut call = crate::ExpressionCallType {
+        expression_path: callback.expression_path.clone(),
+        library: callback.library,
+        name: callback.name.clone(),
+        parameters: actual.clone(),
+        returns: returns.as_ref().clone(),
+        callbacks: Vec::new(),
+    };
+    let mut native = Vec::new();
+    for (position, ((argument, actual), expected)) in
+        arguments.iter().zip(actual).zip(expected).enumerate()
+    {
+        meter.visit(1)?;
+        let argument = match argument {
+            CallbackArgument::Value(value) => {
+                if matches!(value, V::Pending) {
+                    return Err(Error::OperandType);
+                }
+                actual.to_value(crate::TypeContext::Value, meter.program_limits())?;
+                expected.to_value(crate::TypeContext::Value, meter.program_limits())?;
+                port(value, actual, schemas, meter)?;
+                port(value, expected, schemas, meter)?;
+                EvaluationArgument::Value(match value {
+                    V::Present(v) => V::Present(meter.copy_value(v)?),
+                    V::Absent => V::Absent,
+                    V::Pending => return Err(Error::OperandType),
+                })
+            }
+            CallbackArgument::Function(slot) => {
+                if !matches!(actual.value_type().kind(), K::Function { .. })
+                    || !matches!(expected.value_type().kind(), K::Function { .. })
+                {
+                    return Err(Error::CallableAsValue);
+                }
+                let source = lookup(*slot)?;
+                crate::type_check::require_callback_compatibility(
+                    &source.signature,
+                    actual.value_type(),
+                    meter,
+                )?;
+                crate::type_check::require_callback_compatibility(
+                    &source.signature,
+                    expected.value_type(),
+                    meter,
+                )?;
+                meter.charge(
+                    (source.name.as_str().len() as u64)
+                        .saturating_mul(2)
+                        .saturating_add(
+                            (source.expression_path.len() as u64)
+                                .saturating_mul(size_of::<usize>() as u64),
+                        ),
+                )?;
+                let mut metadata = source.clone();
+                metadata.argument_index = position;
+                call.callbacks
+                    .try_reserve(1)
+                    .map_err(|_| Error::AllocationFailed)?;
+                call.callbacks.push(metadata);
+                EvaluationArgument::Function {
+                    library: source.library,
+                    name: source.name.clone(),
+                }
+            }
+        };
+        native.try_reserve(1).map_err(|_| Error::AllocationFailed)?;
+        native.push(argument);
+    }
+    Ok(ForwardedInvocation {
+        callback,
+        boundary: call,
+        arguments: native,
+        expected_return,
+    })
+}
+struct CallbackInvocation<'a> {
+    callback: &'a crate::ExpressionCallbackType,
+    arguments: Vec<EvaluationArgument>,
+    actual_return: &'a Port,
+    expected_return: &'a Port,
+}
+// Admission temporaries must not remain on the recursive native invocation stack.
+#[inline(never)]
+fn prepare_callback<'a>(
+    boundary: &'a crate::ExpressionCallType,
+    index: usize,
+    arguments: &[V],
+    schemas: Option<&NativeSchemas>,
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<CallbackInvocation<'a>, Error> {
+    meter.charge(u64::from(
+        (usize::BITS - boundary.callbacks.len().leading_zeros()).max(1),
+    ))?;
+    let callback = boundary
+        .callbacks
+        .binary_search_by_key(&index, |c| c.argument_index)
+        .ok()
+        .and_then(|i| boundary.callbacks.get(i))
+        .ok_or(Error::UnknownFunction)?;
+    let expected = boundary
+        .parameters
+        .get(index)
+        .ok_or(Error::UnresolvedType)?;
+    for ty in [&callback.signature, expected.value_type()] {
+        let bytes = ty.encode(crate::TypeContext::Signature, meter.program_limits())?;
+        meter.charge(bytes.len() as u64)?;
+    }
+    let crate::ValueTypeKind::Function {
+        parameters: actual,
+        returns: actual_return,
+    } = callback.signature.kind()
+    else {
+        return Err(Error::UnresolvedType);
+    };
+    let crate::ValueTypeKind::Function {
+        parameters: expected,
+        returns: expected_return,
+    } = expected.value_type().kind()
+    else {
+        return Err(Error::UnresolvedType);
+    };
+    if arguments.len() != actual.len() || arguments.len() != expected.len() {
+        return Err(Error::OperandType);
+    }
+    let mut native = Vec::new();
+    for ((value, actual), expected) in arguments.iter().zip(actual).zip(expected) {
+        meter.visit(1)?;
+        if matches!(value, V::Pending) {
+            return Err(Error::OperandType);
+        }
+        actual.to_value(crate::TypeContext::Value, meter.program_limits())?;
+        expected.to_value(crate::TypeContext::Value, meter.program_limits())?;
+        port(value, actual, schemas, meter)?;
+        port(value, expected, schemas, meter)?;
+        native.try_reserve(1).map_err(|_| Error::AllocationFailed)?;
+        native.push(EvaluationArgument::Value(match value {
+            V::Present(value) => V::Present(meter.copy_value(value)?),
+            V::Absent => V::Absent,
+            V::Pending => return Err(Error::OperandType),
+        }));
+    }
+    Ok(CallbackInvocation {
+        callback,
+        arguments: native,
+        actual_return,
+        expected_return,
+    })
+}
+fn lookup_work(meter: &mut EvaluationMeter<'_>, count: usize, extra: usize) -> Result<(), Error> {
+    let levels = u64::from((usize::BITS - count.leading_zeros()).max(1));
+    meter.charge(
+        (meter
+            .expression_path()
+            .len()
+            .saturating_add(extra)
+            .saturating_add(1) as u64)
+            .saturating_mul(levels),
+    )
 }
 struct CheckedContext<'a, 'b, C> {
     plan: &'a CheckedExpression<'b>,
     inner: &'a C,
     schemas: Option<&'a NativeSchemas>,
+    trace: RefCell<SchemaTrace>,
+}
+#[derive(Default)]
+struct SchemaTrace {
+    values: BTreeMap<Vec<usize>, (crate::ValueType, Value)>,
+    bytes: usize,
+}
+impl<C: EvaluationContext> CheckedContext<'_, '_, C> {
+    fn retain_schema_root(
+        &self,
+        expression: &Expression,
+        node: &crate::ExpressionNodeType,
+        value: &V,
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<(), Error> {
+        use crate::{ExpressionKind as E, ValueTypeKind as K};
+        if !self
+            .plan
+            .analysis
+            .retains_schema_root(meter.expression_path())
+        {
+            return Ok(());
+        }
+        if matches!(expression.kind(), E::Ref { .. }) {
+            return Ok(());
+        }
+        let ty = node.port.value_type();
+        let root = matches!(ty.kind(), K::Schema(_))
+            || matches!(ty.kind(),K::Union(members) if members.iter().any(|member|matches!(member.kind(),K::Schema(_))));
+        if !root {
+            return Ok(());
+        }
+        let V::Present(value) = value else {
+            return Ok(());
+        };
+        let size = meter.inspect(value)?;
+        let metadata = ty
+            .encode(crate::TypeContext::Value, meter.program_limits())?
+            .len()
+            .saturating_add(size_of_val(meter.expression_path()));
+        meter.charge(metadata as u64)?;
+        let mut trace = self.trace.borrow_mut();
+        let bytes = trace
+            .bytes
+            .checked_add(size)
+            .and_then(|n| n.checked_add(metadata))
+            .ok_or(Error::Limit("schema provenance"))?;
+        if bytes > meter.program_limits().max_total_payload_bytes {
+            return Err(Error::Limit("schema provenance"));
+        }
+        trace.values.insert(
+            meter.expression_path().to_vec(),
+            (ty.clone(), value.clone()),
+        );
+        trace.bytes = bytes;
+        Ok(())
+    }
+    fn schema_origin(
+        &self,
+        expression: &Expression,
+        position: &mut Vec<usize>,
+        path: &[PathStep],
+        meter: &mut EvaluationMeter<'_>,
+    ) -> Result<Option<V>, Error> {
+        use crate::ExpressionKind as E;
+        meter.charge(
+            (position.len().saturating_add(1) as u64).saturating_mul(u64::from(
+                (usize::BITS - self.plan.analysis.nodes().len().leading_zeros()).max(1),
+            )),
+        )?;
+        let index = self
+            .plan
+            .analysis
+            .nodes()
+            .binary_search_by(|node| node.expression_path.cmp(position))
+            .map_err(|_| Error::UnresolvedType)?;
+        if !self.plan.analysis.nodes()[index].schema_derived {
+            return Ok(None);
+        }
+        if let Some((ty, value)) = self.trace.borrow().values.get(position.as_slice()) {
+            return crate::runtime_type::project(value, ty, path, self.schemas, meter).map(Some);
+        }
+        match expression.kind() {
+            E::Ref {
+                source,
+                path: prefix,
+            } => {
+                let path = joined_path(prefix, path, meter)?;
+                self.resolve(source, &path, meter).map(Some)
+            }
+            E::Get {
+                value,
+                path: prefix,
+            } => {
+                let path = joined_path(prefix, path, meter)?;
+                position.push(0);
+                let result = self.schema_origin(value, position, &path, meter);
+                position.pop();
+                result
+            }
+            E::Record(fields) => {
+                let Some((PathStep::Field(name), rest)) = path.split_first() else {
+                    return Ok(None);
+                };
+                meter.charge((name.len() as u64).saturating_mul(u64::from(
+                    (usize::BITS - fields.len().leading_zeros()).max(1),
+                )))?;
+                let Ok(index) = fields.binary_search_by(|(key, _)| key.cmp(name)) else {
+                    return Ok(None);
+                };
+                position.push(index);
+                let result = self.schema_origin(&fields[index].1, position, rest, meter);
+                position.pop();
+                result
+            }
+            E::List(items) => {
+                let Some((PathStep::Index(index), rest)) = path.split_first() else {
+                    return Ok(None);
+                };
+                let Some((index, value)) = usize::try_from(*index)
+                    .ok()
+                    .and_then(|i| items.get(i).map(|value| (i, value)))
+                else {
+                    return Ok(None);
+                };
+                position.push(index);
+                let result = self.schema_origin(value, position, rest, meter);
+                position.pop();
+                result
+            }
+            _ => Ok(None),
+        }
+    }
+}
+fn joined_path(
+    first: &[PathStep],
+    second: &[PathStep],
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<Vec<PathStep>, Error> {
+    let count = first
+        .len()
+        .checked_add(second.len())
+        .ok_or(Error::Limit("schema projection path"))?;
+    if count > meter.program_limits().max_collection_entries {
+        return Err(Error::Limit("schema projection path"));
+    }
+    meter.visit(count as u64)?;
+    let mut size = count.saturating_mul(size_of::<PathStep>());
+    for step in first.iter().chain(second) {
+        if let PathStep::Field(name) = step {
+            size = size
+                .checked_add(name.len())
+                .ok_or(Error::Limit("schema projection path"))?;
+        }
+    }
+    if size > meter.program_limits().max_document_bytes {
+        return Err(Error::Limit("schema projection path"));
+    }
+    meter.charge(size as u64)?;
+    let mut path = Vec::new();
+    path.try_reserve_exact(count)
+        .map_err(|_| Error::AllocationFailed)?;
+    path.extend_from_slice(first);
+    path.extend_from_slice(second);
+    Ok(path)
 }
 fn port(
     value: &V,
@@ -139,32 +620,48 @@ impl<C: EvaluationContext> EvaluationContext for CheckedContext<'_, '_, C> {
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<(), Error> {
         self.inner.check_result(expression, value, meter)?;
-        meter.charge(u64::from(
-            (usize::BITS - self.plan.nodes.len().leading_zeros()).max(1),
-        ))?;
+        lookup_work(meter, self.plan.analysis.nodes().len(), 0)?;
         let index = self
             .plan
-            .nodes
-            .get(&key(expression))
-            .ok_or(Error::UnresolvedType)?;
-        let node = &self.plan.analysis.nodes()[*index];
+            .analysis
+            .nodes()
+            .binary_search_by(|node| node.expression_path.as_slice().cmp(meter.expression_path()))
+            .map_err(|_| Error::UnresolvedType)?;
+        let node = &self.plan.analysis.nodes()[index];
         if !node.callable {
             port(value, &node.port, self.schemas, meter)?;
         }
-        if let Some(checks) = self.plan.checks.get(&key(expression)) {
-            for index in checks {
-                meter.charge(1)?;
-                match &self.plan.analysis.runtime_checks()[*index].kind {
-                    Check::Present if matches!(value, V::Absent) => {
-                        return Err(Error::AbsentOperand);
-                    }
-                    Check::Value(expected) => port(value, expected, self.schemas, meter)?,
-                    Check::SchemaProjection { .. } => return Err(Error::UnresolvedType),
-                    // Operators enforce comparison/length; projections use the
-                    // declared source types through resolve/project below.
-                    _ => (),
+        if node.expression_path.is_empty()
+            && let Some(boundary) = self.plan.analysis.boundary()
+        {
+            port(value, boundary, self.schemas, meter)?;
+        }
+        lookup_work(meter, self.plan.analysis.runtime_checks().len(), 0)?;
+        for check in self.plan.analysis.checks_at(meter.expression_path()) {
+            meter.charge(1)?;
+            match &check.kind {
+                Check::Present if matches!(value, V::Absent) => {
+                    return Err(Error::AbsentOperand);
                 }
+                Check::Value(expected) => port(value, expected, self.schemas, meter)?,
+                Check::SchemaProjection { schema, .. }
+                    if !self
+                        .schemas
+                        .is_some_and(|schemas| schemas.has_schema_type(schema)) =>
+                {
+                    return Err(Error::UnresolvedType);
+                }
+                // Operators enforce comparison/length; projections use the
+                // declared source types through resolve/project below.
+                _ => (),
             }
+        }
+        if self
+            .plan
+            .analysis
+            .retains_schema_root(meter.expression_path())
+        {
+            self.retain_schema_root(expression, node, value, meter)?;
         }
         Ok(())
     }
@@ -208,14 +705,21 @@ impl<C: EvaluationContext> EvaluationContext for CheckedContext<'_, '_, C> {
         path: &[PathStep],
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<V, Error> {
+        lookup_work(meter, self.plan.analysis.nodes().len(), 1)?;
+        let mut child = meter.expression_path().to_vec();
+        child.push(0);
+        if let Some(result) = self.schema_origin(origin, &mut child, path, meter)? {
+            return Ok(result);
+        }
         let index = self
             .plan
-            .nodes
-            .get(&key(origin))
-            .ok_or(Error::UnresolvedType)?;
+            .analysis
+            .nodes()
+            .binary_search_by(|node| node.expression_path.cmp(&child))
+            .map_err(|_| Error::UnresolvedType)?;
         crate::runtime_type::project(
             value,
-            self.plan.analysis.nodes()[*index].port.value_type(),
+            self.plan.analysis.nodes()[index].port.value_type(),
             path,
             self.schemas,
             meter,
@@ -235,15 +739,14 @@ impl<C: EvaluationContext> EvaluationContext for CheckedContext<'_, '_, C> {
         arguments: &[EvaluationArgument],
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<V, Error> {
-        meter.charge(u64::from(
-            (usize::BITS - self.plan.calls.len().leading_zeros()).max(1),
-        ))?;
+        lookup_work(meter, self.plan.analysis.calls().len(), 0)?;
         let index = self
             .plan
-            .calls
-            .get(&key(expression))
-            .ok_or(Error::UnresolvedType)?;
-        let boundary = &self.plan.analysis.calls()[*index];
+            .analysis
+            .calls()
+            .binary_search_by(|call| call.expression_path.as_slice().cmp(meter.expression_path()))
+            .map_err(|_| Error::UnresolvedType)?;
+        let boundary = &self.plan.analysis.calls()[index];
         if boundary.library != library
             || &boundary.name != name
             || boundary.parameters.len() != arguments.len()

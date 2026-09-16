@@ -293,6 +293,13 @@ Canonical expression forms have explicit tags for literals, regex literals, refe
 
 A path step is a field name or a nonnegative zero-based integer index. `["ref", ["output", "worker", "value"], ["customerId"]]` reads the exact key from a sibling output in a context that permits that read.
 
+For schema-typed objects, projection honors JSON Schema's permitted properties,
+including `additionalProperties` and `patternProperties`. A permitted present field
+is accessible even when not explicitly named in `properties`. A missing dynamic
+key is an expression error; a missing explicitly declared optional property yields
+absence. Validation and projection retain the original schema resource context.
+Native structural record types retain their separate declared-field-only rule.
+
 Suffixes on a reference are folded into that reference's path. Suffixes on any other expression use `["get", expression, path]`; adjacent get paths are concatenated, and an empty get is forbidden. Thus `error(@worker).code` is representable without a hidden dynamic selector. Parentheses disappear during normalization. There is no otherwise-optional constant folding or operator reordering in the canonical document.
 
 Expression children preserve evaluation order. Record-expression entries are represented as an ordered list of key/expression pairs sorted by decoded key UTF-8 bytes; evaluation uses that canonical order. This defines error precedence independently of source field order. Record values themselves are unordered maps.

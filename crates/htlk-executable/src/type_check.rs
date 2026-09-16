@@ -72,11 +72,13 @@ pub struct ExpressionNodeType {
     pub port: Port,
     /// True only for a direct static function-reference argument.
     pub callable: bool,
+    /// Value construction/projection retains schema-origin information internally.
+    pub schema_derived: bool,
 }
 /// A native call's fully instantiated boundary, after generic inference.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExpressionCallType {
-    /// Canonical child-index path of the call expression.
+    /// Canonical child-index path of the call or originating static callback reference.
     pub expression_path: Vec<usize>,
     /// Declared implementation identity.
     pub library: Digest,
@@ -86,32 +88,131 @@ pub struct ExpressionCallType {
     pub parameters: Vec<Port>,
     /// Result value and presence constraint.
     pub returns: Port,
+    /// Admitted direct function-reference arguments, in positional order.
+    pub callbacks: Vec<ExpressionCallbackType>,
+}
+/// A direct callback's identity and independently instantiated actual signature.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpressionCallbackType {
+    /// Canonical location of the original static function reference, preserved
+    /// when it is forwarded through higher-order native invocations.
+    pub expression_path: Vec<usize>,
+    /// Position in the enclosing native call's parameter list.
+    pub argument_index: usize,
+    /// Exact callback implementation identity.
+    pub library: Digest,
+    /// Declared callback name.
+    pub name: Identifier,
+    /// Actual concrete function type, including parameter and return presence.
+    pub signature: T,
 }
 /// Static analysis result, not a verified executable or an automatically enforced
 /// runtime plan. Schema projection obligations must be resolved by the schema layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExpressionAnalysis {
     result: Port,
+    boundary: Option<Port>,
     nodes: Vec<ExpressionNodeType>,
     checks: Vec<RuntimeTypeCheck>,
     calls: Vec<ExpressionCallType>,
+    projection_roots: BTreeSet<Vec<usize>>,
 }
 impl ExpressionAnalysis {
     /// Inferred root type and presence, independent of an expected boundary type.
     pub fn result(&self) -> &Port {
         &self.result
     }
+    /// Declared result boundary, independently enforced on successful evaluation.
+    pub fn boundary(&self) -> Option<&Port> {
+        self.boundary.as_ref()
+    }
     /// Node metadata sorted by canonical child-index path.
     pub fn nodes(&self) -> &[ExpressionNodeType] {
         &self.nodes
     }
-    /// Runtime obligations in stable analysis order.
+    /// Runtime obligations ordered by canonical AST path, preserving admission
+    /// order among checks attached to the same node.
     pub fn runtime_checks(&self) -> &[RuntimeTypeCheck] {
         &self.checks
+    }
+    pub(crate) fn checks_at(&self, path: &[usize]) -> &[RuntimeTypeCheck] {
+        let start = self
+            .checks
+            .partition_point(|check| check.expression_path.as_slice() < path);
+        let end = start
+            + self.checks[start..]
+                .partition_point(|check| check.expression_path.as_slice() == path);
+        &self.checks[start..end]
     }
     /// Instantiated native call boundaries in canonical AST path order.
     pub fn calls(&self) -> &[ExpressionCallType] {
         &self.calls
+    }
+    pub(crate) fn retains_schema_root(&self, path: &[usize]) -> bool {
+        self.projection_roots.contains(path)
+    }
+    pub(crate) fn stored_size(&self, limits: &Limits) -> Result<usize, ExpressionTypeError> {
+        let mut size = size_of::<Self>();
+        let mut add = |bytes: usize| -> Result<(), ExpressionTypeError> {
+            size = size
+                .checked_add(bytes)
+                .ok_or(ExpressionTypeError::InferenceLimit)?;
+            if size > limits.max_document_bytes {
+                return Err(ExpressionTypeError::InferenceLimit);
+            }
+            Ok(())
+        };
+        let type_size = |ty: &T| {
+            ty.encode(TypeContext::Signature, limits)
+                .map(|v| v.len())
+                .map_err(ExpressionTypeError::from)
+        };
+        add(type_size(self.result.value_type())?)?;
+        if let Some(port) = &self.boundary {
+            add(type_size(port.value_type())?)?;
+        }
+        for node in &self.nodes {
+            add(size_of::<ExpressionNodeType>())?;
+            add(size_of_val(node.expression_path.as_slice()))?;
+            add(type_size(node.port.value_type())?)?;
+        }
+        for check in &self.checks {
+            add(size_of::<RuntimeTypeCheck>())?;
+            add(size_of_val(check.expression_path.as_slice()))?;
+            match &check.kind {
+                RuntimeTypeCheckKind::Value(port) => add(type_size(port.value_type())?)?,
+                RuntimeTypeCheckKind::Projection { source, step } => {
+                    add(type_size(source)?)?;
+                    if let PathStep::Field(name) = step {
+                        add(name.len())?;
+                    }
+                }
+                RuntimeTypeCheckKind::SchemaProjection {
+                    step: PathStep::Field(name),
+                    ..
+                } => add(name.len())?,
+                _ => (),
+            }
+        }
+        for call in &self.calls {
+            add(size_of::<ExpressionCallType>())?;
+            add(call.name.as_str().len())?;
+            add(size_of_val(call.expression_path.as_slice()))?;
+            for port in call.parameters.iter().chain(std::iter::once(&call.returns)) {
+                add(size_of::<Port>())?;
+                add(type_size(port.value_type())?)?;
+            }
+            for callback in &call.callbacks {
+                add(size_of::<ExpressionCallbackType>())?;
+                add(callback.name.as_str().len())?;
+                add(size_of_val(callback.expression_path.as_slice()))?;
+                add(type_size(&callback.signature)?)?;
+            }
+        }
+        for path in &self.projection_roots {
+            add(size_of_val(path.as_slice()))?;
+        }
+        Ok(size)
     }
 }
 
@@ -129,6 +230,99 @@ pub fn check_expression(
     environment: &ExpressionTypeEnvironment,
     expected: Option<&Port>,
     limits: &Limits,
+) -> Result<ExpressionAnalysis, ExpressionTypeError> {
+    analyze_expression(
+        expression,
+        context,
+        environment,
+        expected,
+        None,
+        limits,
+        None,
+    )
+}
+/// Analyzes with conservative schema representation-family refinements, retaining
+/// original-root projection obligations for exact native validation at execution.
+///
+/// # Errors
+/// Returns static name/type failures, schema admission failures, or derived limits.
+pub fn check_expression_diagnostic(
+    expression: &Expression,
+    context: ExpressionContext,
+    environment: &ExpressionTypeEnvironment,
+    expected: Option<&Port>,
+    schemas: Option<&crate::NativeSchemas>,
+    limits: &Limits,
+) -> Result<ExpressionAnalysis, ExpressionDiagnostic> {
+    let mut location = None;
+    analyze_expression(
+        expression,
+        context,
+        environment,
+        expected,
+        schemas,
+        limits,
+        Some(&mut location),
+    )
+    .map_err(|error| ExpressionDiagnostic {
+        expression_path: location.unwrap_or_default(),
+        error,
+    })
+}
+/// Redacted static failure with a canonical child-index location. An empty path
+/// denotes the expression boundary (including whole-expression constraints).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpressionDiagnostic {
+    /// Canonical child-index path within the supplied expression.
+    pub expression_path: Vec<usize>,
+    /// Underlying static failure, without submitted operand values.
+    pub error: ExpressionTypeError,
+}
+impl fmt::Display for ExpressionDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "expression at {:?}: {}",
+            self.expression_path, self.error
+        )
+    }
+}
+impl std::error::Error for ExpressionDiagnostic {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+/// Analyzes with conservative schema representation-family refinements, retaining
+/// original-root projection obligations for exact native validation at execution.
+///
+/// # Errors
+/// Returns static name/type failures, schema admission failures, or derived limits.
+pub fn check_expression_with_schemas(
+    expression: &Expression,
+    context: ExpressionContext,
+    environment: &ExpressionTypeEnvironment,
+    expected: Option<&Port>,
+    schemas: &crate::NativeSchemas,
+    limits: &Limits,
+) -> Result<ExpressionAnalysis, ExpressionTypeError> {
+    analyze_expression(
+        expression,
+        context,
+        environment,
+        expected,
+        Some(schemas),
+        limits,
+        None,
+    )
+}
+fn analyze_expression(
+    expression: &Expression,
+    context: ExpressionContext,
+    environment: &ExpressionTypeEnvironment,
+    expected: Option<&Port>,
+    schemas: Option<&crate::NativeSchemas>,
+    limits: &Limits,
+    diagnostic: Option<&mut Option<Vec<usize>>>,
 ) -> Result<ExpressionAnalysis, ExpressionTypeError> {
     expression.to_value(context, limits)?;
     validate_environment(environment, limits)?;
@@ -150,6 +344,9 @@ pub fn check_expression(
         constraints: Vec::new(),
         operations: Vec::new(),
         deferred: Vec::new(),
+        combined_limit: None,
+        schemas,
+        diagnostic,
     };
     let result = checker.infer(expression, &[], 0)?;
     if let Some(expected) = expected {
@@ -176,7 +373,10 @@ pub fn check_expression(
                 let left = checker.substitute(&left, 0)?;
                 let right = checker.substitute(&right, 0)?;
                 match comparison(op, &left, &right) {
-                    Match::Never => return Err(ExpressionTypeError::OperandType),
+                    Match::Never => {
+                        checker.mark_error(&path);
+                        return Err(ExpressionTypeError::OperandType);
+                    }
                     Match::Runtime => {
                         checker.add_check(&path, RuntimeTypeCheckKind::Comparison(op))?
                     }
@@ -186,7 +386,10 @@ pub fn check_expression(
             OperationConstraint::Length(path, ty) => {
                 let ty = checker.substitute(&ty, 0)?;
                 match length_match(&ty) {
-                    Match::Never => return Err(ExpressionTypeError::OperandType),
+                    Match::Never => {
+                        checker.mark_error(&path);
+                        return Err(ExpressionTypeError::OperandType);
+                    }
                     Match::Runtime => checker.add_check(&path, RuntimeTypeCheckKind::Length)?,
                     Match::Yes => (),
                 }
@@ -201,6 +404,7 @@ pub fn check_expression(
             || constraint.callback
                 && (relation != Match::Yes || expected.required() && !actual.required())
         {
+            checker.mark_error(&constraint.path);
             return Err(if constraint.callback {
                 ExpressionTypeError::CallbackMismatch
             } else {
@@ -243,6 +447,7 @@ pub fn check_expression(
             _ => (),
         }
     }
+    checks.sort_by(|a, b| a.expression_path.cmp(&b.expression_path));
     let mut calls = std::mem::take(&mut checker.calls);
     for call in &mut calls {
         for parameter in &mut call.parameters {
@@ -251,13 +456,22 @@ pub fn check_expression(
         }
         call.returns = checker.substitute_port(&call.returns, 0)?;
         call.returns.to_value(TypeContext::Value, limits)?;
+        for callback in &mut call.callbacks {
+            callback.signature = checker.substitute(&callback.signature, 0)?;
+            callback
+                .signature
+                .to_value(TypeContext::Signature, limits)?;
+        }
     }
     calls.sort_unstable_by(|a, b| a.expression_path.cmp(&b.expression_path));
+    let projection_roots = projection_origins(expression, &nodes, &mut checker)?;
     Ok(ExpressionAnalysis {
         result,
+        boundary: expected.map(|port| checker.copy_port(port)).transpose()?,
         nodes,
         checks,
         calls,
+        projection_roots,
     })
 }
 /// Checks a guard/contract as Boolean while retaining any required presence checks.
@@ -323,6 +537,130 @@ fn validate_environment(
     }
     Ok(())
 }
+
+fn schema_head(ty: &T) -> bool {
+    matches!(ty.kind(), K::Schema(_))
+        || matches!(ty.kind(),K::Union(types) if types.iter().any(|ty|matches!(ty.kind(),K::Schema(_))))
+}
+fn syntax_child(expression: &Expression, index: usize) -> Option<&Expression> {
+    match expression.kind() {
+        E::Get { value, .. } | E::Not(value) if index == 0 => Some(value),
+        E::Binary { left, .. } if index == 0 => Some(left),
+        E::Binary { right, .. } if index == 1 => Some(right),
+        E::Record(fields) => fields.get(index).map(|(_, e)| e),
+        E::Render { arguments, .. } => arguments.get(index).map(|(_, e)| e),
+        E::List(items)
+        | E::Call {
+            arguments: items, ..
+        } => items.get(index),
+        _ => None,
+    }
+}
+fn projection_origins(
+    expression: &Expression,
+    nodes: &[ExpressionNodeType],
+    checker: &mut Checker<'_>,
+) -> Result<BTreeSet<Vec<usize>>, ExpressionTypeError> {
+    let mut roots = BTreeSet::new();
+    for node in nodes {
+        checker.step(0)?;
+        if !node.schema_derived {
+            continue;
+        }
+        let mut syntax = expression;
+        for &index in &node.expression_path {
+            checker.step(0)?;
+            syntax = syntax_child(syntax, index).ok_or(ExpressionTypeError::InvalidProjection)?;
+        }
+        let E::Get { value, .. } = syntax.kind() else {
+            continue;
+        };
+        let child = checker.child(&node.expression_path, 0)?;
+        let index = nodes
+            .binary_search_by(|node| node.expression_path.cmp(&child))
+            .map_err(|_| ExpressionTypeError::InvalidProjection)?;
+        if !nodes[index].schema_derived || schema_head(nodes[index].port.value_type()) {
+            continue;
+        }
+        let mut pending = vec![(value.as_ref(), child)];
+        while let Some((syntax, path)) = pending.pop() {
+            checker.step(path.len())?;
+            let index = nodes
+                .binary_search_by(|node| node.expression_path.cmp(&path))
+                .map_err(|_| ExpressionTypeError::InvalidProjection)?;
+            let node = &nodes[index];
+            if !node.schema_derived || matches!(syntax.kind(), E::Ref { .. }) {
+                continue;
+            }
+            if schema_head(node.port.value_type()) {
+                checker.account(size_of_val(path.as_slice()))?;
+                roots.insert(path);
+                continue;
+            }
+            let count = match syntax.kind() {
+                E::Get { .. } => 1,
+                E::Record(fields) => fields.len(),
+                E::List(items) => items.len(),
+                _ => 0,
+            };
+            for index in 0..count {
+                pending.push((
+                    syntax_child(syntax, index).ok_or(ExpressionTypeError::InvalidProjection)?,
+                    checker.child(&path, index)?,
+                ));
+            }
+        }
+    }
+    Ok(roots)
+}
+
+pub(crate) fn require_callback_compatibility(
+    actual: &T,
+    expected: &T,
+    meter: &mut crate::EvaluationMeter<'_>,
+) -> Result<(), crate::EvaluationError> {
+    use crate::EvaluationError as Error;
+    let limits = meter.program_limits().clone();
+    for ty in [actual, expected] {
+        let bytes = ty.encode(TypeContext::Signature, &limits)?;
+        meter.charge(bytes.len() as u64)?;
+        if has_variable(ty) {
+            return Err(Error::UnresolvedType);
+        }
+    }
+    let environment = ExpressionTypeEnvironment::default();
+    let remaining = meter.remaining_steps();
+    let mut checker = Checker {
+        environment: &environment,
+        limits: &limits,
+        work: 0,
+        bytes: 0,
+        serial: 0,
+        bindings: BTreeMap::new(),
+        mandatory: BTreeSet::new(),
+        holes: BTreeSet::new(),
+        nodes: Vec::new(),
+        checks: Vec::new(),
+        calls: Vec::new(),
+        constraints: Vec::new(),
+        operations: Vec::new(),
+        deferred: Vec::new(),
+        combined_limit: Some(usize::try_from(remaining).unwrap_or(usize::MAX)),
+        schemas: None,
+        diagnostic: None,
+    };
+    let result = checker.compatible(actual, expected, 0);
+    let used = (checker.work as u64).saturating_add(checker.bytes as u64);
+    meter.charge(used.min(remaining))?;
+    match result {
+        Ok(Match::Yes) => Ok(()),
+        Ok(_) => Err(Error::OperandType),
+        Err(ExpressionTypeError::InferenceLimit | ExpressionTypeError::LimitExceeded { .. }) => {
+            Err(Error::Limit("callback signature work"))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 fn bound(e: crate::record_accounting::EncodingLimitError) -> ExpressionTypeError {
     ExpressionTypeError::LimitExceeded {
         limit: e.limit,
@@ -360,8 +698,18 @@ struct Checker<'a> {
     constraints: Vec<Constraint>,
     operations: Vec<OperationConstraint>,
     deferred: Vec<(T, T, usize)>,
+    combined_limit: Option<usize>,
+    schemas: Option<&'a crate::NativeSchemas>,
+    diagnostic: Option<&'a mut Option<Vec<usize>>>,
 }
 impl Checker<'_> {
+    fn mark_error(&mut self, path: &[usize]) {
+        if let Some(slot) = self.diagnostic.as_deref_mut()
+            && slot.is_none()
+        {
+            *slot = Some(path.to_vec());
+        }
+    }
     fn solve_deferred(&mut self) -> Result<(), ExpressionTypeError> {
         while !self.deferred.is_empty() {
             let before = self.bindings.len();
@@ -408,7 +756,7 @@ impl Checker<'_> {
         if self.bytes > self.limits.max_total_payload_bytes {
             return Err(ExpressionTypeError::InferenceLimit);
         }
-        Ok(())
+        self.combined_budget()
     }
     fn step(&mut self, depth: usize) -> Result<(), ExpressionTypeError> {
         if depth > self.limits.max_depth {
@@ -424,6 +772,16 @@ impl Checker<'_> {
         if self.work > self.limits.max_total_values {
             return Err(ExpressionTypeError::InferenceLimit);
         }
+        self.combined_budget()
+    }
+    fn combined_budget(&self) -> Result<(), ExpressionTypeError> {
+        if self.combined_limit.is_some_and(|maximum| {
+            self.work
+                .checked_add(self.bytes)
+                .is_none_or(|total| total > maximum)
+        }) {
+            return Err(ExpressionTypeError::InferenceLimit);
+        }
         Ok(())
     }
     fn copy_type(&mut self, ty: &T) -> Result<T, ExpressionTypeError> {
@@ -432,14 +790,7 @@ impl Checker<'_> {
     }
     fn charge_type(&mut self, ty: &T) -> Result<(), ExpressionTypeError> {
         let size = ty.encode(TypeContext::Signature, self.limits)?.len();
-        self.bytes = self
-            .bytes
-            .checked_add(size)
-            .ok_or(ExpressionTypeError::InferenceLimit)?;
-        if self.bytes > self.limits.max_total_payload_bytes {
-            return Err(ExpressionTypeError::InferenceLimit);
-        }
-        Ok(())
+        self.account(size)
     }
     fn copy_port(&mut self, p: &Port) -> Result<Port, ExpressionTypeError> {
         Ok(Port::new(self.copy_type(p.value_type())?, p.required()))
@@ -535,6 +886,8 @@ impl Checker<'_> {
         depth: usize,
     ) -> Result<Port, ExpressionTypeError> {
         self.step(depth)?;
+        let nodes_before = self.nodes.len();
+        let checks_before = self.checks.len();
         let result = match expr.kind() {
             E::Not(value) => self.infer_not(value, path, depth),
             E::Get { value, path: steps } => self.infer_get(value, steps, path, depth),
@@ -558,8 +911,28 @@ impl Checker<'_> {
                 arguments,
             } => self.infer_render(template, arguments, path, depth),
             _ => self.infer_leaf(expr, path, depth),
-        }?;
-        let port = self.copy_port(&result)?;
+        };
+        let result = match result {
+            Ok(port) => port,
+            Err(error) => {
+                self.mark_error(path);
+                return Err(error);
+            }
+        };
+        self.record_node(expr, &result, path, (nodes_before, checks_before), depth)?;
+        Ok(result)
+    }
+    #[inline(never)]
+    fn record_node(
+        &mut self,
+        expr: &Expression,
+        result: &Port,
+        path: &[usize],
+        before: (usize, usize),
+        depth: usize,
+    ) -> Result<(), ExpressionTypeError> {
+        let port = self.copy_port(result)?;
+        let schema_derived = self.schema_origin_flag(expr, &port, before.0, before.1, depth)?;
         self.account(size_of_val(path))?;
         if self.nodes.len() >= self.limits.max_collection_entries {
             return Err(ExpressionTypeError::InferenceLimit);
@@ -569,8 +942,38 @@ impl Checker<'_> {
             expression_path: path.to_vec(),
             port,
             callable: false,
+            schema_derived,
         });
-        Ok(result)
+        Ok(())
+    }
+    #[inline(never)]
+    fn schema_origin_flag(
+        &mut self,
+        expr: &Expression,
+        port: &Port,
+        nodes_before: usize,
+        checks_before: usize,
+        depth: usize,
+    ) -> Result<bool, ExpressionTypeError> {
+        let mut derived = schema_head(port.value_type());
+        if matches!(
+            expr.kind(),
+            E::Ref { .. } | E::Get { .. } | E::Record(_) | E::List(_)
+        ) {
+            let work = self.nodes.len() - nodes_before + self.checks.len() - checks_before;
+            self.work = self
+                .work
+                .checked_add(work)
+                .ok_or(ExpressionTypeError::InferenceLimit)?;
+            self.step(depth)?;
+            derived |= self.nodes[nodes_before..]
+                .iter()
+                .any(|node| node.schema_derived)
+                || self.checks[checks_before..].iter().any(|check| {
+                    matches!(check.kind, RuntimeTypeCheckKind::SchemaProjection { .. })
+                });
+        }
+        Ok(derived)
     }
     #[inline(never)]
     fn infer_leaf(
@@ -600,8 +1003,15 @@ impl Checker<'_> {
                     .get(source)
                     .ok_or(ExpressionTypeError::UnknownReference)?;
                 let mut port = self.copy_port(port)?;
+                if let K::Schema(schema) = port.value_type().kind()
+                    && !steps.is_empty()
+                    && self.schemas.is_some()
+                {
+                    return self.schema_path(*schema, steps, path);
+                }
+                let mut schema_context = false;
                 for step in steps {
-                    port = self.project(&port, step, path, depth + 1)?;
+                    port = self.project(&port, step, path, depth + 1, &mut schema_context)?;
                 }
                 Ok(port)
             }
@@ -634,8 +1044,18 @@ impl Checker<'_> {
     ) -> Result<Port, ExpressionTypeError> {
         let child = self.child(path, 0)?;
         let mut port = self.infer(value, &child, depth + 1)?;
+        if let K::Schema(schema) = port.value_type().kind()
+            && !steps.is_empty()
+            && self.schemas.is_some()
+        {
+            return self.schema_path(*schema, steps, path);
+        }
+        let mut schema_context = self
+            .nodes
+            .last()
+            .is_some_and(|node| node.expression_path == child && node.schema_derived);
         for step in steps {
-            port = self.project(&port, step, path, depth + 1)?;
+            port = self.project(&port, step, path, depth + 1, &mut schema_context)?;
         }
         Ok(port)
     }
@@ -813,6 +1233,7 @@ impl Checker<'_> {
             return Err(ExpressionTypeError::Arity);
         }
         let (parameters, returns) = self.instantiate(sig)?;
+        let mut callbacks = Vec::new();
         for (i, (expected, argument)) in parameters.iter().zip(arguments).enumerate() {
             let child = self.child(path, i)?;
             if let E::FunctionRef { library, name } = argument.kind() {
@@ -837,6 +1258,17 @@ impl Checker<'_> {
                 );
                 self.unify(&expected_type, actual.value_type(), 0)?;
                 self.constraint(&actual, expected, &child, true)?;
+                self.account(size_of::<ExpressionCallbackType>() + name.as_str().len())?;
+                self.account(size_of_val(child.as_slice()))?;
+                let signature = self.copy_type(actual.value_type())?;
+                callbacks.try_reserve(1).map_err(allocation)?;
+                callbacks.push(ExpressionCallbackType {
+                    expression_path: child.clone(),
+                    argument_index: i,
+                    library: *library,
+                    name: name.clone(),
+                    signature,
+                });
                 let port = self.copy_port(&actual)?;
                 self.account(size_of_val(child.as_slice()))?;
                 if self.nodes.len() >= self.limits.max_collection_entries {
@@ -847,6 +1279,7 @@ impl Checker<'_> {
                     expression_path: child,
                     port,
                     callable: true,
+                    schema_derived: false,
                 });
             } else {
                 let actual = self.infer(argument, &child, depth + 1)?;
@@ -867,6 +1300,7 @@ impl Checker<'_> {
             name: name.clone(),
             parameters,
             returns: return_constraint,
+            callbacks,
         });
         Ok(returns)
     }
@@ -1149,11 +1583,12 @@ impl Checker<'_> {
         step: &PathStep,
         path: &[usize],
         depth: usize,
+        schema_context: &mut bool,
     ) -> Result<Port, ExpressionTypeError> {
         self.step(depth)?;
-        if !port.required() {
-            self.add_check(path, RuntimeTypeCheckKind::Present)?;
-        }
+        // Projection execution checks each intermediate for presence. Attaching
+        // that obligation to the final AST node would reject a legitimate absent
+        // final member after a present optional parent.
         let ty = self.deref(port.value_type())?;
         let mut optional = false;
         let mut projected = Vec::new();
@@ -1193,8 +1628,12 @@ impl Checker<'_> {
                         optional = true;
                     }
                 }
-                (K::Primitive(P::Json), _) => projected.push(T::primitive(P::Json)),
+                (K::Primitive(P::Json), _) => {
+                    projected.push(T::primitive(P::Json));
+                    optional |= *schema_context;
+                }
                 (K::Schema(id), _) => {
+                    *schema_context = true;
                     self.add_check(
                         path,
                         RuntimeTypeCheckKind::SchemaProjection {
@@ -1202,7 +1641,12 @@ impl Checker<'_> {
                             step: step.clone(),
                         },
                     )?;
-                    projected.push(T::primitive(P::Json));
+                    projected.push(match self.schemas {
+                        Some(schemas) => schemas
+                            .projection_type(id, std::slice::from_ref(step), self.limits)
+                            .map_err(|e| ExpressionTypeError::Schema(Box::new(e)))?,
+                        None => T::primitive(P::Json),
+                    });
                     optional = true;
                 }
                 _ => (),
@@ -1219,7 +1663,32 @@ impl Checker<'_> {
                 step: step.clone(),
             },
         )?;
-        Ok(Port::new(self.union(projected)?, !optional))
+        Ok(Port::new(
+            self.union(projected)?,
+            !(optional || *schema_context),
+        ))
+    }
+    fn schema_path(
+        &mut self,
+        schema: Digest,
+        steps: &[PathStep],
+        path: &[usize],
+    ) -> Result<Port, ExpressionTypeError> {
+        self.step(path.len())?;
+        let ty = self
+            .schemas
+            .expect("schema-aware analysis")
+            .projection_type(&schema, steps, self.limits)
+            .map_err(|e| ExpressionTypeError::Schema(Box::new(e)))?;
+        self.charge_type(&ty)?;
+        self.add_check(
+            path,
+            RuntimeTypeCheckKind::SchemaProjection {
+                schema,
+                step: steps[0].clone(),
+            },
+        )?;
+        Ok(Port::new(ty, false))
     }
     fn builtin_record(&mut self, primitive: P) -> Result<T, ExpressionTypeError> {
         self.step(0)?;
@@ -1286,9 +1755,7 @@ impl Checker<'_> {
             }
             (K::Enum(_), K::Primitive(P::String)) => Ok(Match::Yes),
             (_, K::Primitive(P::Json)) => Ok(match actual.kind() {
-                K::Primitive(
-                    P::String | P::Boolean | P::Null | P::Regex | P::Error | P::McpPromptResult,
-                )
+                K::Primitive(P::String | P::Boolean | P::Null | P::Regex | P::McpPromptResult)
                 | K::Schema(_) => Match::Yes,
                 _ => Match::Runtime,
             }),
@@ -1492,6 +1959,8 @@ fn allocation(_: std::collections::TryReserveError) -> ExpressionTypeError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExpressionTypeError {
+    /// Location-preserving native schema refinement admission failed.
+    Schema(Box<crate::NativeSchemaError>),
     /// Codec failure.
     Codec(htlk_cbor::Error),
     /// Expression representation/context failure.
@@ -1563,6 +2032,7 @@ impl fmt::Display for ExpressionTypeError {
 impl std::error::Error for ExpressionTypeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Schema(e) => Some(e.as_ref()),
             Self::Codec(e) => Some(e),
             Self::Expression(e) => Some(e),
             Self::Type(e) => Some(e),

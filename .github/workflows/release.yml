@@ -63,6 +63,9 @@ jobs:
       - name: Validate specifications
         run: node specs/validate-specs.mjs
 
+      - name: Independently validate executable fixtures
+        run: node tools/validate-executable-fixtures.mjs
+
       - name: Validate workspace
         env:
           RUSTDOCFLAGS: -D warnings

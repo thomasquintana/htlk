@@ -11,6 +11,7 @@ Before opening a pull request, run:
 
 ```console
 node specs/validate-specs.mjs
+node tools/validate-executable-fixtures.mjs
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features

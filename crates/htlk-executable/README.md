@@ -1,12 +1,14 @@
 # HTLK Executable
 
-Shared executable-format foundations for the HTLK compiler and runtime.
-Provides validated local identifiers, canonical types and ports, a checked
-version-0.1 executable envelope, and SHA-256 digest primitives in the public
-`digest` module. Envelope checks cover
-the outer schema, supported
-format/version, and fingerprint; registration separately verifies graph contents
-and producer trust.
+The shared Draft 0.1 executable format, verifier, and native expression engine for
+the HTLK compiler and runtime. `verify_executable` validates a complete canonical
+envelope against host-linked policy and implementations and returns an immutable
+`VerifiedExecutable` with derived graph and runtime-boundary plans.
+
+The crate also exposes lower-level canonical records, schema/MCP validators,
+expression analysis/evaluation, and SHA-256 primitives in `digest`. Those component
+constructors keep their narrower contracts; assembling a `CanonicalDocument` or
+decoding an `ExecutableEnvelope` alone does not establish full verification.
 
 Execution-limit and retry-policy records describe the controls later enforced
 by the runtime; these are configuration records, not running counters or timers.
@@ -22,6 +24,78 @@ and known-reference checks.
 
 Depends on `htlk-cbor` for deterministic encoding and RustCrypto's `sha2` for
 SHA-256; the codec does not depend on this crate.
+
+## Verify a complete executable
+
+The host selects its trusted policy and links any required pure native libraries.
+The default registry provides the specified core/native engines without inventing
+a standard-library inventory. Verification performs no MCP service calls.
+
+```rust
+use htlk_cbor::{Limits, Value};
+use htlk_executable::{CanonicalDocument, DocumentFields, EvaluationFrame,
+    EvaluationValue, EvaluatorLimits, ExecutionLimits, ExpressionSite, NativeRegistry,
+    PolicyDocument, PolicyFields, Scope, ScopeContext, ScopeFields, ScopeUse,
+    verify_executable};
+
+let limits = Limits::default();
+let policy = PolicyDocument::new(PolicyFields {
+    cost_unit: "credits".into(),
+    defaults: ExecutionLimits::new().with_timeout_ms(1000)?
+        .with_attempt_timeout_ms(100)?.with_max_concurrency(1)?,
+    evaluator_limits: EvaluatorLimits {
+        max_expression_depth: 64, max_value_bytes: 65536,
+        max_collection_visits: 10000, max_regex_bytes: 1024,
+        max_regex_compiled_bytes: 4096, max_output_bytes: 65536,
+        max_steps: 100000,
+    },
+    maximum_scope_depth: 32, maximum_expanded_nodes: 1000,
+}, &limits)?;
+let mut registry = NativeRegistry::new(&limits)?;
+let profile = registry.link_policy(&policy)?;
+let scope = Scope::new(ScopeFields::default(), ScopeContext::Ordinary, &limits)?;
+let root = scope.digest(ScopeContext::Ordinary, &limits)?;
+let mut fields = DocumentFields::new("example.empty".into(), profile, root);
+fields.scopes.insert(root, scope);
+fields.documents.insert(policy.digest(), policy.document().clone());
+let bytes = CanonicalDocument::new(fields, &limits)?.envelope(&limits)?.encode(&limits)?;
+
+let verified = verify_executable(&bytes, &registry, &limits)?;
+let result = verified.evaluate(&ScopeUse::Root, &ExpressionSite::Postconditions,
+    &EvaluationFrame::default())?;
+assert_eq!(result.value, EvaluationValue::Present(Value::Bool(true)));
+assert_eq!(verified.graphs().plans().len(), 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`VerifiedExecutable::evaluate` borrows admitted expression plans and uses their
+pinned policy, schemas and registry. It does not rebuild/copy all analysis metadata
+or reserialize the expression before each execution. Canonical AST paths identify
+node-local checks independently of allocation addresses. `validate_edge_value`
+checks a proposed receiving value; the runtime binding reducer owns conditional
+selection, uniqueness, absence, and failure precedence.
+
+`verify_scope_graph` checks one ordinary/task or loop-body use. `verify_graphs`
+checks every actual document use and shares equivalent immutable plans. They cover
+required candidate coverage, unconditional writer conflicts, whole-port types,
+all guard branches, admission/input/outcome waits, public/next bindings, hidden
+cycles, and explicit observability. Loop bodies are checked against each use's
+termination condition. No SAT proof or iteration expansion is required.
+
+`ExecutableVerificationError` preserves stage causes. Graph failures carry scope
+definition/use, node/edge expression site, and canonical child-index paths where
+applicable. `NativeSchemaDiagnostic` carries original document digests and JSON
+Pointers when the failure has a known schema location. Diagnostics do not retain
+submitted operand values or native validator message text.
+
+Existing codec limits bound encoded inputs and derived plans; private stage
+counters bound inference, schema declaration propagation and aggregate graph work.
+Counts include retained runtime checks/call signatures, not just result types.
+Temporary representations have independently bounded overhead. Native JSON Schema
+validation has the capability contract documented below, not a claimed hard heap
+cap, whole-validation fuel counter, or in-process deadline. Runtime registration
+transactions, scheduling, authorization, persistence and live MCP I/O belong to
+`htlk-rt`; source compilation and composition belong to `htlk-compiler`.
 
 ## Local identifiers
 
@@ -226,9 +300,8 @@ produce `E_EXPRESSION_LIMIT`, and absence misuse produces `E_EXPRESSION_ABSENT`.
 
 The evaluator validates representation/context and actual operand behavior.
 `CheckedExpression` connects static name/type analysis to runtime enforcement.
-Schema-aware projection plans and exact native-registry matching remain part of
-the continuing task-3 verifier work. A standalone evaluation is not proof that
-an entire graph is valid.
+Schema-aware checked evaluation and exact native-registry matching are composed by
+`verify_executable`. A standalone evaluation does not establish graph admission.
 
 ### Static expression checking
 
@@ -283,17 +356,58 @@ and return values afterward. Native contexts receive these constraints through
 Invalid arguments prevent invocation, pending dependencies postpone it, and a
 native function returning pending is rejected.
 
+Direct callback metadata also retains the callback's independently instantiated
+actual signature. Native implementations can call
+`ExpressionCallType::invoke_callback` with ordinary value arguments to enforce
+both that signature and the receiving parameter's callback constraints. It
+dispatches through `EvaluationContext::call_callback`, shares the evaluator meter,
+and bounds recursion by the expression-policy and codec depth ceilings. Pending
+arguments/results are errors. Callback intermediates use the value-size ceiling;
+the enclosing expression still owns the final output ceiling. This entry point
+accepts ordinary values. `invoke_callback_with` additionally accepts
+`CallbackArgument::Function(slot)`, forwarding only statically admitted callback
+slots. Both actual and receiving higher-order signatures are checked before
+dispatch, and original canonical function-reference locations are preserved.
+
+### Host-linked native registry and default profile
+
+`NativeRegistry` starts empty: the specified evaluator core and native engines
+work without a newly defined standard library. Hosts register complete `Library`
+manifests with an exact name-to-`NativeFunction` implementation map. Registration
+rejects duplicate implementation identities, missing/extra functions, and aggregate
+metadata limits. Each implementation has a positive prepaid dispatch charge and
+must charge variable work through the shared evaluator meter. Implementations are
+trusted pure Rust functions; this interface does not sandbox host code.
+
+`NativeRegistry::evaluate` checks every supplied environment manifest before
+execution and routes native calls through the registry rather than the frozen
+data frame. `NativeCallContext::invoke_callback` uses the checked callback helper
+and dispatches its admitted identity through the same registry. Complete manifest
+comparison includes unused public signatures, versions, generic declarations, and
+presence rules.
+
+`native_profile` constructs the shipped core/engine identities for an exact policy
+document. `NativeRegistry::verify_profile` compares every core, regex, schema,
+URI-template, and policy identity. `link_policy` selects exact trusted host policies;
+an embedded policy cannot approve its own identity. Adapter identities include implementation source;
+regex 1.13.1, regex-automata 0.4.18, regex-syntax 0.8.11 (Unicode 16.0.0), and
+iri-string 0.7.14 are pinned in the published dependency constraints. The native
+schema resource contract remains unchanged. `verify_executable` composes profile
+admission and registry-backed execution with schema/MCP and whole-graph verification.
+
 Analysis rechecks environment and expression bounds and meters inference work,
 type copying/comparison, lookups, and stored metadata paths. Its derived output
 must also fit configured limits. Controlled-stack tests cover deep unary and
 binary expressions at the codec depth ceiling.
 
-This result is **analysis, not a verified executable**. Runtime obligations are
-not automatically enforced by producing the report. Schema-aware projection
-refinement is explicitly marked by `SchemaProjection`; those plans, full graph
-verification, and exact implementation-registry matching still require integration.
+An analysis report alone does not execute its runtime obligations.
+`check_expression_with_schemas` adds conservative representation-family refinement
+and rejects proven disjoint boundaries without a general schema-subtyping solver.
+Uncertain refinements retain actual-value checks. JSON Schema mathematical integer
+constraints do not silently convert a native floating representation to an integer.
 `CheckedExpression::new` borrows immutable syntax and declarations, analyzes all
-branches, and rejects unresolved schema-projection obligations. Its `evaluate`
+branches, and rejects unresolved schema-projection obligations.
+`CheckedExpression::with_schemas` admits them against pinned offline validators. Its `evaluate`
 method validates evaluated node results, actual-value boundary constraints, and
 declared reference roots, while retaining lazy Boolean and pending behavior.
 References must provide root bindings; typed projection derives optional-field
@@ -308,9 +422,19 @@ through a union variant that does not declare them; missing map keys and invalid
 indices remain errors. Evaluator work and copy limits apply; native JSON Schema
 validation retains the native resource contract described above.
 
-The supplied execution context remains responsible for exact native function
-linkage and enforcing callback invocations. This adapter does not supply a linked
-registry or whole-graph verification.
+`SchemaProjection` validates the complete original schema root before access and
+retains native representations and reference/dynamic scope. Permitted additional
+and pattern-matched fields remain accessible. Missing dynamic keys error; missing
+explicitly declared optional properties yield absence. Private compiler annotations
+preserve field declarations through native evaluation without changing original
+JCS identities; authored annotations cannot impersonate them.
+Schema origin survives record/list materialization. Only computed roots needed
+by later projections are retained, under the existing aggregate payload ceiling;
+native functions are not reinvoked to recover discarded schema context.
+
+Standalone execution contexts implement the native-call contract themselves.
+`NativeRegistry` supplies checked linked dispatch, and `VerifiedExecutable` fixes
+that registry and the admitted graph/policy/schema plans for consumer execution.
 
 `Expression` is an immutable normalized tree with a read-only `ExpressionKind`.
 Supporting types are `ScalarLiteral`, `ValueReference`, `PathStep`, `FunctionId`,
@@ -542,7 +666,7 @@ admission, reserves and accounts for dispatch usage, checks hard token/cost
 enforceability, and authorizes replay based on delivery state, operation policy,
 and exact approvals. A valid policy alone does not authorize a retry or revive
 a terminal invocation. Retry attachment to MCP-only operations is checked by
-the future containing operation schema.
+the canonical operation schema.
 
 ## Canonical graph records
 
@@ -877,10 +1001,9 @@ JSON document may still exceed derived-index ceilings. Depth-128 discovery and
 cleanup are tested on 512 KiB and 2 MiB stacks. `SchemaLocationError` retains static
 categories and underlying JSON/pointer errors, without submitted schema contents.
 
-This is an explicit resolver foundation, not automatic full validation inside
-`CanonicalDocument`. The resolver still must select resource URIs, interpret
-`$id`, anchors and dynamic references, check custom vocabularies with the pinned
-validator, resolve reference targets, and prove offline document closure.
+Location discovery is separate from document assembly. `SchemaResources`,
+`SchemaCatalog`, and `NativeSchemas` supply resource/anchor interpretation, offline
+closure, vocabulary admission and dynamic evaluation; `verify_executable` composes them.
 
 ## Schema resources and initial reference targets
 
@@ -990,10 +1113,9 @@ a failing child may temporarily occupy one additional bounded index. Returned
 targets borrow indexed data rather than allocating extracted schema copies.
 
 The catalog indexes the supplied set and performs initial target lookup without
-I/O. Graph-specific closure selection, used-retrieval-context tracking, and
-canonical pruning remain subsequent work; choosing an equivalent resource
-representative is not a substitute for those checks. Evaluation-time dynamic
-rebinding and full pinned-validator semantics also remain separate stages.
+I/O. Graph-specific closure and used-retrieval-context checks are performed by
+`CanonicalDocument::schema_catalog`; unused entries are rejected rather than pruned.
+`NativeSchemas` provides evaluation-time dynamic rebinding and pinned validation.
 
 ## Conservative schema reference closure
 
@@ -1092,9 +1214,9 @@ ceilings. `SchemaRootMismatch` distinguishes missing or incorrect root placement
 entries use `UnreachableRecord`.
 
 This schema-catalog stage remains explicit rather than being implied by successful
-record decoding. Callable object-root admission, full keyword/vocabulary validation,
-dynamic evaluation, linked-profile checks, graph semantics, and runtime registration
-remain subsequent verifier stages. Closure follows all standard schema locations
+record decoding. `verify_executable` composes callable object-root admission,
+keyword/vocabulary validation, dynamic validation support, linked-profile checks,
+and graph semantics. Runtime registration remains consumer work. Closure follows all standard schema locations
 in reached complete documents, as described above.
 
 ## Canonical document assembly
@@ -1230,8 +1352,8 @@ and verifies its digest and bytes against the binding's stored schema document.
 Supplying individually valid documents under correct hashes does not permit a
 binding to substitute a different schema. Missing, null, scalar, or Boolean
 schema roots fail this callable-schema boundary. Full object-root admission,
-including schemas that establish the constraint through `$ref`, remains resolver
-work; an object-shaped schema alone does not establish that constraint.
+including reference chains, is performed by `NativeSchemas`; an object-shaped
+schema alone does not establish that constraint.
 
 Tool nodes require one required `arguments` input with the exact input schema
 type and one required `value` output with the exact output schema type. Primitive
@@ -1255,8 +1377,8 @@ objects, non-Boolean required flags, and non-string descriptions fail.
 Per-node prompt matching first compares argument counts, then validates and
 indexes the matching-size descriptor arguments by borrowed names. Every reached
 prompt descriptor is also validated independently. This bounds repeated-use
-work by the encoded node interfaces. Complete MCP protocol descriptor validation
-remains separate verifier work.
+work by the encoded node interfaces. Complete protocol descriptor validation is
+performed by `validate_mcp_descriptors` and included in `verify_executable`.
 
 ### Resource-template interfaces
 
@@ -1282,9 +1404,9 @@ once per binding, and reused for node matching. Distinct-variable counts use
 `max_total_values` per template. Encoding under tighter limits rechecks those
 derived ceilings. Invalid syntax reports `InvalidUriTemplate` with a byte offset.
 
-This checks syntax and interface metadata. Actual expansion, Unicode prefix
-handling, output percent encoding, and implementation-profile matching remain
-responsibilities of the pinned URI-template engine and runtime.
+This checks syntax and interface metadata. `expand_uri_template` supplies native
+scalar expansion, Unicode prefixes, and percent encoding. The composed verifier
+matches the pinned URI-template implementation; the runtime owns the resource call.
 
 ### Policy structural bounds
 
@@ -1322,12 +1444,9 @@ Scope references remain digests; iterative definition traversal does not expand
 task invocations or loop iterations. `envelope()` packages the canonical payload;
 `from_envelope()` checks the nested document of an already checked envelope.
 
-**This assembly stage is not full executable verification.** The shared verifier
-still must resolve expression names/types and hidden dependency cycles, enforce
-remaining MCP interfaces and graph observability, match linked implementation profiles,
-validate complete MCP descriptor schemas and callable object-root constraints,
-derive nested schema resources, and prove exact
-external-document/retrieval-URI closure offline. Record assembly accepts extra
+**This assembly stage is not full executable verification.** `verify_executable`
+composes name/type, wait-dependency, observability, linked-profile, complete MCP,
+object-root and offline schema-closure checks. Record assembly accepts extra
 external documents/URI roots; the explicit `schema_catalog` stage rejects those
 outside its rooted schema closure and policy/descriptor roles.
 Registration and authorization remain runtime work. `DocumentError` preserves

@@ -134,13 +134,10 @@ fn matches_type(
         }
         K::Schema(id) => {
             let native = schemas.ok_or(Error::UnresolvedType)?;
-            match native.validate_schema_value(id, value, meter.codec_limits()) {
-                Ok(valid) => Ok(valid),
-                Err(crate::NativeSchemaError::Json(
-                    JsonError::UnsafeNumber | JsonError::UnsupportedValue,
-                )) => Ok(false),
-                Err(e) => Err(e.into()),
-            }
+            let Some(document) = json_value(value, meter)? else {
+                return Ok(false);
+            };
+            Ok(native.validate_schema_document(id, &document, meter.program_limits())?)
         }
         K::Var(_) | K::Function { .. } => Err(Error::UnresolvedType),
     }
@@ -185,6 +182,7 @@ fn matches_primitive(
             matches_type(value, &shape, schemas, meter, depth + 1)
         }
         P::ResourceSnapshot => {
+            inspect_collections(value, meter)?;
             match crate::mcp_protocol::snapshot_shape(value, meter.codec_limits()) {
                 Ok(_) => Ok(true),
                 Err(McpValidationError::SnapshotShape | McpValidationError::SnapshotIdentity) => {
@@ -198,7 +196,7 @@ fn matches_primitive(
             let Some(json) = json_value(value, meter)? else {
                 return Ok(false);
             };
-            match crate::validate_mcp_prompt_result(&json, meter.codec_limits()) {
+            match crate::validate_mcp_prompt_result(&json, meter.program_limits()) {
                 Ok(()) => Ok(true),
                 Err(McpValidationError::PromptResult | McpValidationError::BinaryEncoding) => {
                     Ok(false)
@@ -211,14 +209,48 @@ fn matches_primitive(
         }
     }
 }
-fn json_value(value: &Value, meter: &EvaluationMeter<'_>) -> Result<Option<JsonDocument>, Error> {
-    match JsonDocument::from_value(value, meter.codec_limits()) {
-        Ok(value) => Ok(Some(value)),
+pub(crate) fn json_value(
+    value: &Value,
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<Option<JsonDocument>, Error> {
+    inspect_collections(value, meter)?;
+    match JsonDocument::from_value(value, meter.program_limits()) {
+        Ok(value) => {
+            meter.charge(value.as_bytes().len() as u64)?;
+            Ok(Some(value))
+        }
         Err(JsonError::UnsafeNumber | JsonError::UnsupportedValue) => Ok(None),
         Err(JsonError::Codec(e)) => Err(e.into()),
         Err(JsonError::LimitExceeded { .. }) => Err(Error::Limit("JSON value")),
         Err(_) => Err(Error::OperandType),
     }
+}
+pub(crate) fn inspect_collections(
+    value: &Value,
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<(), Error> {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        meter.charge(1)?;
+        match value {
+            Value::Array(values) => {
+                meter.visit(values.len() as u64)?;
+                pending
+                    .try_reserve(values.len())
+                    .map_err(|_| Error::AllocationFailed)?;
+                pending.extend(values);
+            }
+            Value::Map(values) => {
+                meter.visit(values.len() as u64)?;
+                pending
+                    .try_reserve(values.len())
+                    .map_err(|_| Error::AllocationFailed)?;
+                pending.extend(values.iter().map(|(_, value)| value));
+            }
+            _ => (),
+        }
+    }
+    Ok(())
 }
 fn copy_type(ty: &T, meter: &mut EvaluationMeter<'_>) -> Result<T, Error> {
     let bytes = ty.encode(TypeContext::Value, meter.program_limits())?;
@@ -238,10 +270,29 @@ pub(crate) fn project(
     schemas: Option<&NativeSchemas>,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<ResultValue, Error> {
+    if let K::Schema(schema) = ty.kind() {
+        return crate::schema_projection::project(
+            schemas.ok_or(Error::UnresolvedType)?,
+            *schema,
+            value,
+            path,
+            meter,
+        );
+    }
+    if let K::Union(members) = ty.kind()
+        && members
+            .iter()
+            .any(|member| matches!(member.kind(), K::Schema(_)))
+    {
+        return project_schema_members(value, members, path, schemas, meter);
+    }
     require(value, ty, schemas, meter)?;
     let mut value = value;
     let mut types = vec![copy_type(ty, meter)?];
     for (index, step) in path.iter().enumerate() {
+        if types.iter().any(contains_schema_head) {
+            return project_schema_members(value, &types, &path[index..], schemas, meter);
+        }
         meter.visit(1)?;
         let mut selected = None;
         let mut next_types = Vec::new();
@@ -276,6 +327,49 @@ pub(crate) fn project(
         }
     }
     Ok(ResultValue::Present(meter.copy_value(value)?))
+}
+fn contains_schema_head(ty: &T) -> bool {
+    match ty.kind() {
+        K::Schema(_) => true,
+        K::Union(members) => members
+            .iter()
+            .any(|member| matches!(member.kind(), K::Schema(_))),
+        _ => false,
+    }
+}
+fn project_schema_members(
+    value: &Value,
+    members: &[T],
+    path: &[PathStep],
+    schemas: Option<&NativeSchemas>,
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<ResultValue, Error> {
+    let mut present = None;
+    let mut absent = false;
+    let mut absence_error = false;
+    for member in members {
+        meter.visit(1)?;
+        if !matches_type(value, member, schemas, meter, 0)? {
+            continue;
+        }
+        match project(value, member, path, schemas, meter) {
+            Ok(ResultValue::Present(value)) => present = Some(value),
+            Ok(ResultValue::Absent) => absent = true,
+            Err(Error::InvalidProjection) => (),
+            Err(Error::AbsentOperand) => absence_error = true,
+            Err(error) => return Err(error),
+            Ok(ResultValue::Pending) => return Err(Error::OperandType),
+        }
+    }
+    if let Some(value) = present {
+        Ok(ResultValue::Present(value))
+    } else if absent {
+        Ok(ResultValue::Absent)
+    } else if absence_error {
+        Err(Error::AbsentOperand)
+    } else {
+        Err(Error::InvalidProjection)
+    }
 }
 fn projected_types(
     ty: &T,

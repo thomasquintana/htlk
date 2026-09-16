@@ -411,7 +411,7 @@ impl Default for ScopeFields {
 /// Immutable canonical scope with local endpoint and context validation.
 /// No scope-role label is serialized. Graph cycles, observability, required
 /// binding coverage, expression names/types, and referenced definitions are
-/// checked by the future shared verifier before registration.
+/// checked by verify_scope_graph and the composed verifier before registration.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
     fields: Box<ScopeFields>,

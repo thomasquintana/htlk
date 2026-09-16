@@ -56,9 +56,9 @@ impl DocumentFields {
 }
 
 /// Immutable, canonically encoded document with table identities and known
-/// references checked. This is NOT a fully verified/runnable graph: expression
-/// typing/cycles, descriptor/protocol schemas, schema-resource closure, linked
-/// implementation matching, and authorization require the shared verifier.
+/// references checked. Use verify_executable for expression/graph, schema/MCP,
+/// and exact linked-profile admission. Runtime authorization and registration
+/// transactions remain consumer responsibilities.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalDocument {
     fields: Box<DocumentFields>,
@@ -201,7 +201,8 @@ impl CanonicalDocument {
         limits: &Limits,
     ) -> Result<crate::NativeSchemas, DocumentError> {
         let catalog = self.schema_catalog(limits)?;
-        let schemas = crate::NativeSchemas::compile(&catalog, options, limits)?;
+        let schemas = crate::NativeSchemas::compile_diagnostic(&catalog, options, limits)
+            .map_err(|error| DocumentError::SchemaDiagnostic(Box::new(error)))?;
         for binding in self.fields.bindings.values() {
             if let McpBindingKind::Tool {
                 input_schema,
@@ -1005,6 +1006,8 @@ fn closed(v: &Value) -> Result<&Map, DocumentError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DocumentError {
+    /// Native schema admission with original document/pointer location.
+    SchemaDiagnostic(Box<crate::NativeSchemaDiagnostic>),
     /// Full MCP protocol/value conformance failure.
     Mcp(crate::McpValidationError),
     /// One compound server/kind/selection is pinned to conflicting descriptors.
@@ -1126,6 +1129,7 @@ impl fmt::Display for DocumentError {
 impl std::error::Error for DocumentError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::SchemaDiagnostic(e) => Some(e.as_ref()),
             Self::Codec(e) => Some(e),
             Self::Envelope(e) => Some(e),
             Self::Graph(e) => Some(e),
