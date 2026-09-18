@@ -1,5 +1,6 @@
 //! RFC 6901 lookup, fragment decoding, and bounded pointer construction.
 use htlk_cbor::{LimitKind, Limits, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{JsonDocument, JsonPointer as P, JsonPointerError as E};
 
 #[test]

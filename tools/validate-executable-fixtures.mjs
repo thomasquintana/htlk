@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
-const lines = readFileSync(new URL('crates/htlk-executable/tests/fixtures/native-empty.hex', root), 'utf8').trim().split(/\r?\n/);
+const lines = readFileSync(new URL('crates/htlk-rt/tests/fixtures/native-empty.hex', root), 'utf8').trim().split(/\r?\n/);
 const fingerprint = lines.shift().replace(/^fingerprint=/, '');
 const scopeDigest = lines.shift().replace(/^root_scope=/, '');
 const hex = lines.join('');
@@ -101,21 +101,51 @@ function jcs(value) {
   return JSON.stringify(value);
 }
 assert.equal(jcs(JSON.parse(text.decode(policyBytes))), text.decode(policyBytes));
-function implementation(files) {
-  const hash = createHash('sha256').update('htlk.native-implementation/0.1\n');
-  for (const file of files) {
-    const source = readFileSync(new URL(`crates/htlk-executable/src/${file}`, root));
+function implementation(domain, parts) {
+  const hash = createHash('sha256').update(domain);
+  for (const source of parts) {
     const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(source.length));
     hash.update(length).update(source);
   }
   return `sha256:${hash.digest('hex')}`;
 }
-assert.equal(get(profile, 'core_digest').value, implementation([
-  'native_profile.rs', 'evaluate.rs', 'checked_evaluate.rs', 'runtime_type.rs',
-  'schema_projection.rs', 'schema_hints.rs', 'type_check.rs', 'native_registry.rs',
-  'graph_verify.rs', 'verified.rs',
+const sources = (crate, files) => files.map(file => readFileSync(new URL(`crates/${crate}/src/${file}`, root)));
+const rawDigest = value => Buffer.from(value.slice(7), 'hex');
+// Independent explicit coverage lists: do not infer these from Rust source text.
+const model = implementation('htlk.model-implementation/0.1\n', [
+  ...sources('htlk-executable', [
+    'implementation.rs', 'lib.rs', 'document.rs', 'envelope.rs', 'digest.rs',
+    'identifier.rs', 'json.rs', 'json_pointer.rs', 'metadata.rs', 'options.rs', 'policy.rs',
+    'record_accounting.rs', 'uri_template.rs', 'serialize.rs',
+    'expression/mod.rs', 'expression/wire.rs', 'expression/template.rs',
+    'graph/mod.rs', 'graph/wire.rs', 'types/mod.rs', 'types/wire.rs',
+    'cbor/mod.rs', 'cbor/accounting.rs', 'cbor/decode.rs', 'cbor/encode.rs',
+    'cbor/error.rs', 'cbor/limits.rs', 'cbor/value.rs', 'cbor/serde.rs',
+  ]),
+  Buffer.from('cbor2=1.1.5;half=2.7.1'),
+]);
+const analyzer = implementation('htlk.analyzer-implementation/0.1\n', [
+  rawDigest(model),
+  ...sources('htlk-analyzer', [
+    'implementation.rs', 'lib.rs', 'analyzed.rs', 'error.rs', 'context.rs', 'linkage.rs', 'linked.rs',
+    'binding_validation.rs', 'graph_verify.rs', 'structure.rs', 'type_check.rs',
+    'native_schema.rs', 'schema_catalog.rs', 'schema_hints.rs', 'schema_locations.rs',
+    'schema_resources.rs', 'schema_projection.rs', 'mcp_protocol.rs',
+    '../assets/mcp-2025-11-25.schema.json',
+  ]),
+  Buffer.from('jsonschema=0.56.0;regex=1.13.1;regex-automata=0.4.18;regex-syntax=0.8.11;iri-string=0.7.14'),
+]);
+const native = parts => implementation('htlk.native-implementation/0.1\n', parts);
+assert.equal(get(profile, 'core_digest').value, native([
+  rawDigest(model), rawDigest(analyzer),
+  ...sources('htlk-rt', [
+    'lib.rs', 'native_profile.rs', 'evaluate.rs', 'checked_evaluate.rs', 'runtime_type.rs',
+    'schema_projection.rs', 'native_registry.rs', 'verified.rs', 'mcp_protocol.rs', 'uri_template.rs',
+  ]),
 ]));
-assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value, implementation(['native_profile.rs', 'evaluate.rs']));
-assert.equal(get(get(profile, 'uri_template_engine'), 'implementation_digest').value, implementation(['native_profile.rs', 'uri_template.rs']));
-assert.equal(get(get(profile, 'schema_validator'), 'implementation_digest').value, sha(readFileSync(new URL('crates/htlk-executable/src/native_schema.rs', root))));
+assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value,
+  native(sources('htlk-rt', ['native_profile.rs', 'evaluate.rs'])));
+assert.equal(get(get(profile, 'uri_template_engine'), 'implementation_digest').value,
+  native([...sources('htlk-rt', ['native_profile.rs', 'uri_template.rs']), rawDigest(model)]));
+assert.equal(get(get(profile, 'schema_validator'), 'implementation_digest').value, analyzer);
 console.log(JSON.stringify({ fixture: 'native-empty', bytes: bytes.length, payload_bytes: payload.length, fingerprint, scope: scopeDigest, independent_cbor_jcs_hash_checks: true }, null, 2));

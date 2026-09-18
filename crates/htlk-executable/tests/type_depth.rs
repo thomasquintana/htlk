@@ -1,6 +1,7 @@
 //! Isolated depth and cleanup checks for the recursive canonical type model.
 
 use htlk_cbor::{Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{Port, TypeContext as C, TypeError, ValueType as T, ValueTypeKind as K};
 
 fn list_bytes(depth: usize) -> Vec<u8> {

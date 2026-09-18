@@ -1,6 +1,7 @@
 //! RFC 6901 location parsing and lookup, independent of schema-resource selection.
 
 use crate::JsonDocument;
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Value};
 use std::fmt;
 

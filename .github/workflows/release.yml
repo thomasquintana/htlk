@@ -100,14 +100,13 @@ jobs:
 
       - name: Validate workspace packages
         run: |
-          rm -rf target/package
-          cargo package --workspace --locked
+          cargo package --workspace --locked --target-dir "$RUNNER_TEMP/htlk-package-$GITHUB_SHA"
 
       - name: Upload crate packages
         uses: actions/upload-artifact@v4
         with:
           name: crates-${{ github.sha }}
-          path: target/package/*.crate
+          path: ${{ runner.temp }}/htlk-package-${{ github.sha }}/package/*.crate
           if-no-files-found: error
           retention-days: 90
 
@@ -175,11 +174,11 @@ jobs:
             done
           }
 
-          publish_if_needed htlk-cbor
-          wait_for_crate htlk-cbor
-
           publish_if_needed htlk-executable
           wait_for_crate htlk-executable
+
+          publish_if_needed htlk-analyzer
+          wait_for_crate htlk-analyzer
 
           for crate in htlk-compiler htlk-rt; do
             publish_if_needed "$crate"

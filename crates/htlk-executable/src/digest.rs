@@ -2,6 +2,7 @@
 
 use std::{fmt, str::FromStr};
 
+use crate::cbor as htlk_cbor;
 use sha2::{Digest as _, Sha256};
 
 /// A 32-byte SHA-256 digest, displayed as `sha256:` plus 64 lowercase hex digits.

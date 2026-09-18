@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
-description = "Canonical HTLK executable format, shared verifier, and native expression evaluation"
+description = "Canonical HTLK executable model, bounded CBOR and JSON, digests, and envelopes"
 readme = "README.md"
 documentation = "https://docs.rs/htlk-executable"
 keywords = ["cbor", "sha256", "digest", "htlk"]
@@ -15,16 +15,8 @@ categories = ["encoding", "cryptography"]
 all-features = true
 
 [dependencies]
-base64.workspace = true
+cbor2.workspace = true
 half.workspace = true
-htlk-cbor.workspace = true
-iri-string.workspace = true
-jsonschema.workspace = true
-regex.workspace = true
-# Pin the regex implementation and Unicode tables used by the native profile,
-# including when this crate is resolved without the workspace lockfile.
-regex-automata.workspace = true
-regex-syntax.workspace = true
 serde.workspace = true
 sha2.workspace = true
 serde_json.workspace = true

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};

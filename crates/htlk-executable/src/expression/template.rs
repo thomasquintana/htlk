@@ -1,3 +1,4 @@
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use super::{ExpressionContext, ExpressionError, wire};
@@ -15,10 +16,10 @@ pub enum TemplatePart {
 
 /// Immutable canonical prompt-template metadata, not an LLM invocation.
 ///
-/// Parameters are exposed in UTF-8 name order. Their names exactly match the
-/// distinct slots and their types are string, integer, or Boolean. Rendering
-/// arguments and presence/type compatibility at a use site require the graph
-/// verifier/evaluator; this type does not execute or substitute text.
+/// Parameters are exposed in UTF-8 name order and have string, integer or Boolean
+/// types. The analyzer checks exact declaration/slot name coverage. Rendering and
+/// use-site argument compatibility require analyzer/runtime integration; this
+/// type does not execute or substitute text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptTemplate {
     parameters: Vec<(Identifier, Port)>,
@@ -29,7 +30,7 @@ impl PromptTemplate {
     /// Normalizes authored parts by removing empty text and joining adjacent text.
     ///
     /// # Errors
-    /// Returns record/type/name/coverage errors or resource/allocation failures.
+    /// Returns record/type/name errors or resource/allocation failures.
     pub fn new(
         parameters: Vec<(Identifier, Port)>,
         parts: Vec<TemplatePart>,
@@ -88,7 +89,7 @@ impl PromptTemplate {
     /// Reads canonical template data without repairing parts.
     ///
     /// # Errors
-    /// Returns codec, schema, type, canonicality, or coverage failures.
+    /// Returns codec, record-shape, type or canonicality failures.
     pub fn from_value(value: &Value, limits: &Limits) -> Result<Self, ExpressionError> {
         htlk_cbor::encode(value, limits)?;
         Self::parse(value, limits, false)
@@ -103,7 +104,7 @@ impl PromptTemplate {
     /// Decodes exactly one canonical template record.
     ///
     /// # Errors
-    /// Returns codec, schema, type, canonicality, or coverage failures.
+    /// Returns codec, record-shape, type or canonicality failures.
     pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Self, ExpressionError> {
         Self::parse(&htlk_cbor::decode(bytes, limits)?, limits, false)
     }
@@ -182,22 +183,6 @@ impl PromptTemplate {
                 }
                 _ => return Err(ExpressionError::InvalidShape("template part")),
             }
-        }
-        let mut slots = Vec::new();
-        for part in &parts {
-            if let TemplatePart::Slot(name) = part {
-                wire::push(&mut slots, name)?;
-            }
-        }
-        slots.sort_unstable();
-        slots.dedup();
-        if slots.len() != parameters.len()
-            || slots
-                .iter()
-                .zip(&parameters)
-                .any(|(slot, (name, _))| *slot != name)
-        {
-            return Err(ExpressionError::TemplateParameterMismatch);
         }
         Ok(Self { parameters, parts })
     }

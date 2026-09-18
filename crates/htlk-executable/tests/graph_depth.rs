@@ -1,6 +1,7 @@
 //! Whole-record embedding depth, including nested expression cleanup.
 
 use htlk_cbor::Limits;
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     Edge, EdgeDestination as D, EdgeSource as S, Expression as E, ExpressionContext as EC,
     GraphRecordError as Error, Node, NodeFields, Operation, Port, PortTable, PrimitiveType as P,

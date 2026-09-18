@@ -3,6 +3,7 @@
 mod template;
 mod wire;
 
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{FiniteFloat, Limits, Value};
 
 use crate::Identifier;
@@ -222,7 +223,7 @@ pub enum ExpressionKind {
     },
 }
 
-/// Immutable canonical expression metadata with reference-category checks.
+/// Immutable canonical expression metadata with bounded normalization.
 ///
 /// This does not evaluate, resolve names, infer types, compile regex engines,
 /// or validate callback placement/signatures. Those require the surrounding
@@ -246,7 +247,8 @@ impl Expression {
     /// Normalizes authored paths, record fields, and regex flags under limits.
     ///
     /// # Errors
-    /// Returns schema, context, normalization, or resource failures.
+    /// Returns representation, normalization, or resource failures. Contextual
+    /// reference legality is checked by the analyzer, not this constructor.
     pub fn new(
         kind: ExpressionKind,
         context: ExpressionContext,
@@ -264,7 +266,7 @@ impl Expression {
     /// Converts to canonical CBOR data, checking size before large allocations.
     ///
     /// # Errors
-    /// Returns context, resource, or allocation failures.
+    /// Returns representation, resource, or allocation failures.
     pub fn to_value(
         &self,
         context: ExpressionContext,
@@ -275,7 +277,7 @@ impl Expression {
     /// Validates canonical expression data without repairing its structure.
     ///
     /// # Errors
-    /// Returns codec, schema, context, or canonicality failures.
+    /// Returns codec, record-shape, or canonicality failures.
     pub fn from_value(
         value: &Value,
         context: ExpressionContext,
@@ -287,7 +289,7 @@ impl Expression {
     /// Encodes one canonical expression.
     ///
     /// # Errors
-    /// Returns context, resource, or allocation failures.
+    /// Returns representation, resource, or allocation failures.
     pub fn encode(
         &self,
         context: ExpressionContext,
@@ -295,10 +297,11 @@ impl Expression {
     ) -> Result<Vec<u8>, ExpressionError> {
         Ok(htlk_cbor::encode(&self.to_value(context, limits)?, limits)?)
     }
-    /// Decodes exactly one canonical expression under its owning context.
+    /// Decodes exactly one canonical expression. Owning-context semantics are
+    /// validated separately by the analyzer.
     ///
     /// # Errors
-    /// Returns codec, schema, context, or canonicality failures.
+    /// Returns codec, record-shape, or canonicality failures.
     pub fn decode(
         bytes: &[u8],
         context: ExpressionContext,

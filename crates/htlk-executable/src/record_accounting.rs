@@ -1,15 +1,31 @@
 //! Shared pre-allocation accounting for canonical executable record conversion.
 
+use crate::cbor as htlk_cbor;
 use half::f16;
 use htlk_cbor::{FiniteFloat, LimitKind, Limits};
 
+/// A bounded record conversion exhausted a logical codec resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EncodingLimitError {
-    pub(crate) limit: LimitKind,
-    pub(crate) maximum: usize,
+pub struct EncodingLimitError {
+    /// Exhausted resource.
+    pub limit: LimitKind,
+    /// Configured maximum.
+    pub maximum: usize,
 }
 
-pub(crate) struct RecordAccounting<'a> {
+impl std::fmt::Display for EncodingLimitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "record encoding limit {:?}: {}",
+            self.limit, self.maximum
+        )
+    }
+}
+impl std::error::Error for EncodingLimitError {}
+
+/// Incremental pre-allocation accounting for composite canonical records.
+pub struct RecordAccounting<'a> {
     limits: &'a Limits,
     values: usize,
     payload: usize,
@@ -20,7 +36,7 @@ impl<'a> RecordAccounting<'a> {
     /// Charges an already bounded child at its actual containing-record depth.
     /// The child conversion may temporarily occupy one additional codec-sized
     /// allocation; no further children are retained after an aggregate failure.
-    pub(crate) fn value(
+    pub fn value(
         &mut self,
         value: &htlk_cbor::Value,
         depth: usize,
@@ -51,7 +67,11 @@ impl<'a> RecordAccounting<'a> {
         }
     }
 
-    pub(crate) fn new(limits: &'a Limits) -> Result<Self, htlk_cbor::Error> {
+    /// Starts fresh counters after validating the supplied codec limits.
+    ///
+    /// # Errors
+    /// Returns unsupported limit configuration.
+    pub fn new(limits: &'a Limits) -> Result<Self, htlk_cbor::Error> {
         limits.validate()?;
         Ok(Self {
             limits,
@@ -82,11 +102,8 @@ impl<'a> RecordAccounting<'a> {
         Ok(())
     }
 
-    pub(crate) fn collection(
-        &mut self,
-        len: usize,
-        depth: usize,
-    ) -> Result<(), EncodingLimitError> {
+    /// Accounts for a container header and checks its entry count.
+    pub fn collection(&mut self, len: usize, depth: usize) -> Result<(), EncodingLimitError> {
         self.enter(depth)?;
         check(
             len,
@@ -96,7 +113,8 @@ impl<'a> RecordAccounting<'a> {
         self.bytes(header_size(len as u64))
     }
 
-    pub(crate) fn text(&mut self, text: &str, depth: usize) -> Result<(), EncodingLimitError> {
+    /// Accounts for an exact UTF-8 string, including its canonical header.
+    pub fn text(&mut self, text: &str, depth: usize) -> Result<(), EncodingLimitError> {
         self.enter(depth)?;
         check(text.len(), self.limits.max_text_bytes, LimitKind::TextBytes)?;
         self.payload = add(

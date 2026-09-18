@@ -16,8 +16,8 @@ all-features = true
 
 [dependencies]
 chumsky.workspace = true
-htlk-cbor.workspace = true
 htlk-executable.workspace = true
+htlk-analyzer.workspace = true
 logos.workspace = true
 miette.workspace = true
 

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const commit = 'c4c367f9f58296a7053f5c78a52fd02bfbb56a49';
 const upstream = `https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/${commit}`;
-const directory = resolve(dirname(fileURLToPath(import.meta.url)), '../crates/htlk-executable/assets');
+const directory = resolve(dirname(fileURLToPath(import.meta.url)), '../crates/htlk-analyzer/assets');
 async function fetchText(path) {
   const response = await fetch(`${upstream}/${path}`);
   if (!response.ok) throw new Error(`Protocol snapshot fetch failed: ${response.status}`);

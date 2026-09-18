@@ -16,7 +16,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-cargo package --workspace --locked
+cargo package --workspace --locked --target-dir "$(mktemp -d)"
 ```
 
 Every public API should include rustdoc. Behavior changes should include tests
@@ -25,6 +25,10 @@ and an entry under the `Unreleased` section of `CHANGELOG.md`.
 Package all workspace crates together: Cargo stages local packages so dependent
 crates can be verified before their new versions are published. For a local
 pre-commit package check, add `--allow-dirty`; CI checks the clean checkout.
+Use a fresh packaging target directory when checking edited unpublished versions:
+Cargo can otherwise reuse a cached same-version staged dependency from a previous
+package check. Archives are written below the chosen target's `package/` directory.
+CI and release validation use commit-specific temporary target directories.
 
 When `Cargo.lock` changes, install `cargo-about` and regenerate third-party
 notices:
@@ -95,8 +99,8 @@ Manual validation can run on a branch; manual publishing requires a matching tag
 gh workflow run release.yml --ref v0.1.0 -f dry_run=false
 ```
 
-The release workflow publishes `htlk-cbor` first and waits for registry
-availability, then publishes `htlk-executable` and waits for it, then publishes
+The release workflow publishes `htlk-executable` first and waits for registry
+availability, then publishes `htlk-analyzer` and waits for it, then publishes
 `htlk-compiler` and `htlk-rt`, waits for both, and publishes the `htlk` facade.
 All five packages are verified together before publication. If publication stops
 partway through, rerun the failed publishing job after fixing its cause; the workflow

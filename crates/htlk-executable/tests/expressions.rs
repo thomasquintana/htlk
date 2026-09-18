@@ -1,6 +1,7 @@
 //! Expression shape, canonicalization, reference contexts, and limits.
 
 use htlk_cbor::{FiniteFloat, LimitKind, Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
     BinaryOperator as B, CoreFunction as F, Expression as E, ExpressionContext as C,
@@ -148,66 +149,6 @@ fn references_and_get_paths_normalize_without_evaluation() {
         )
         .is_err()
     );
-}
-
-#[test]
-fn context_matrix_is_enforced_through_nested_expressions() {
-    let contexts = [
-        C::Eval,
-        C::Preconditions,
-        C::Guard { loop_body: false },
-        C::Guard { loop_body: true },
-        C::PrimitivePostconditions,
-        C::ScopePostconditions,
-        C::WrapperPostconditions,
-        C::LoopUntil,
-        C::LoopPostconditions,
-    ];
-    let sources = [
-        R::Input("x".parse().unwrap()),
-        R::Output {
-            node: "worker".parse().unwrap(),
-            port: "value".parse().unwrap(),
-        },
-        R::ScopeOutput("value".parse().unwrap()),
-        R::Carried("x".parse().unwrap()),
-        R::Next("x".parse().unwrap()),
-    ];
-    let allowed = [
-        [true, true, true, true, true, true, true, true, true],
-        [false, false, true, true, false, false, false, true, false],
-        [false, false, false, false, true, true, true, true, true],
-        [false, false, false, true, false, false, false, true, false],
-        [false, false, false, false, false, false, false, true, false],
-    ];
-    for (source, row) in sources.into_iter().zip(allowed) {
-        let e = make(K::Ref {
-            source,
-            path: vec![],
-        });
-        let nested = make(K::List(vec![e]));
-        let encoded = nested.encode(C::LoopUntil, &Limits::default()).unwrap();
-        for (context, expected) in contexts.into_iter().zip(row) {
-            assert_eq!(nested.encode(context, &Limits::default()).is_ok(), expected);
-            assert_eq!(
-                E::decode(&encoded, context, &Limits::default()).is_ok(),
-                expected
-            );
-        }
-    }
-    for kind in [
-        K::Status("worker".parse().unwrap()),
-        K::Error("worker".parse().unwrap()),
-    ] {
-        let e = make(K::Not(Box::new(make(kind)))); // Shape-only; Boolean typing is verifier work.
-        for context in contexts {
-            let expected = matches!(
-                context,
-                C::Guard { .. } | C::ScopePostconditions | C::LoopUntil
-            );
-            assert_eq!(e.encode(context, &Limits::default()).is_ok(), expected);
-        }
-    }
 }
 
 #[test]

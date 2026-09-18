@@ -3,6 +3,7 @@
 use std::error::Error as _;
 
 use htlk_cbor::{ErrorKind, FiniteFloat, LimitKind, Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{ExecutionLimits as E, ExecutionOptionsError as Error, RetryPolicy as R};
 
 fn record(fields: Vec<(&str, Value)>) -> Value {

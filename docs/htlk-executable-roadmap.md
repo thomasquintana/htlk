@@ -1,8 +1,13 @@
-# htlk-executable completion checklist (Draft 0.1)
+# Executable stack completion checklist (Draft 0.1)
 
 This checklist covers the shared executable format and verifier used by the
 compiler and runtime. Its authority is `specs/compiler-spec.md`,
 `specs/htlk-executable.cddl`, and `specs/runtime-spec.md`.
+
+Ownership is split across `htlk-executable` (canonical model/codec),
+`htlk-analyzer` (semantic linkage, analysis and offline schemas) and `htlk-rt`
+(host admission, registry, evaluation and obligation enforcement). The compiler
+uses the shared model/analyzer without depending on runtime admission.
 
 ## Implemented foundation
 
@@ -16,17 +21,18 @@ compiler and runtime. Its authority is `specs/compiler-spec.md`,
   interfaces, and RFC 6570 template syntax/variable interfaces.
 - JSON Pointers, schema-location/resource/anchor indexes, cross-document catalogs,
   conservative reference closure, embedded schema bases, and an explicit
-  `CanonicalDocument::schema_catalog` stage checking known external closure.
+  analyzer `DocumentAnalysis::schema_catalog` stage checking known external closure.
 
-These component APIs establish representation and structural integrity.
-`verify_executable` is the composed admission boundary; a successful lower-level
+These component APIs separately establish representation and semantic integrity.
+`htlk_rt::verify_executable` is the composed admission boundary; a successful lower-level
 `CanonicalDocument` decode alone does not establish a fully verified runnable graph.
 
 ## Completion status and remaining work
 
 Tasks 1–7 are implemented and covered by component and composed verification tests.
-The authoritative result is `VerifiedExecutable`, which pins host policy, schemas and the native
-registry and borrows admitted execution plans without per-evaluation plan copying.
+`AnalyzedDocument` retains immutable semantic results and their exact document.
+Runtime's `VerifiedExecutable` additionally pins host policy and the native registry
+and borrows admitted execution plans without per-evaluation plan copying.
 
 ### 1. Finish schema admission and validation
 
@@ -48,7 +54,7 @@ registry and borrows admitted execution plans without per-evaluation plan copyin
 - [x] Integrate schema bases, resource conflicts, reference
   targets, and exact external closure, including all resources potentially used
   by supported dynamic/vocabulary semantics. Current document-level closure is
-  deliberately conservative. `CanonicalDocument::native_schemas` composes these
+  deliberately conservative. Analyzer's `DocumentAnalysis::native_schemas` composes these
   checks with native validation; `verify_executable` includes this stage.
 
 ### 2. Complete MCP descriptor conformance
@@ -128,7 +134,7 @@ registry and borrows admitted execution plans without per-evaluation plan copyin
 ### 6. Expose one complete verification boundary
 
 - [x] Compose envelope, canonical document, schema catalog, descriptor, expression,
-  graph, and linked-profile checks into one shared compiler/runtime verification API.
+  graph and linked-profile checks into runtime admission built on shared semantic analysis.
 - [x] Return an immutable verified result that cannot be constructed through the
   ordinary record constructors; make the distinction from assembly explicit.
 - [x] Attach structured canonical locations to diagnostics (scope/node/edge,
@@ -157,35 +163,36 @@ registry and borrows admitted execution plans without per-evaluation plan copyin
 Compiler source parsing, modules/imports, inspection, and graph joins belong to
 `htlk-compiler`; actor execution, persistence, registration transactions, deadlines,
 budgets, authorization, and live MCP I/O belong to `htlk-rt`. Their integration
-tests must exercise the same shared verifier before compiler output or runtime
+tests must exercise the shared analyzer before compiler output or runtime
 registration is accepted. These consumer implementations are separate from the
 completed shared format/verifier work listed above.
 
 ## Completion criterion
 
-`htlk-executable` is complete for Draft 0.1 when it can independently validate a
-bounded executable envelope against the supplied linked profile, return a fully
-verified immutable graph with enforceable boundary plans, and pass the complete
+The executable stack is complete for Draft 0.1 when its runtime admission can
+validate bounded canonical input against the supplied linked profile, recompute
+semantic analysis and return immutable enforceable plans, and pass the complete
 conformance corpus. Publishing the current package or building its API docs does
 not by itself establish that milestone.
 
 ## Verification evidence
 
-- `tests/verified.rs` exercises complete envelope admission, all operation and MCP
+- `crates/htlk-rt/tests/verified.rs` exercises complete envelope admission, all operation and MCP
   binding kinds, exact host policy/profile linking, immutable checked execution,
   reuse, malformed nested payloads, and controlled-stack verification/cleanup.
-- `tests/graph_verify.rs` covers hidden cycles, all condition branches, optional
+- `crates/htlk-analyzer/tests/graph_verify.rs` covers hidden cycles, all condition branches, optional
   inputs, writer/coverage rules, explicit observability, per-use loop termination,
   structured expression locations, derived-plan amplification, and an independent
   generated-graph cycle oracle.
-- `tests/schema_projection.rs` covers permitted dynamic fields, optional declarations,
+- `crates/htlk-rt/tests/schema_projection.rs` covers permitted dynamic fields, optional declarations,
   original reference/dynamic context, numeric representation preservation, work
-  boundaries, schema-family refinement and redacted schema diagnostics.
-- `tests/checked_calls.rs` covers ordinary/higher-order callback boundaries, generic
+  boundaries and schema-family refinement. Analyzer tests cover redacted schema diagnostics.
+- `crates/htlk-rt/tests/checked_calls.rs` covers ordinary/higher-order callback boundaries, generic
   inference, original callable locations, exact manifest dispatch and prepaid work.
-- `tests/fixtures/native-empty.hex` is a fixed complete executable. The Rust suite
+- `crates/htlk-rt/tests/fixtures/native-empty.hex` is a fixed complete executable. The Rust suite
   round-trips it and rejects every single-bit mutation. The independent Node checker
   verifies its canonical CBOR, JCS, envelope/scope/policy hashes and native identities.
 - CI and release validation run the independent fixture checker alongside the Rust
-  and specification suites. The workspace has 272 tests and 27 documentation examples;
-  formatting, Clippy, rustdoc, package verification and dependency policy are checked.
+  and specification suites. Model, analyzer and runtime test suites preserve codec
+  and controlled-stack coverage; the detailed cross-crate reference is doctested by
+  the facade. Formatting, Clippy, rustdoc, packaging and dependency policy are checked.

@@ -1,5 +1,6 @@
 //! The pinned external JCS policy document shape.
 
+use crate::cbor as htlk_cbor;
 use crate::digest::Digest;
 use crate::{ExecutionLimits, ExecutionOptionsError, JsonDocument, JsonError};
 use htlk_cbor::{Limits, Map, Value};

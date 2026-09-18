@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use htlk_cbor::{Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{Identifier, ParseIdentifierError};
 
 #[test]

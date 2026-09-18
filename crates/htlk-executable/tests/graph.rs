@@ -1,6 +1,7 @@
 //! Canonical graph-record shapes, local invariants, and digest domains.
 
 use htlk_cbor::{LimitKind, Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::{Digest, RecordKind, record_digest};
 use htlk_executable::{
     Edge, EdgeDestination as D, EdgeSource as S, ExecutionLimits, Expression as E,
@@ -261,7 +262,7 @@ fn operation_shapes_and_positive_bounds_are_exact() {
 }
 
 #[test]
-fn primitive_layouts_reserved_names_and_expression_contexts() {
+fn primitive_layouts_reserved_names_and_context_free_representation() {
     let l = Limits::default();
     let base = node("worker");
     for name in [
@@ -328,74 +329,11 @@ fn primitive_layouts_reserved_names_and_expression_contexts() {
     .unwrap();
     let mut f = base.fields().clone();
     f.preconditions = status.clone();
-    assert!(matches!(
-        Node::new(f, C::Ordinary, &l),
-        Err(Error::Expression(_))
-    ));
+    assert!(Node::new(f, C::Ordinary, &l).is_ok());
     let mut f = base.fields().clone();
     f.operation = O::Scope(Digest::from_bytes([0; 32]));
     f.postconditions = status;
-    assert!(matches!(
-        Node::new(f, C::Ordinary, &l),
-        Err(Error::Expression(_))
-    ));
-}
-
-#[test]
-fn local_endpoint_membership_is_checked_even_for_false_guards() {
-    let l = Limits::default();
-    let pass = Edge::new(
-        "pass".parse().unwrap(),
-        S::Input("q".parse().unwrap()),
-        D::Output("q".parse().unwrap()),
-    );
-    let f = ScopeFields {
-        inputs: table(&["q"], P::String),
-        outputs: table(&["q"], P::String),
-        edges: vec![pass],
-        ..ScopeFields::default()
-    };
-    let s = Scope::new(f, C::Ordinary, &l).unwrap();
-    assert_eq!(
-        Scope::decode(&s.encode(C::Ordinary, &l).unwrap(), C::Ordinary, &l).unwrap(),
-        s
-    );
-    let bad = Edge::new(
-        "bad".parse().unwrap(),
-        S::Output {
-            node: "missing".parse().unwrap(),
-            port: "value".parse().unwrap(),
-        },
-        D::Output("q".parse().unwrap()),
-    )
-    .with_guard(E::literal(L::Boolean(false)));
-    let f = ScopeFields {
-        outputs: table(&["q"], P::String),
-        edges: vec![bad],
-        ..ScopeFields::default()
-    };
-    assert_eq!(
-        Scope::new(f, C::Ordinary, &l).unwrap_err(),
-        Error::UnknownEndpoint("source node")
-    );
-    let edge = Edge::new(
-        "in".parse().unwrap(),
-        S::Input("q".parse().unwrap()),
-        D::Input {
-            node: "worker".parse().unwrap(),
-            port: "missing".parse().unwrap(),
-        },
-    );
-    let f = ScopeFields {
-        inputs: table(&["q"], P::String),
-        nodes: vec![node("worker")],
-        edges: vec![edge],
-        ..ScopeFields::default()
-    };
-    assert_eq!(
-        Scope::new(f, C::Ordinary, &l).unwrap_err(),
-        Error::UnknownEndpoint("destination input")
-    );
+    assert!(Node::new(f, C::Ordinary, &l).is_ok());
 }
 
 #[test]
@@ -407,8 +345,8 @@ fn loop_contexts_do_not_become_serialized_role_labels() {
         D::Next("x".parse().unwrap()),
     );
     assert_eq!(
-        e.encode(C::Ordinary, &l).unwrap_err(),
-        Error::InvalidScopeRole
+        e.encode(C::Ordinary, &l).unwrap(),
+        e.encode(C::LoopBody, &l).unwrap()
     );
     assert_eq!(
         Edge::decode(&e.encode(C::LoopBody, &l).unwrap(), C::LoopBody, &l).unwrap(),
@@ -420,17 +358,14 @@ fn loop_contexts_do_not_become_serialized_role_labels() {
         ..ScopeFields::default()
     };
     let body = Scope::new(fields.clone(), C::LoopBody, &l).unwrap();
-    assert!(Scope::new(fields.clone(), C::Ordinary, &l).is_err());
+    assert!(Scope::new(fields.clone(), C::Ordinary, &l).is_ok());
     assert_eq!(
         Scope::decode(&body.encode(C::LoopBody, &l).unwrap(), C::LoopBody, &l).unwrap(),
         body
     );
     let mut bad = fields.clone();
     bad.limits = ExecutionLimits::new().with_timeout_ms(1).unwrap();
-    assert_eq!(
-        Scope::new(bad, C::LoopBody, &l).unwrap_err(),
-        Error::InvalidScopeRole
-    );
+    assert!(Scope::new(bad, C::LoopBody, &l).is_ok());
     let mut bad = fields;
     bad.postconditions = E::new(
         EK::Not(Box::new(E::literal(L::Boolean(false)))),
@@ -438,10 +373,7 @@ fn loop_contexts_do_not_become_serialized_role_labels() {
         &l,
     )
     .unwrap();
-    assert_eq!(
-        Scope::new(bad, C::LoopBody, &l).unwrap_err(),
-        Error::InvalidScopeRole
-    );
+    assert!(Scope::new(bad, C::LoopBody, &l).is_ok());
     let mut f = node("worker").fields().clone();
     f.guard = E::new(
         EK::Ref {
@@ -453,14 +385,14 @@ fn loop_contexts_do_not_become_serialized_role_labels() {
     )
     .unwrap();
     let n = Node::new(f, C::LoopBody, &l).unwrap();
-    assert!(matches!(
-        n.encode(C::Ordinary, &l),
-        Err(Error::Expression(_))
-    ));
+    assert_eq!(
+        n.encode(C::Ordinary, &l).unwrap(),
+        n.encode(C::LoopBody, &l).unwrap()
+    );
 }
 
 #[test]
-fn initializer_inputs_exist_but_target_body_linkage_is_separate() {
+fn initializer_names_are_preserved_for_later_semantic_linkage() {
     let l = Limits::default();
     let mut f = NodeFields::new(
         "loop_node".parse().unwrap(),
@@ -471,10 +403,7 @@ fn initializer_inputs_exist_but_target_body_linkage_is_separate() {
             max_iterations: 1,
         },
     );
-    assert_eq!(
-        Node::new(f.clone(), C::Ordinary, &l).unwrap_err(),
-        Error::UnknownEndpoint("loop initializer input")
-    );
+    assert!(Node::new(f.clone(), C::Ordinary, &l).is_ok());
     f.inputs = table(&["seed"], P::String);
     let n = Node::new(f, C::Ordinary, &l).unwrap();
     assert_eq!(

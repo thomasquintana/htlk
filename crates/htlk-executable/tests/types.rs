@@ -3,6 +3,7 @@
 use std::error::Error as _;
 
 use htlk_cbor::{LimitKind, Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
     Identifier, Port, PrimitiveType as P, TypeContext as C, TypeError, ValueType as T,

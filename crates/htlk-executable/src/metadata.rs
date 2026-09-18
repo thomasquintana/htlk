@@ -2,13 +2,12 @@
 
 use std::{collections::BTreeSet, fmt, fmt::Write as _};
 
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use crate::digest::{Digest, ParseDigestError, RecordKind, record_digest};
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};
-use crate::{
-    Identifier, ParseIdentifierError, Port, TypeContext, TypeError, ValueType, ValueTypeKind,
-};
+use crate::{Identifier, ParseIdentifierError, Port, TypeContext, TypeError};
 
 /// Supported HTLK evaluator-core format version.
 pub const CORE_VERSION: &str = "0.1";
@@ -266,7 +265,7 @@ impl ExecutionProfile {
 codec_methods!(ExecutionProfile);
 
 /// Rank-one signature metadata, with declared variables and positional ports.
-/// Declaration uniqueness and variable references are checked here; call-site
+/// Declaration uniqueness is checked here; variable resolution and call-site
 /// unification, recursive inference, and implementation compatibility are not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
@@ -275,11 +274,12 @@ pub struct FunctionSignature {
     returns: Port,
 }
 impl FunctionSignature {
-    /// Bounds signature data, then checks duplicate/undeclared variables.
+    /// Bounds signature data and checks duplicate declarations. The analyzer
+    /// resolves variable uses against those declarations.
     /// Parameter and type-parameter declaration order is preserved.
     ///
     /// # Errors
-    /// Returns variable, type, or resource failures.
+    /// Returns duplicate declaration, type representation, or resource failures.
     pub fn new(
         type_parameters: Vec<Identifier>,
         parameters: Vec<Port>,
@@ -711,7 +711,7 @@ impl Record for FunctionSignature {
         }
         push(&mut b.fields, (owned("parameters")?, Value::Array(params)))?;
         b.child("returns", self.returns.to_value(TypeContext::Signature, l)?)?;
-        self.validate_variables()?;
+        self.validate_declarations()?;
         b.finish()
     }
     fn parse(v: &Value, l: &Limits) -> Result<Self, MetadataError> {
@@ -739,54 +739,20 @@ impl Record for FunctionSignature {
             parameters,
             returns: Port::from_value(field(m, "returns"), TypeContext::Signature, l)?,
         };
-        result.validate_variables()?;
+        result.validate_declarations()?;
         Ok(result)
     }
 }
 impl FunctionSignature {
-    fn validate_variables(&self) -> Result<(), MetadataError> {
+    fn validate_declarations(&self) -> Result<(), MetadataError> {
         let mut declared = BTreeSet::new();
         for name in &self.type_parameters {
             if !declared.insert(name) {
                 return Err(MetadataError::DuplicateTypeParameter);
             }
         }
-        for port in self.parameters.iter().chain(std::iter::once(&self.returns)) {
-            variables(port.value_type(), &declared)?;
-        }
         Ok(())
     }
-}
-fn variables(ty: &ValueType, declared: &BTreeSet<&Identifier>) -> Result<(), MetadataError> {
-    match ty.kind() {
-        ValueTypeKind::Var(name) => {
-            if !declared.contains(name) {
-                return Err(MetadataError::UndeclaredTypeVariable);
-            }
-        }
-        ValueTypeKind::List(child) | ValueTypeKind::Map(child) => variables(child, declared)?,
-        ValueTypeKind::Record(fields) => {
-            for (_, port) in fields {
-                variables(port.value_type(), declared)?;
-            }
-        }
-        ValueTypeKind::Union(members) => {
-            for member in members {
-                variables(member, declared)?;
-            }
-        }
-        ValueTypeKind::Function {
-            parameters,
-            returns,
-        } => {
-            for port in parameters {
-                variables(port.value_type(), declared)?;
-            }
-            variables(returns.value_type(), declared)?;
-        }
-        _ => (),
-    }
-    Ok(())
 }
 impl Record for Library {
     fn build(&self, l: &Limits) -> Result<Value, MetadataError> {

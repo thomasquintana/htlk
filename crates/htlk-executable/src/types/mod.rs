@@ -4,6 +4,7 @@ mod wire;
 
 use std::fmt;
 
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{Limits, Value};
 
 use crate::Identifier;
@@ -219,7 +220,11 @@ pub struct Port {
     required: bool,
 }
 
-pub(crate) fn builtin_record_type(
+/// Returns the canonical record shape of a structured built-in primitive.
+///
+/// # Errors
+/// Returns type construction or codec limits for the expanded declaration.
+pub fn builtin_record_type(
     primitive: PrimitiveType,
     limits: &Limits,
 ) -> Result<Option<ValueType>, TypeError> {

@@ -1,5 +1,6 @@
 use std::fmt::{self, Write as _};
 
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use super::{Port, PrimitiveType, TypeContext, ValueType, ValueTypeKind};

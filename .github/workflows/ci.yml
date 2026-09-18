@@ -82,7 +82,7 @@ jobs:
           retention-days: 30
 
       - name: Verify workspace packages
-        run: cargo package --workspace --locked
+        run: cargo package --workspace --locked --target-dir "$RUNNER_TEMP/htlk-package-$GITHUB_SHA"
 
   dependencies:
     name: Dependency policy

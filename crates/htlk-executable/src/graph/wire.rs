@@ -1,5 +1,6 @@
-use std::{collections::BTreeMap, fmt, fmt::Write as _};
+use std::{fmt, fmt::Write as _};
 
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use super::*;
@@ -256,14 +257,11 @@ impl<'a> Builder<'a> {
     fn source(
         &mut self,
         source: &EdgeSource,
-        c: ScopeContext,
+        _c: ScopeContext,
         d: usize,
     ) -> Result<Value, GraphRecordError> {
         match source {
             EdgeSource::Input(n) | EdgeSource::Carried(n) => {
-                if matches!(source, EdgeSource::Carried(_)) && c != ScopeContext::LoopBody {
-                    return Err(GraphRecordError::InvalidScopeRole);
-                }
                 let mut v = self.tag(
                     if matches!(source, EdgeSource::Input(_)) {
                         "input"
@@ -287,14 +285,11 @@ impl<'a> Builder<'a> {
     fn destination(
         &mut self,
         destination: &EdgeDestination,
-        c: ScopeContext,
+        _c: ScopeContext,
         d: usize,
     ) -> Result<Value, GraphRecordError> {
         match destination {
             EdgeDestination::Output(n) | EdgeDestination::Next(n) => {
-                if matches!(destination, EdgeDestination::Next(_)) && c != ScopeContext::LoopBody {
-                    return Err(GraphRecordError::InvalidScopeRole);
-                }
                 let mut v = self.tag(
                     if matches!(destination, EdgeDestination::Output(_)) {
                         "output"
@@ -433,11 +428,9 @@ impl<'a> Builder<'a> {
         )?;
         let key = self.string("operation", d + 1)?;
         push(&mut pairs, (key, self.operation(&f.operation, d + 1)?))?;
-        validate_initializers(f)?;
         Ok(Value::Map(Map::try_from_entries(pairs)?))
     }
     fn scope(&mut self, f: &ScopeFields, c: ScopeContext) -> Result<Value, GraphRecordError> {
-        validate_role(f, c)?;
         self.accounting.collection(8, 0)?;
         let mut pairs = Vec::new();
         for (key, table) in [
@@ -523,7 +516,7 @@ pub(super) fn parse_ports(v: &Value, l: &Limits) -> Result<PortTable, GraphRecor
     entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     Ok(PortTable { entries })
 }
-fn parse_source(v: &Value, c: ScopeContext) -> Result<EdgeSource, GraphRecordError> {
+fn parse_source(v: &Value, _c: ScopeContext) -> Result<EdgeSource, GraphRecordError> {
     let v = array(v, "source")?;
     let tag = text(
         v.first().ok_or(GraphRecordError::InvalidShape("source"))?,
@@ -536,12 +529,11 @@ fn parse_source(v: &Value, c: ScopeContext) -> Result<EdgeSource, GraphRecordErr
             node: id(&v[1])?,
             port: id(&v[2])?,
         }),
-        "carried" if c == ScopeContext::LoopBody => Ok(EdgeSource::Carried(id(&v[1])?)),
-        "carried" => Err(GraphRecordError::InvalidScopeRole),
+        "carried" => Ok(EdgeSource::Carried(id(&v[1])?)),
         _ => Err(GraphRecordError::InvalidShape("source tag")),
     }
 }
-fn parse_destination(v: &Value, c: ScopeContext) -> Result<EdgeDestination, GraphRecordError> {
+fn parse_destination(v: &Value, _c: ScopeContext) -> Result<EdgeDestination, GraphRecordError> {
     let v = array(v, "destination")?;
     let tag = text(
         v.first()
@@ -555,8 +547,7 @@ fn parse_destination(v: &Value, c: ScopeContext) -> Result<EdgeDestination, Grap
             node: id(&v[1])?,
             port: id(&v[2])?,
         }),
-        "next" if c == ScopeContext::LoopBody => Ok(EdgeDestination::Next(id(&v[1])?)),
-        "next" => Err(GraphRecordError::InvalidScopeRole),
+        "next" => Ok(EdgeDestination::Next(id(&v[1])?)),
         _ => Err(GraphRecordError::InvalidShape("destination tag")),
     }
 }
@@ -652,7 +643,6 @@ pub(super) fn parse_node(v: &Value, c: ScopeContext, l: &Limits) -> Result<Node,
         operation,
     };
     validate_node(&fields)?;
-    validate_initializers(&fields)?;
     Ok(Node {
         fields: Box::new(fields),
     })
@@ -709,8 +699,6 @@ pub(super) fn parse_scope(
         )?,
         limits: ExecutionLimits::from_value(field(m, "limits"), l)?,
     };
-    validate_role(&fields, c)?;
-    endpoints(&fields)?;
     Ok(Scope {
         fields: Box::new(fields),
     })
@@ -781,74 +769,4 @@ fn validate_node(f: &NodeFields) -> Result<(), GraphRecordError> {
         return Err(GraphRecordError::InvalidPorts("MCP arguments input"));
     }
     Ok(())
-}
-fn validate_initializers(f: &NodeFields) -> Result<(), GraphRecordError> {
-    if let Operation::Loop { initializers, .. } = &f.operation {
-        for (_, input) in initializers {
-            if f.inputs.get(input.as_str()).is_none() {
-                return Err(GraphRecordError::UnknownEndpoint("loop initializer input"));
-            }
-        }
-    }
-    Ok(())
-}
-fn validate_role(f: &ScopeFields, c: ScopeContext) -> Result<(), GraphRecordError> {
-    if c == ScopeContext::Ordinary && !f.carried.is_empty() {
-        return Err(GraphRecordError::InvalidScopeRole);
-    }
-    if c == ScopeContext::LoopBody
-        && (f.limits != ExecutionLimits::new()
-            || !matches!(
-                f.preconditions.kind(),
-                crate::ExpressionKind::Literal(ScalarLiteral::Boolean(true))
-            )
-            || !matches!(
-                f.postconditions.kind(),
-                crate::ExpressionKind::Literal(ScalarLiteral::Boolean(true))
-            ))
-    {
-        return Err(GraphRecordError::InvalidScopeRole);
-    }
-    Ok(())
-}
-fn endpoints(f: &ScopeFields) -> Result<(), GraphRecordError> {
-    let nodes: BTreeMap<_, _> = f
-        .nodes
-        .iter()
-        .map(|node| (node.id().as_str(), node))
-        .collect();
-    for edge in &f.edges {
-        match &edge.source {
-            EdgeSource::Input(name) => require_port(&f.inputs, name, "scope input")?,
-            EdgeSource::Carried(name) => require_port(&f.carried, name, "carried source")?,
-            EdgeSource::Output { node, port } => {
-                let node = nodes
-                    .get(node.as_str())
-                    .ok_or(GraphRecordError::UnknownEndpoint("source node"))?;
-                require_port(&node.fields.outputs, port, "source output")?;
-            }
-        }
-        match &edge.destination {
-            EdgeDestination::Output(name) => require_port(&f.outputs, name, "scope output")?,
-            EdgeDestination::Next(name) => require_port(&f.carried, name, "next destination")?,
-            EdgeDestination::Input { node, port } => {
-                let node = nodes
-                    .get(node.as_str())
-                    .ok_or(GraphRecordError::UnknownEndpoint("destination node"))?;
-                require_port(&node.fields.inputs, port, "destination input")?;
-            }
-        }
-    }
-    Ok(())
-}
-fn require_port(
-    table: &PortTable,
-    name: &Identifier,
-    site: &'static str,
-) -> Result<(), GraphRecordError> {
-    if table.get(name.as_str()).is_some() {
-        Ok(())
-    } else {
-        Err(GraphRecordError::UnknownEndpoint(site))
-    }
 }

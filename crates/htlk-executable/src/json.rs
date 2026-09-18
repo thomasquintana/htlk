@@ -2,6 +2,7 @@
 
 use std::{collections::BTreeMap, fmt, io};
 
+use crate::cbor as htlk_cbor;
 use crate::digest::{Digest, hash_bytes};
 use htlk_cbor::{FiniteFloat, LimitKind, Limits, Map, Value};
 

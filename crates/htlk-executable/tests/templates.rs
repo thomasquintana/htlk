@@ -1,6 +1,7 @@
 //! Canonical template records, coverage, normalization, and record hashes.
 
 use htlk_cbor::{LimitKind, Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     ExpressionError as Error, Port, PrimitiveType as P, PromptTemplate as T, TemplatePart as Part,
     ValueType,
@@ -97,24 +98,22 @@ fn authored_parts_normalize_and_repeated_slots_keep_order() {
 }
 
 #[test]
-fn parameters_are_exact_and_have_supported_types() {
-    assert_eq!(
+fn parameters_keep_supported_types_and_unresolved_names() {
+    assert!(
         T::new(
             vec![],
             vec![Part::Slot("missing".parse().unwrap())],
             &Limits::default()
         )
-        .unwrap_err(),
-        Error::TemplateParameterMismatch
+        .is_ok()
     );
-    assert_eq!(
+    assert!(
         T::new(
             vec![("unused".parse().unwrap(), parameter(P::String))],
             vec![],
             &Limits::default()
         )
-        .unwrap_err(),
-        Error::TemplateParameterMismatch
+        .is_ok()
     );
     for p in [P::Float, P::Bytes, P::Json, P::Regex, P::Null] {
         assert_eq!(

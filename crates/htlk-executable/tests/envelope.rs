@@ -3,6 +3,7 @@
 use std::error::Error as _;
 
 use htlk_cbor::{ErrorKind, LimitKind, Limits, Map, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::{ParseDigestError, hash_bytes};
 use htlk_executable::{EXECUTABLE_FORMAT, EXECUTABLE_VERSION, EnvelopeError, ExecutableEnvelope};
 

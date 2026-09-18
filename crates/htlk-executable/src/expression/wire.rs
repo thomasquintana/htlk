@@ -1,5 +1,6 @@
 use std::fmt::{self, Write as _};
 
+use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use super::*;
@@ -168,46 +169,6 @@ fn arity(v: &[Value], n: usize) -> Result<(), ExpressionError> {
         Err(ExpressionError::InvalidShape("constructor arity"))
     }
 }
-fn check_reference(r: &ValueReference, c: ExpressionContext) -> Result<(), ExpressionError> {
-    use ExpressionContext as C;
-    let (allowed, label) = match r {
-        ValueReference::Input(_) => (true, "input"),
-        ValueReference::Output { .. } => (matches!(c, C::Guard { .. } | C::LoopUntil), "output"),
-        ValueReference::ScopeOutput(_) => (
-            matches!(
-                c,
-                C::PrimitivePostconditions
-                    | C::ScopePostconditions
-                    | C::WrapperPostconditions
-                    | C::LoopUntil
-                    | C::LoopPostconditions
-            ),
-            "scope_output",
-        ),
-        ValueReference::Carried(_) => (
-            matches!(c, C::Guard { loop_body: true } | C::LoopUntil),
-            "carried",
-        ),
-        ValueReference::Next(_) => (matches!(c, C::LoopUntil), "next"),
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(ExpressionError::ForbiddenReference(label))
-    }
-}
-fn check_outcome(c: ExpressionContext) -> Result<(), ExpressionError> {
-    if matches!(
-        c,
-        ExpressionContext::Guard { .. }
-            | ExpressionContext::ScopePostconditions
-            | ExpressionContext::LoopUntil
-    ) {
-        Ok(())
-    } else {
-        Err(ExpressionError::ForbiddenReference("node outcome"))
-    }
-}
 fn regex_flags(flags: &str, normalize: bool) -> Result<String, ExpressionError> {
     let mut mask = 0;
     for flag in flags.bytes() {
@@ -231,16 +192,14 @@ fn regex_flags(flags: &str, normalize: bool) -> Result<String, ExpressionError> 
 
 pub(super) struct Builder<'a> {
     pub(super) accounting: RecordAccounting<'a>,
-    context: ExpressionContext,
 }
 impl<'a> Builder<'a> {
     pub(super) fn new(
-        context: ExpressionContext,
+        _context: ExpressionContext,
         limits: &'a Limits,
     ) -> Result<Self, ExpressionError> {
         Ok(Self {
             accounting: RecordAccounting::new(limits)?,
-            context,
         })
     }
     pub(super) fn string(&mut self, s: &str, depth: usize) -> Result<String, ExpressionError> {
@@ -306,7 +265,6 @@ impl<'a> Builder<'a> {
         Ok(Value::Array(values))
     }
     fn reference(&mut self, r: &ValueReference, depth: usize) -> Result<Value, ExpressionError> {
-        check_reference(r, self.context)?;
         let (tag, name) = match r {
             ValueReference::Input(n) => ("input", n),
             ValueReference::ScopeOutput(n) => ("scope_output", n),
@@ -412,7 +370,6 @@ impl<'a> Builder<'a> {
         name: &Identifier,
         d: usize,
     ) -> Result<Value, ExpressionError> {
-        check_outcome(self.context)?;
         let mut v = self.tagged(tag, 2, d)?;
         push(&mut v, self.text(name.as_str(), d + 1)?)?;
         Ok(Value::Array(v))
@@ -590,7 +547,7 @@ fn parse_path(v: &Value) -> Result<Vec<PathStep>, ExpressionError> {
 }
 fn parse_reference(
     v: &Value,
-    context: ExpressionContext,
+    _context: ExpressionContext,
 ) -> Result<ValueReference, ExpressionError> {
     let v = array(v, "value reference")?;
     let tag = text(
@@ -610,7 +567,6 @@ fn parse_reference(
         },
         _ => return Err(ExpressionError::InvalidShape("reference tag")),
     };
-    check_reference(&r, context)?;
     Ok(r)
 }
 fn parse_function(v: &Value) -> Result<FunctionId, ExpressionError> {
@@ -731,7 +687,6 @@ fn parse_leaf(
             name: name(&v[2])?,
         },
         "status" | "error" => {
-            check_outcome(context)?;
             if tag == "status" {
                 K::Status(name(&v[1])?)
             } else {

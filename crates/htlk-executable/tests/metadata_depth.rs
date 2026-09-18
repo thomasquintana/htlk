@@ -1,6 +1,7 @@
 //! Embedded library-signature depth and cleanup regression checks.
 
 use htlk_cbor::Limits;
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{FunctionSignature, Library, MetadataError, Port, TypeContext, ValueType};
 

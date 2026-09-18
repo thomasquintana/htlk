@@ -1,5 +1,6 @@
 //! Independent JCS examples and HTLK's stricter JSON numeric boundary.
 use htlk_cbor::{FiniteFloat, LimitKind, Limits, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{JsonDocument as J, JsonError as E};
 
 #[test]

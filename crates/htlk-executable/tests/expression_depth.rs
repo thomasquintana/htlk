@@ -1,6 +1,7 @@
 //! Subprocess-isolated expression depth and cleanup regressions.
 
 use htlk_cbor::{Limits, Value};
+use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     Expression as E, ExpressionContext as C, ExpressionError as Error, ExpressionKind as K,
 };
