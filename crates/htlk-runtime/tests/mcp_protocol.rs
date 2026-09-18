@@ -5,7 +5,7 @@ use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     JsonDocument as J, McpBinding, McpBindingKind, McpTransport, ServerIdentity,
 };
-use htlk_rt::{expand_uri_template, validate_mcp_prompt_result, validate_resource_snapshot};
+use htlk_runtime::{expand_uri_template, validate_mcp_prompt_result, validate_resource_snapshot};
 fn j(s: &str) -> J {
     J::new(s.as_bytes(), &Limits::default()).unwrap()
 }

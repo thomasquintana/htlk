@@ -8,7 +8,7 @@ use htlk_executable::{
     PrimitiveType as P, PromptTemplate, ScalarLiteral as S, TemplatePart, ValueReference as R,
     ValueType,
 };
-use htlk_rt::{
+use htlk_runtime::{
     EvaluationArgument as A, EvaluationContext, EvaluationError as Err, EvaluationFrame as Frame,
     EvaluationMeter, EvaluationOutcome as Outcome, EvaluationValue as V, evaluate,
 };
@@ -110,7 +110,7 @@ fn lazy_booleans_preserve_pending_error_and_absence() {
 
 #[test]
 fn conditions_require_booleans_and_preserve_pending() {
-    use htlk_rt::{ConditionValue, evaluate_condition};
+    use htlk_runtime::{ConditionValue, evaluate_condition};
     let mut frame = Frame::default();
     bind(&mut frame, "waiting", Ok(V::Pending));
     assert_eq!(

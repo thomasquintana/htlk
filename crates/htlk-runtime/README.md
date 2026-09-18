@@ -1,4 +1,4 @@
-# htlk-rt
+# htlk-runtime
 
 Runtime components for the [Harness Toolkit](https://crates.io/crates/htlk).
 
@@ -45,7 +45,7 @@ For focused expression execution:
 use htlk_executable::{Expression, ExpressionContext, ScalarLiteral, EvaluatorLimits,
     cbor::{Limits, Value}};
 use htlk_analyzer::ExpressionTypeEnvironment;
-use htlk_rt::{CheckedExpression, EvaluationFrame, EvaluationValue};
+use htlk_runtime::{CheckedExpression, EvaluationFrame, EvaluationValue};
 
 let limits = Limits::default();
 let policy = EvaluatorLimits {

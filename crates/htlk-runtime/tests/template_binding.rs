@@ -1,6 +1,6 @@
 //! Runtime rejects malformed template bindings from both frames and custom contexts.
 use htlk_executable::{cbor::Limits, digest::Digest, *};
-use htlk_rt::*;
+use htlk_runtime::*;
 
 struct Custom(PromptTemplate);
 impl EvaluationContext for Custom {

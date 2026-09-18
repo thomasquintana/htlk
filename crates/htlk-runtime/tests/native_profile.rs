@@ -5,7 +5,7 @@ use htlk_executable::{
     EngineIdentity, EvaluatorLimits, ExecutionLimits, ExecutionProfile, PolicyDocument,
     PolicyFields, digest::Digest,
 };
-use htlk_rt::{NativeRegistry, NativeRegistryError as Error, native_profile};
+use htlk_runtime::{NativeRegistry, NativeRegistryError as Error, native_profile};
 
 fn policy() -> PolicyDocument {
     PolicyDocument::new(

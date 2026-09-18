@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
-const lines = readFileSync(new URL('crates/htlk-rt/tests/fixtures/native-empty.hex', root), 'utf8').trim().split(/\r?\n/);
+const lines = readFileSync(new URL('crates/htlk-runtime/tests/fixtures/native-empty.hex', root), 'utf8').trim().split(/\r?\n/);
 const fingerprint = lines.shift().replace(/^fingerprint=/, '');
 const scopeDigest = lines.shift().replace(/^root_scope=/, '');
 const hex = lines.join('');
@@ -138,14 +138,14 @@ const analyzer = implementation('htlk.analyzer-implementation/0.1\n', [
 const native = parts => implementation('htlk.native-implementation/0.1\n', parts);
 assert.equal(get(profile, 'core_digest').value, native([
   rawDigest(model), rawDigest(analyzer),
-  ...sources('htlk-rt', [
+  ...sources('htlk-runtime', [
     'lib.rs', 'native_profile.rs', 'evaluate.rs', 'checked_evaluate.rs', 'runtime_type.rs',
     'schema_projection.rs', 'native_registry.rs', 'verified.rs', 'mcp_protocol.rs', 'uri_template.rs',
   ]),
 ]));
 assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value,
-  native(sources('htlk-rt', ['native_profile.rs', 'evaluate.rs'])));
+  native(sources('htlk-runtime', ['native_profile.rs', 'evaluate.rs'])));
 assert.equal(get(get(profile, 'uri_template_engine'), 'implementation_digest').value,
-  native([...sources('htlk-rt', ['native_profile.rs', 'uri_template.rs']), rawDigest(model)]));
+  native([...sources('htlk-runtime', ['native_profile.rs', 'uri_template.rs']), rawDigest(model)]));
 assert.equal(get(get(profile, 'schema_validator'), 'implementation_digest').value, analyzer);
 console.log(JSON.stringify({ fixture: 'native-empty', bytes: bytes.length, payload_bytes: payload.length, fingerprint, scope: scopeDigest, independent_cbor_jcs_hash_checks: true }, null, 2));

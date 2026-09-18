@@ -101,7 +101,7 @@ gh workflow run release.yml --ref v0.1.0 -f dry_run=false
 
 The release workflow publishes `htlk-executable` first and waits for registry
 availability, then publishes `htlk-analyzer` and waits for it, then publishes
-`htlk-compiler` and `htlk-rt`, waits for both, and publishes the `htlk` facade.
+`htlk-compiler` and `htlk-runtime`, waits for both, and publishes the `htlk` facade.
 All five packages are verified together before publication. If publication stops
 partway through, rerun the failed publishing job after fixing its cause; the workflow
 skips crate versions already published. A changed package needs a new version and tag.

@@ -1,5 +1,5 @@
 [package]
-name = "htlk-rt"
+name = "htlk-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ publish.workspace = true
 repository.workspace = true
 description = "HTLK native runtime admission, checked expression execution, and actor foundations"
 readme = "README.md"
-documentation = "https://docs.rs/htlk-rt"
+documentation = "https://docs.rs/htlk-runtime"
 keywords = ["harness", "runtime", "toolkit"]
 categories = ["development-tools"]
 

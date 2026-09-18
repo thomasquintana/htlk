@@ -6,8 +6,8 @@ use htlk_executable::{
     EvaluatorLimits, PathStep, Port, PrimitiveType as P, TypeContext, ValueType as T,
     ValueTypeKind as K,
 };
-use htlk_rt::{CheckedExpression, EvaluationFrame};
-use htlk_rt::{
+use htlk_runtime::{CheckedExpression, EvaluationFrame};
+use htlk_runtime::{
     EvaluationError as Error, EvaluationValue, project_typed_value, validate_typed_value,
 };
 

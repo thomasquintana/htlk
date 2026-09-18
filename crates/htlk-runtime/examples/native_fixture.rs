@@ -4,7 +4,7 @@ use htlk_executable::{
     CanonicalDocument, DocumentFields, EvaluatorLimits, ExecutionLimits, PolicyDocument,
     PolicyFields, Scope, ScopeContext, ScopeFields,
 };
-use htlk_rt::{NativeRegistry, verify_executable};
+use htlk_runtime::{NativeRegistry, verify_executable};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = Limits::default();
     let policy = PolicyDocument::new(

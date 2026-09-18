@@ -7,7 +7,7 @@ use htlk_executable::{
     FunctionSignature, Identifier, Library, PathStep, Port, PrimitiveType as P, PromptTemplate,
     TypeContext, ValueReference, ValueType as T, ValueTypeKind as K, digest::Digest,
 };
-use htlk_rt::{
+use htlk_runtime::{
     CallbackInvocation, CheckedExpression, EvaluationArgument, EvaluationContext,
     EvaluationError as Error, EvaluationFrame, EvaluationMeter, EvaluationOutcome,
     EvaluationValue as V,
@@ -566,7 +566,7 @@ fn callback_depth_on_controlled_stacks() {
 
 fn linked_apply(
     _: &[EvaluationArgument],
-    context: &htlk_rt::NativeCallContext<'_>,
+    context: &htlk_runtime::NativeCallContext<'_>,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<V, Error> {
     context.invoke_callback(0, &[V::Present(Value::Integer(1))], meter)?;
@@ -574,7 +574,7 @@ fn linked_apply(
 }
 fn linked_echo(
     arguments: &[EvaluationArgument],
-    _: &htlk_rt::NativeCallContext<'_>,
+    _: &htlk_runtime::NativeCallContext<'_>,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<V, Error> {
     let [EvaluationArgument::Value(V::Present(value))] = arguments else {
@@ -584,7 +584,7 @@ fn linked_echo(
 }
 fn linked_bad(
     _: &[EvaluationArgument],
-    _: &htlk_rt::NativeCallContext<'_>,
+    _: &htlk_runtime::NativeCallContext<'_>,
     _: &mut EvaluationMeter<'_>,
 ) -> Result<V, Error> {
     Ok(V::Present(Value::Bool(false)))
@@ -592,7 +592,7 @@ fn linked_bad(
 
 #[test]
 fn registry_pins_full_manifests_and_routes_callbacks_without_frame_dispatch() {
-    use htlk_rt::{NativeFunction, NativeRegistry, NativeRegistryError};
+    use htlk_runtime::{NativeFunction, NativeRegistry, NativeRegistryError};
     let codec = Limits::default();
     let (env, expression) = callback_fixture();
     let manifest = env.libraries[&id()].clone();
@@ -662,7 +662,7 @@ fn registry_pins_full_manifests_and_routes_callbacks_without_frame_dispatch() {
 
 #[test]
 fn registry_rejects_incomplete_registration_and_checks_native_callback_results() {
-    use htlk_rt::{NativeFunction, NativeRegistry, NativeRegistryError};
+    use htlk_runtime::{NativeFunction, NativeRegistry, NativeRegistryError};
     let codec = Limits::default();
     let (env, expression) = callback_fixture();
     let manifest = env.libraries[&id()].clone();
@@ -704,10 +704,10 @@ fn registry_rejects_incomplete_registration_and_checks_native_callback_results()
 
 #[test]
 fn registry_charges_dispatch_before_invoking_native_code() {
-    use htlk_rt::{NativeFunction, NativeRegistry};
+    use htlk_runtime::{NativeFunction, NativeRegistry};
     fn forbidden(
         _: &[EvaluationArgument],
-        _: &htlk_rt::NativeCallContext<'_>,
+        _: &htlk_runtime::NativeCallContext<'_>,
         _: &mut EvaluationMeter<'_>,
     ) -> Result<V, Error> {
         panic!("must fail its prepaid dispatch charge");
@@ -797,14 +797,14 @@ fn higher_fixture() -> (ExpressionTypeEnvironment, Expression) {
 }
 fn forward_higher(
     _: &[EvaluationArgument],
-    context: &htlk_rt::NativeCallContext<'_>,
+    context: &htlk_runtime::NativeCallContext<'_>,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<V, Error> {
-    context.invoke_callback_with(0, &[htlk_rt::CallbackArgument::Function(1)], meter)
+    context.invoke_callback_with(0, &[htlk_runtime::CallbackArgument::Function(1)], meter)
 }
 fn apply_higher(
     _: &[EvaluationArgument],
-    context: &htlk_rt::NativeCallContext<'_>,
+    context: &htlk_runtime::NativeCallContext<'_>,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<V, Error> {
     assert_eq!(context.expression_path(), &[0]);
@@ -812,7 +812,7 @@ fn apply_higher(
 }
 fn higher_leaf(
     arguments: &[EvaluationArgument],
-    context: &htlk_rt::NativeCallContext<'_>,
+    context: &htlk_runtime::NativeCallContext<'_>,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<V, Error> {
     assert_eq!(context.expression_path(), &[1]);
@@ -822,7 +822,7 @@ fn higher_leaf(
 }
 #[test]
 fn registry_forwards_higher_order_capabilities_with_ground_signatures_and_original_locations() {
-    use htlk_rt::{NativeFunction, NativeRegistry};
+    use htlk_runtime::{NativeFunction, NativeRegistry};
     let limits = Limits::default();
     let (env, expression) = higher_fixture();
     let mut registry = NativeRegistry::new(&limits).unwrap();
@@ -858,17 +858,17 @@ fn registry_forwards_higher_order_capabilities_with_ground_signatures_and_origin
 }
 #[test]
 fn incompatible_higher_order_forwarding_fails_before_callee_dispatch() {
-    use htlk_rt::{NativeFunction, NativeRegistry};
+    use htlk_runtime::{NativeFunction, NativeRegistry};
     fn wrong(
         _: &[EvaluationArgument],
-        context: &htlk_rt::NativeCallContext<'_>,
+        context: &htlk_runtime::NativeCallContext<'_>,
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<V, Error> {
-        context.invoke_callback_with(0, &[htlk_rt::CallbackArgument::Function(0)], meter)
+        context.invoke_callback_with(0, &[htlk_runtime::CallbackArgument::Function(0)], meter)
     }
     fn forbidden(
         _: &[EvaluationArgument],
-        _: &htlk_rt::NativeCallContext<'_>,
+        _: &htlk_runtime::NativeCallContext<'_>,
         _: &mut EvaluationMeter<'_>,
     ) -> Result<V, Error> {
         panic!("incompatible callable must not be invoked");

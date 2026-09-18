@@ -831,7 +831,7 @@ dependencies = [
  "htlk-analyzer",
  "htlk-compiler",
  "htlk-executable",
- "htlk-rt",
+ "htlk-runtime",
 ]
 
 [[package]]
@@ -874,7 +874,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "htlk-rt"
+name = "htlk-runtime"
 version = "0.1.0"
 dependencies = [
  "actix",

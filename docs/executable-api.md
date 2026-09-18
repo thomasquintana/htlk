@@ -7,10 +7,10 @@ This reference covers three layers of the shared Draft 0.1 executable APIs:
 - `htlk-analyzer` owns semantic linkage, expression/scope/document analysis,
   structured diagnostics, inferred signatures, structural bounds and the offline
   schema backend. It depends on the model, not the compiler or runtime.
-- `htlk-rt` owns native registry and host admission, evaluation, callbacks,
+- `htlk-runtime` owns native registry and host admission, evaluation, callbacks,
   actual-value enforcement and runtime projections.
 
-`htlk_rt::verify_executable` decodes authoritative canonical input, checks exact
+`htlk_runtime::verify_executable` decodes authoritative canonical input, checks exact
 host-linked policy/implementations and recomputes semantic analysis. Its immutable
 `VerifiedExecutable` retains the analyzer's document-bound result. Serialized
 compiler analysis is never accepted as proof of runtime admission.
@@ -44,7 +44,7 @@ use htlk_executable::{CanonicalDocument, DocumentFields,
     EvaluatorLimits, ExecutionLimits,
     PolicyDocument, PolicyFields, Scope, ScopeContext, ScopeFields};
 use htlk_analyzer::{ExpressionSite,ScopeUse};
-use htlk_rt::{EvaluationFrame,EvaluationValue,NativeRegistry,verify_executable};
+use htlk_runtime::{EvaluationFrame,EvaluationValue,NativeRegistry,verify_executable};
 
 let limits = Limits::default();
 let policy = PolicyDocument::new(PolicyFields {
@@ -103,7 +103,7 @@ Temporary representations have independently bounded overhead. Native JSON Schem
 validation has the capability contract documented below, not a claimed hard heap
 cap, whole-validation fuel counter, or in-process deadline. Runtime registration
 transactions, scheduling, authorization, persistence and live MCP I/O belong to
-`htlk-rt`; source compilation and composition belong to `htlk-compiler`.
+`htlk-runtime`; source compilation and composition belong to `htlk-compiler`.
 
 ## Local identifiers
 
@@ -261,7 +261,7 @@ functions. Native functions receive `EvaluationMeter` and must charge their own 
 
 ```rust
 use htlk_executable::cbor::{Limits, Value};
-use htlk_rt::{ConditionValue,EvaluationFrame,EvaluationValue,evaluate_condition};
+use htlk_runtime::{ConditionValue,EvaluationFrame,EvaluationValue,evaluate_condition};
 use htlk_executable::{EvaluatorLimits, Expression, ExpressionContext, ExpressionKind,
     CoreFunction, FunctionId, ValueReference};
 
@@ -1264,7 +1264,7 @@ explode modifiers follow the pinned implementation. There is no script runtime.
 
 ```rust
 use htlk_executable::cbor::{Limits, Map, Value};
-use htlk_rt::expand_uri_template;
+use htlk_runtime::expand_uri_template;
 
 let arguments = Value::Map(Map::try_from_entries([
     ("query".into(), Value::Text("hello world".into())),

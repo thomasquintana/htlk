@@ -180,11 +180,11 @@ jobs:
           publish_if_needed htlk-analyzer
           wait_for_crate htlk-analyzer
 
-          for crate in htlk-compiler htlk-rt; do
+          for crate in htlk-compiler htlk-runtime; do
             publish_if_needed "$crate"
           done
 
-          for crate in htlk-compiler htlk-rt; do
+          for crate in htlk-compiler htlk-runtime; do
             wait_for_crate "$crate"
           done
 

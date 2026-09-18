@@ -3,7 +3,7 @@
 /// Compiler functionality.
 pub use htlk_compiler as compiler;
 /// Runtime functionality.
-pub use htlk_rt as rt;
+pub use htlk_runtime as runtime;
 
 // Keep the cross-crate reference examples checked without creating a runtime API.
 #[cfg(doctest)]

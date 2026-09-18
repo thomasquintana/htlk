@@ -13,7 +13,7 @@ The script is a fixture checker, not a second general executable verifier.
 
 Native adapter source changes intentionally change implementation identities.
 After reviewing such a change, run
-`cargo run -p htlk-rt --example native_fixture --locked`, update the fixed
+`cargo run -p htlk-runtime --example native_fixture --locked`, update the fixed
 fixture from its output, and rerun both independent and Rust checks. Never repair
 or regenerate fixtures automatically as part of tests.
 

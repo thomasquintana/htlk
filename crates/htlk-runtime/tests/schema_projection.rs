@@ -4,8 +4,8 @@ use htlk_analyzer::{NativeSchemaOptions, NativeSchemas, SchemaCatalog, embedded_
 use htlk_cbor::{Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{EvaluatorLimits, JsonDocument, PathStep, digest::Digest};
-use htlk_rt::{CheckedExpression, EvaluationFrame, project_typed_value};
-use htlk_rt::{EvaluationError as Error, EvaluationValue as V, SchemaProjection};
+use htlk_runtime::{CheckedExpression, EvaluationFrame, project_typed_value};
+use htlk_runtime::{EvaluationError as Error, EvaluationValue as V, SchemaProjection};
 fn policy() -> EvaluatorLimits {
     EvaluatorLimits {
         max_expression_depth: 128,
@@ -390,7 +390,7 @@ fn schema_context_survives_record_materialization_without_reinvoking_native_func
         Identifier, Library, Port, PromptTemplate, TypeContext, ValueReference, ValueType as T,
         ValueTypeKind as K,
     };
-    use htlk_rt::{EvaluationArgument, EvaluationContext, EvaluationMeter, EvaluationOutcome};
+    use htlk_runtime::{EvaluationArgument, EvaluationContext, EvaluationMeter, EvaluationOutcome};
     use std::cell::Cell;
     struct Context {
         calls: Cell<usize>,

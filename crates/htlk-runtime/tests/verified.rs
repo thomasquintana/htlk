@@ -9,7 +9,7 @@ use htlk_executable::{
     PolicyFields, Port, PortTable, PrimitiveType as P, ScalarLiteral as L, Scope,
     ScopeContext as Role, ScopeFields, ValueReference, ValueType, digest::Digest,
 };
-use htlk_rt::{
+use htlk_runtime::{
     EvaluationError, EvaluationFrame, EvaluationValue, ExecutableVerificationError as Error,
     NativeRegistry, NativeRegistryError, native_profile, verify_executable,
 };

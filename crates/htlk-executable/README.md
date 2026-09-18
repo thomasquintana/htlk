@@ -5,7 +5,7 @@ construction, normalization, representation invariants, canonical CBOR/JSON,
 content digests and executable envelopes.
 
 Semantic analysis lives in **htlk-analyzer**. Host policy/implementation admission,
-native registries, evaluation and actual-value enforcement live in **htlk-rt**.
+native registries, evaluation and actual-value enforcement live in **htlk-runtime**.
 The model depends on neither crate.
 
 ## Construction and validation boundaries
