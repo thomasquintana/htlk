@@ -79,15 +79,15 @@ the payload's canonicality.
 
 ## Resource accounting
 
-Defaults are implementation policy, not wire-format options: 16 MiB per
-document, 1 MiB per text string, 16 MiB per byte string, depth 64, 100,000 entries
-per collection, 1,000,000 total values, and 16 MiB aggregate payload bytes.
+`Limits` has two fields: `max_document_bytes` and `max_depth`. Defaults are
+implementation policy, not wire-format options: 16 MiB per document and depth 64.
 Document size includes headers; a byte string of exactly 16 MiB therefore
 requires a higher document ceiling.
 
 Root depth is zero. Array elements and both map keys and values have parent
-depth plus one. Containers, scalars, and map keys each count as values. Payload
-bytes count all text (including keys) and byte-string contents. Zero ceilings
+depth plus one. All headers, text (including keys), and byte-string contents
+count toward the complete document size. There are no separate value-count,
+collection-size, string-size, or aggregate-payload ceilings. Zero ceilings
 are valid restrictions. Default depth is 64; the current implementation ceiling
 is 128. Invalid configuration is rejected before traversing the value.
 
@@ -106,9 +106,10 @@ Collections grow incrementally only as children finish decoding; an advertised
 length never causes an upfront reservation of the entire collection. Requested
 collection capacity is at most twice the completed entries, capped by declared
 length. Text/byte payloads are checked before copying, and UTF-8/order checks
-precede owned map-key allocation. This bounds requested storage by aggregate
-value counts, payload bytes, and recursion depth; allocator overhead is outside
-these logical counters. All reservations are fallible, and failed partial
+precede owned map-key allocation. Every value requires at least one input byte,
+so the byte ceiling also bounds the number of decoded values. This is not an
+exact heap limit: value representations and allocator overhead can exceed their
+encoded size. All reservations are fallible, and failed partial
 values are dropped internally.
 
 Registration will need shared accounting across envelope and nested payload decodes.

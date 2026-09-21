@@ -52,8 +52,9 @@ assert_eq!(cbor::decode(&bytes, &limits)?, value);
 ```
 
 Integers and floats remain distinct, including integral floats. Unicode spelling
-is preserved exactly. Limits count containers and map keys as values and include
-all text/byte payloads. The default depth is 64 and implementation ceiling 128;
+is preserved exactly. Limits bound complete encoded bytes and nesting depth,
+including all headers and map keys. The default byte ceiling is 16 MiB; the
+default depth is 64 and implementation ceiling 128;
 controlled-stack tests cover construction, encoding, decoding and cleanup.
 
 ## Serde

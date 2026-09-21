@@ -24,6 +24,37 @@ fn policy() -> EvaluatorLimits {
         max_steps: 100000,
     }
 }
+
+#[test]
+fn outcome_metadata_accepts_its_exact_encoded_byte_budget() {
+    let node: Identifier = "worker".parse().unwrap();
+    let outcome = Outcome::Failed {
+        code: "x".into(),
+        message: "y".into(),
+    };
+    // {"code":"x","message":"y"}: 1 map header + 5 + 2 + 8 + 2 bytes.
+    let limits = Limits {
+        max_document_bytes: 18,
+        max_depth: 1,
+    };
+    let mut frame = Frame::default();
+    frame
+        .set_outcome(node.clone(), outcome.clone(), &limits)
+        .unwrap();
+    assert_eq!(frame.outcome(&node), Some(&outcome));
+    assert!(matches!(
+        frame.set_outcome(
+            node.clone(),
+            outcome.clone(),
+            &Limits {
+                max_document_bytes: 17,
+                ..limits
+            }
+        ),
+        Err(Err::Limit("outcome metadata"))
+    ));
+    assert_eq!(frame.outcome(&node), Some(&outcome));
+}
 fn expression(kind: K) -> E {
     E::new(kind, Context::LoopUntil, &Limits::default()).unwrap()
 }

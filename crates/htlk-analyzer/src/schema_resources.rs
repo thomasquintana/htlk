@@ -71,11 +71,7 @@ impl SchemaResources {
         let locations = SchemaLocations::new(document, limits)?;
         text_limit(retrieval_uri, limits)?;
         UriAbsoluteStr::new(retrieval_uri).map_err(|_| SchemaResourceError::InvalidUri)?;
-        let mut budget = Accounting {
-            limits,
-            count: 0,
-            bytes: 0,
-        };
+        let mut budget = Accounting { limits, bytes: 0 };
         let mut result = Self {
             locations,
             bases: Vec::new(),
@@ -232,14 +228,10 @@ impl SchemaResources {
             root
         } else if fragment.starts_with('/') {
             let relative = JsonPointer::new(&fragment, limits)?;
-            // The joined pointer is not one URI/text token. Its individual token
-            // bounds are reapplied by JsonPointer below; bound the temporary by
-            // the pointer's encoded-document ceiling.
-            let mut pointer_limits = limits.clone();
-            pointer_limits.max_text_bytes = limits.max_document_bytes;
+            // Bound the joined pointer before allocating its decoded tokens.
             let full = bounded(
                 format_args!("{}{}", self.locations.pointers()[root], relative),
-                &pointer_limits,
+                limits,
             )?;
             let full = JsonPointer::new(&full, limits)?;
             self.index(&full)
@@ -447,16 +439,10 @@ impl fmt::Write for Output<'_> {
                         maximum: self.limits.max_document_bytes,
                     },
                 )?;
-                check(length, self.limits.max_text_bytes, LimitKind::TextBytes)?;
                 check(
                     length,
                     self.limits.max_document_bytes,
                     LimitKind::DocumentBytes,
-                )?;
-                check(
-                    length,
-                    self.limits.max_total_payload_bytes,
-                    LimitKind::TotalPayloadBytes,
                 )?;
                 self.text.try_reserve(s.len()).map_err(allocation)?;
                 self.text.push_str(s);
@@ -482,13 +468,7 @@ fn bounded(v: impl fmt::Display, l: &Limits) -> Result<String, SchemaResourceErr
     Ok(output.text)
 }
 fn text_limit(s: &str, l: &Limits) -> Result<(), SchemaResourceError> {
-    check(s.len(), l.max_text_bytes, LimitKind::TextBytes)?;
-    check(s.len(), l.max_document_bytes, LimitKind::DocumentBytes)?;
-    check(
-        s.len(),
-        l.max_total_payload_bytes,
-        LimitKind::TotalPayloadBytes,
-    )
+    check(s.len(), l.max_document_bytes, LimitKind::DocumentBytes)
 }
 fn check(n: usize, maximum: usize, limit: LimitKind) -> Result<(), SchemaResourceError> {
     if n > maximum {
@@ -508,27 +488,22 @@ fn allocation(_: std::collections::TryReserveError) -> SchemaResourceError {
 }
 struct Accounting<'a> {
     limits: &'a Limits,
-    count: usize,
     bytes: usize,
 }
 impl Accounting<'_> {
     fn entry(&mut self) -> Result<(), SchemaResourceError> {
-        self.count = self
-            .count
+        // A one-byte record marker charges even empty metadata entries.
+        self.bytes = self
+            .bytes
             .checked_add(1)
             .ok_or(SchemaResourceError::LimitExceeded {
-                limit: LimitKind::TotalValues,
-                maximum: self.limits.max_total_values,
+                limit: LimitKind::DocumentBytes,
+                maximum: self.limits.max_document_bytes,
             })?;
         check(
-            self.count,
-            self.limits.max_total_values,
-            LimitKind::TotalValues,
-        )?;
-        check(
-            self.count,
-            self.limits.max_collection_entries,
-            LimitKind::CollectionEntries,
+            self.bytes,
+            self.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )
     }
     fn text(&mut self, text: &str) -> Result<(), SchemaResourceError> {
@@ -537,13 +512,13 @@ impl Accounting<'_> {
             self.bytes
                 .checked_add(text.len())
                 .ok_or(SchemaResourceError::LimitExceeded {
-                    limit: LimitKind::TotalPayloadBytes,
-                    maximum: self.limits.max_total_payload_bytes,
+                    limit: LimitKind::DocumentBytes,
+                    maximum: self.limits.max_document_bytes,
                 })?;
         check(
             self.bytes,
-            self.limits.max_total_payload_bytes,
-            LimitKind::TotalPayloadBytes,
+            self.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )
     }
     fn record(&mut self, text: &str) -> Result<(), SchemaResourceError> {

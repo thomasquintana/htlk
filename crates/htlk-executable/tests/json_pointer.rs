@@ -147,34 +147,18 @@ fn pointer_limits_cover_decoded_text_tokens_and_input() {
         (
             "/é",
             Limits {
-                max_text_bytes: 1,
+                max_document_bytes: 2,
                 ..Limits::default()
             },
-            LimitKind::TextBytes,
+            LimitKind::DocumentBytes,
         ),
         (
             "/ab/c",
             Limits {
-                max_total_payload_bytes: 2,
+                max_document_bytes: 4,
                 ..Limits::default()
             },
-            LimitKind::TotalPayloadBytes,
-        ),
-        (
-            "/a/b",
-            Limits {
-                max_collection_entries: 1,
-                ..Limits::default()
-            },
-            LimitKind::CollectionEntries,
-        ),
-        (
-            "/a/b",
-            Limits {
-                max_total_values: 1,
-                ..Limits::default()
-            },
-            LimitKind::TotalValues,
+            LimitKind::DocumentBytes,
         ),
         (
             "/a/b",
@@ -191,12 +175,8 @@ fn pointer_limits_cover_decoded_text_tokens_and_input() {
         );
     }
     let l = Limits {
-        max_text_bytes: 1,
-        max_total_payload_bytes: 2,
+        max_document_bytes: 6,
         max_depth: 2,
-        max_collection_entries: 2,
-        max_total_values: 2,
-        ..Limits::default()
     };
     assert_eq!(P::new("/~0/~1", &l).unwrap().tokens(), &["~", "/"]);
     assert!(matches!(

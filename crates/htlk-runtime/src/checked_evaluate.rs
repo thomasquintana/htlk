@@ -527,7 +527,7 @@ impl<C: EvaluationContext> CheckedContext<'_, '_, C> {
             .checked_add(size)
             .and_then(|n| n.checked_add(metadata))
             .ok_or(Error::Limit("schema provenance"))?;
-        if bytes > meter.program_limits().max_total_payload_bytes {
+        if bytes > meter.program_limits().max_document_bytes {
             return Err(Error::Limit("schema provenance"));
         }
         trace.values.insert(
@@ -623,9 +623,6 @@ fn joined_path(
         .len()
         .checked_add(second.len())
         .ok_or(Error::Limit("schema projection path"))?;
-    if count > meter.program_limits().max_collection_entries {
-        return Err(Error::Limit("schema projection path"));
-    }
     meter.visit(count as u64)?;
     let mut size = count.saturating_mul(size_of::<PathStep>());
     for step in first.iter().chain(second) {

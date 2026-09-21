@@ -24,7 +24,6 @@ pub(crate) fn projection_type(
     let mut walker = Walker {
         catalog,
         limits,
-        work: 0,
         bytes: 0,
         active: BTreeSet::new(),
     };
@@ -66,15 +65,18 @@ pub(crate) fn projection_type(
 struct Walker<'a> {
     catalog: &'a SchemaCatalog,
     limits: &'a Limits,
-    work: usize,
     bytes: usize,
     active: BTreeSet<(String, String, usize)>,
 }
 impl Walker<'_> {
     fn charge(&mut self, bytes: usize) -> Result<(), Error> {
-        self.work = self.work.checked_add(1).ok_or(Error::AdmissionLimit)?;
-        self.bytes = self.bytes.checked_add(bytes).ok_or(Error::AdmissionLimit)?;
-        if self.work > self.limits.max_total_values || self.bytes > self.limits.max_document_bytes {
+        // Include a one-byte visit marker in the derived byte budget.
+        self.bytes = self
+            .bytes
+            .checked_add(bytes)
+            .and_then(|n| n.checked_add(1))
+            .ok_or(Error::AdmissionLimit)?;
+        if self.bytes > self.limits.max_document_bytes {
             return Err(Error::AdmissionLimit);
         }
         Ok(())
@@ -86,7 +88,7 @@ impl Walker<'_> {
             .checked_add(token.len().checked_mul(2).ok_or(Error::AdmissionLimit)?)
             .and_then(|n| n.checked_add(1))
             .ok_or(Error::AdmissionLimit)?;
-        if size > self.limits.max_text_bytes {
+        if size > self.limits.max_document_bytes {
             return Err(Error::AdmissionLimit);
         }
         self.charge(size)?;

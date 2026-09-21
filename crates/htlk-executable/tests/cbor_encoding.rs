@@ -213,7 +213,6 @@ fn unsupported_configuration_is_rejected_at_entry() {
         &Limits {
             max_depth: 129,
             max_document_bytes: 0,
-            ..Limits::default()
         },
     )
     .unwrap_err();
@@ -228,7 +227,7 @@ fn expect_limit(value: &Value, limits: &Limits, limit: LimitKind, maximum: usize
 
 #[test]
 fn every_limit_accepts_the_boundary_and_rejects_one_more() {
-    // Root map + two keys + two values = 5. Payload = 1 + 2 + 1 + 2 = 6 bytes.
+    // Headers, UTF-8 keys, and both string kinds contribute to encoded size.
     let value = Value::Map(
         Map::try_from_entries([
             ("a".into(), Value::Text("é".into())),
@@ -238,31 +237,15 @@ fn every_limit_accepts_the_boundary_and_rejects_one_more() {
     );
     let limits = Limits {
         max_document_bytes: 11,
-        max_text_bytes: 2,
-        max_byte_string_bytes: 2,
         max_depth: 1,
-        max_collection_entries: 2,
-        max_total_values: 5,
-        max_total_payload_bytes: 6,
     };
     let bytes = encode(&value, &limits).unwrap();
     assert_eq!(bytes.len(), 11);
     assert_eq!(bytes, encode(&value, &Limits::default()).unwrap());
     type LimitCase = (LimitKind, usize, fn(&mut Limits));
-    let cases: [LimitCase; 7] = [
+    let cases: [LimitCase; 2] = [
         (LimitKind::DocumentBytes, 10, |l| l.max_document_bytes = 10),
-        (LimitKind::TextBytes, 1, |l| l.max_text_bytes = 1),
-        (LimitKind::ByteStringBytes, 1, |l| {
-            l.max_byte_string_bytes = 1
-        }),
         (LimitKind::Depth, 0, |l| l.max_depth = 0),
-        (LimitKind::CollectionEntries, 1, |l| {
-            l.max_collection_entries = 1
-        }),
-        (LimitKind::TotalValues, 4, |l| l.max_total_values = 4),
-        (LimitKind::TotalPayloadBytes, 5, |l| {
-            l.max_total_payload_bytes = 5
-        }),
     ];
     for (kind, maximum, adjust) in cases {
         let mut tightened = limits.clone();
@@ -277,31 +260,13 @@ fn keys_containers_and_zero_budgets_are_counted() {
     expect_limit(
         &map,
         &Limits {
-            max_text_bytes: 1,
+            max_document_bytes: 4,
             ..Limits::default()
         },
-        LimitKind::TextBytes,
-        1,
-    );
-    expect_limit(
-        &map,
-        &Limits {
-            max_total_payload_bytes: 1,
-            ..Limits::default()
-        },
-        LimitKind::TotalPayloadBytes,
-        1,
+        LimitKind::DocumentBytes,
+        4,
     );
     for value in [Value::Null, Value::Array(vec![]), Value::Map(Map::new())] {
-        expect_limit(
-            &value,
-            &Limits {
-                max_total_values: 0,
-                ..Limits::default()
-            },
-            LimitKind::TotalValues,
-            0,
-        );
         expect_limit(
             &value,
             &Limits {
@@ -316,8 +281,7 @@ fn keys_containers_and_zero_budgets_are_counted() {
                 &value,
                 &Limits {
                     max_depth: 0,
-                    max_collection_entries: 0,
-                    ..Limits::default()
+                    max_document_bytes: 1,
                 }
             )
             .is_ok()
@@ -336,19 +300,10 @@ fn keys_containers_and_zero_budgets_are_counted() {
     expect_limit(
         &array,
         &Limits {
-            max_collection_entries: 0,
+            max_document_bytes: 1,
             ..Limits::default()
         },
-        LimitKind::CollectionEntries,
-        0,
-    );
-    expect_limit(
-        &array,
-        &Limits {
-            max_total_values: 1,
-            ..Limits::default()
-        },
-        LimitKind::TotalValues,
+        LimitKind::DocumentBytes,
         1,
     );
     for value in [Value::Text(String::new()), Value::Bytes(vec![])] {
@@ -356,13 +311,38 @@ fn keys_containers_and_zero_budgets_are_counted() {
             encode(
                 &value,
                 &Limits {
-                    max_text_bytes: 0,
-                    max_byte_string_bytes: 0,
-                    max_total_payload_bytes: 0,
+                    max_document_bytes: 1,
                     ..Limits::default()
                 }
             )
             .is_ok()
+        );
+    }
+}
+
+#[test]
+fn flat_values_are_limited_by_encoded_bytes_not_separate_counts_or_string_caps() {
+    let limits = Limits::default();
+    // Both exceed former defaults while their complete representations fit.
+    for value in [
+        Value::Text("x".repeat(1024 * 1024 + 1)),
+        Value::Array(vec![Value::Null; 1_000_001]),
+    ] {
+        let bytes = encode(&value, &limits).unwrap();
+        let exact = Limits {
+            max_document_bytes: bytes.len(),
+            max_depth: 1,
+        };
+        assert_eq!(encode(&value, &exact).unwrap(), bytes);
+        assert_eq!(decode(&bytes, &exact).unwrap(), value);
+        expect_limit(
+            &value,
+            &Limits {
+                max_document_bytes: bytes.len() - 1,
+                ..exact
+            },
+            LimitKind::DocumentBytes,
+            bytes.len() - 1,
         );
     }
 }

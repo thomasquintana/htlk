@@ -524,28 +524,15 @@ fn all_record_domains_use_exact_prefixes_and_node_content_matters() {
 fn whole_scope_conversion_and_codec_limits_are_enforced() {
     let l = Limits {
         max_document_bytes: 98,
-        max_text_bytes: 14,
-        max_byte_string_bytes: 0,
         max_depth: 2,
-        max_collection_entries: 8,
-        max_total_values: 21,
-        max_total_payload_bytes: 77,
     };
     let s = Scope::new(ScopeFields::default(), C::Ordinary, &l).unwrap();
     let bytes = s.encode(C::Ordinary, &l).unwrap();
     assert_eq!(bytes.len(), 98);
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 6] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 97, |l| l.max_document_bytes = 97),
-        (LimitKind::TextBytes, 13, |l| l.max_text_bytes = 13),
         (LimitKind::Depth, 1, |l| l.max_depth = 1),
-        (LimitKind::CollectionEntries, 7, |l| {
-            l.max_collection_entries = 7
-        }),
-        (LimitKind::TotalValues, 20, |l| l.max_total_values = 20),
-        (LimitKind::TotalPayloadBytes, 76, |l| {
-            l.max_total_payload_bytes = 76
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut tight = l.clone();

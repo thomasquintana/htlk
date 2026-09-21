@@ -9,7 +9,7 @@ use super::{Error, ErrorKind, FiniteFloat, LimitKind, Limits, Map, Value};
 ///
 /// Noncanonical representations are rejected, never repaired. Byte strings are
 /// opaque: a nested executable payload requires a separate explicit decode.
-/// Map keys count toward both value and payload limits.
+/// The complete input, including map keys and headers, counts toward the byte limit.
 ///
 /// # Errors
 /// Returns a structured error for invalid configuration, malformed, unsupported,
@@ -75,7 +75,7 @@ impl<'a> Decoder<'a> {
                 Ok(Value::Integer(if major == 0 { integer } else { !integer }))
             }
             2 => {
-                let bytes = self.payload(argument, false)?;
+                let bytes = self.payload(argument)?;
                 let mut owned = Vec::new();
                 owned.try_reserve_exact(bytes.len()).map_err(allocation)?;
                 owned.extend_from_slice(bytes);
@@ -125,23 +125,24 @@ impl<'a> Decoder<'a> {
         Ok(argument)
     }
 
-    fn payload(&mut self, argument: u64, text: bool) -> Result<&'a [u8], Error> {
-        let (limit, maximum) = if text {
-            (LimitKind::TextBytes, self.accounting.limits.max_text_bytes)
-        } else {
-            (
-                LimitKind::ByteStringBytes,
-                self.accounting.limits.max_byte_string_bytes,
-            )
-        };
-        let len = length(argument, limit, maximum)?;
-        self.accounting.payload(len, text)?;
+    fn payload(&mut self, argument: u64) -> Result<&'a [u8], Error> {
+        let len = length(
+            argument,
+            LimitKind::DocumentBytes,
+            self.accounting.limits.max_document_bytes,
+        )?;
+        add(
+            self.position,
+            len,
+            self.accounting.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
+        )?;
         self.take(len)
     }
 
     fn text(&mut self, argument: u64) -> Result<&'a str, Error> {
         let payload_start = self.position;
-        let bytes = self.payload(argument, true)?;
+        let bytes = self.payload(argument)?;
         std::str::from_utf8(bytes).map_err(|error| {
             Error::new(ErrorKind::InvalidUtf8).at(payload_start + error.valid_up_to())
         })
@@ -150,23 +151,27 @@ impl<'a> Decoder<'a> {
     fn children(&self, argument: u64, depth: usize, map: bool) -> Result<(usize, usize), Error> {
         let len = length(
             argument,
-            LimitKind::CollectionEntries,
-            self.accounting.limits.max_collection_entries,
+            LimitKind::DocumentBytes,
+            self.accounting.limits.max_document_bytes,
         )?;
-        self.accounting.collection(len)?;
-        // Check the minimum child count before allocation or descent. Map pairs
-        // require two values. This is a preflight, not an upfront reservation.
+        // Every child needs at least one byte; a map pair needs at least two.
+        // Check the minimum required bytes before allocation or descent.
         let children = if map {
             add(
                 len,
                 len,
-                self.accounting.limits.max_total_values,
-                LimitKind::TotalValues,
+                self.accounting.limits.max_document_bytes,
+                LimitKind::DocumentBytes,
             )?
         } else {
             len
         };
-        self.accounting.ensure_values(children)?;
+        add(
+            self.position,
+            children,
+            self.accounting.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
+        )?;
         if children > self.input.len() - self.position {
             return Err(Error::new(ErrorKind::UnexpectedEnd).at(self.input.len()));
         }
@@ -292,7 +297,10 @@ fn own_text(text: &str) -> Result<String, Error> {
 /// full. Requested capacity is at most twice visited entries, capped by length.
 fn push<T>(values: &mut Vec<T>, value: T, maximum: usize) -> Result<(), Error> {
     if values.len() == values.capacity() {
-        let needed = add(values.len(), 1, maximum, LimitKind::CollectionEntries)?;
+        let needed = values
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| Error::new(ErrorKind::AllocationFailed))?;
         let target = needed.max(values.capacity().saturating_mul(2).min(maximum));
         values
             .try_reserve_exact(target - values.len())

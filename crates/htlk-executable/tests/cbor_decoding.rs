@@ -147,32 +147,16 @@ fn all_limits_include_keys_and_validate_before_work() {
     let bytes = [0xa2, 0x61, b'a', 0x62, 0xc3, 0xa9, 0x61, b'b', 0x42, 0, 255];
     let limits = Limits {
         max_document_bytes: 11,
-        max_text_bytes: 2,
-        max_byte_string_bytes: 2,
         max_depth: 1,
-        max_collection_entries: 2,
-        max_total_values: 5,
-        max_total_payload_bytes: 6,
     };
     let value = decode(&bytes, &limits).unwrap();
     assert_eq!(encode(&value, &limits).unwrap(), bytes);
     type LimitCase = (LimitKind, usize, usize, fn(&mut Limits));
-    let cases: [LimitCase; 7] = [
+    let cases: [LimitCase; 2] = [
         (LimitKind::DocumentBytes, 10, 0, |l| {
             l.max_document_bytes = 10
         }),
-        (LimitKind::TextBytes, 1, 3, |l| l.max_text_bytes = 1),
-        (LimitKind::ByteStringBytes, 1, 8, |l| {
-            l.max_byte_string_bytes = 1
-        }),
         (LimitKind::Depth, 0, 0, |l| l.max_depth = 0),
-        (LimitKind::CollectionEntries, 1, 0, |l| {
-            l.max_collection_entries = 1
-        }),
-        (LimitKind::TotalValues, 4, 0, |l| l.max_total_values = 4),
-        (LimitKind::TotalPayloadBytes, 5, 8, |l| {
-            l.max_total_payload_bytes = 5
-        }),
     ];
     for (limit, maximum, offset, adjust) in cases {
         let mut tightened = limits.clone();
@@ -182,29 +166,22 @@ fn all_limits_include_keys_and_validate_before_work() {
         assert_eq!(error.offset(), Some(offset));
     }
     let key = [0xa1, 0x62, 0xc3, 0xa9, 0xf6];
-    for (limit, config) in [
-        (
-            LimitKind::TextBytes,
-            Limits {
-                max_text_bytes: 1,
-                ..Limits::default()
-            },
-        ),
-        (
-            LimitKind::TotalPayloadBytes,
-            Limits {
-                max_total_payload_bytes: 1,
-                ..Limits::default()
-            },
-        ),
-    ] {
-        let error = decode(&key, &config).unwrap_err();
-        assert_eq!(
-            error.kind(),
-            &ErrorKind::LimitExceeded { limit, maximum: 1 }
-        );
-        assert_eq!(error.offset(), Some(1));
-    }
+    let error = decode(
+        &key,
+        &Limits {
+            max_document_bytes: 4,
+            ..Limits::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &ErrorKind::LimitExceeded {
+            limit: LimitKind::DocumentBytes,
+            maximum: 4
+        }
+    );
+    assert_eq!(error.offset(), Some(0));
     let error = decode(
         &[],
         &Limits {
@@ -218,17 +195,13 @@ fn all_limits_include_keys_and_validate_before_work() {
     for bytes in [&[0xf6][..], &[0x80], &[0xa0], &[0x60], &[0x40]] {
         let zero = Limits {
             max_depth: 0,
-            max_collection_entries: 0,
-            max_text_bytes: 0,
-            max_byte_string_bytes: 0,
-            max_total_payload_bytes: 0,
-            ..Limits::default()
+            max_document_bytes: 1,
         };
         assert!(decode(bytes, &zero).is_ok());
         let error = decode(
             bytes,
             &Limits {
-                max_total_values: 0,
+                max_document_bytes: 0,
                 ..zero
             },
         )
@@ -236,7 +209,7 @@ fn all_limits_include_keys_and_validate_before_work() {
         assert_eq!(
             error.kind(),
             &ErrorKind::LimitExceeded {
-                limit: LimitKind::TotalValues,
+                limit: LimitKind::DocumentBytes,
                 maximum: 0
             }
         );
@@ -247,12 +220,7 @@ fn all_limits_include_keys_and_validate_before_work() {
 fn hostile_lengths_are_rejected_before_allocation() {
     let huge = Limits {
         max_document_bytes: usize::MAX,
-        max_text_bytes: usize::MAX,
-        max_byte_string_bytes: usize::MAX,
         max_depth: 128,
-        max_collection_entries: usize::MAX,
-        max_total_values: usize::MAX,
-        max_total_payload_bytes: usize::MAX,
     };
     for major in [0x5b, 0x7b, 0x9b, 0xbb] {
         let bytes = [major, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
@@ -292,12 +260,7 @@ fn nested_payloads_are_opaque_and_errors_do_not_disclose_values() {
 fn bounded_arbitrary_bytes_never_panic_and_accepted_bytes_round_trip() {
     let limits = Limits {
         max_document_bytes: 128,
-        max_text_bytes: 64,
-        max_byte_string_bytes: 64,
         max_depth: 8,
-        max_collection_entries: 32,
-        max_total_values: 64,
-        max_total_payload_bytes: 96,
     };
     let verify = |bytes: &[u8]| match decode(bytes, &limits) {
         Ok(value) => assert_eq!(encode(&value, &limits).unwrap(), bytes),

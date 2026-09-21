@@ -1312,24 +1312,20 @@ fn malformed_resource_templates_fail_canonical_ingress_with_byte_offsets() {
 }
 
 #[test]
-fn repeated_template_variables_obey_tighter_per_call_limits() {
+fn repeated_template_variables_fit_when_the_document_fits() {
     let l = Limits::default();
     let f = template_fixture(&"{x}".repeat(1000), &[("x", true)], &l);
     let doc = Doc::new(f.clone(), &l).unwrap();
     let bytes = doc.encode(&l).unwrap();
     let tight = Limits {
-        max_total_values: 500,
+        max_document_bytes: bytes.len(),
         ..l
     };
-    // Raw CBOR and each JSON document fit; derived template mentions do not.
+    // Repeated mentions do not require a separate value-count allowance.
     assert!(htlk_cbor::decode(&bytes, &tight).is_ok());
-    let expected = Error::LimitExceeded {
-        limit: LimitKind::TotalValues,
-        maximum: 500,
-    };
-    assert_eq!(Doc::new(f, &tight).unwrap_err(), expected);
-    assert_eq!(doc.encode(&tight).unwrap_err(), expected);
-    assert_eq!(Doc::decode(&bytes, &tight).unwrap_err(), expected);
+    assert!(Doc::new(f, &tight).is_ok());
+    assert_eq!(doc.encode(&tight).unwrap(), bytes);
+    assert_eq!(Doc::decode(&bytes, &tight).unwrap(), doc);
 }
 
 fn schema_root_uris(f: &mut DocumentFields, l: &Limits) {
@@ -1500,14 +1496,14 @@ fn executable_schema_snapshot_copies_are_preflighted_before_catalog_construction
     }
     let doc = Doc::new(f, &l).unwrap();
     let tight = Limits {
-        max_total_payload_bytes: 10000,
+        max_document_bytes: 10000,
         ..l
     };
     assert!(doc.to_value(&tight).is_ok());
     assert_eq!(
         doc.schema_catalog(&tight).unwrap_err(),
         Error::LimitExceeded {
-            limit: LimitKind::TotalPayloadBytes,
+            limit: LimitKind::DocumentBytes,
             maximum: 10000
         }
     );

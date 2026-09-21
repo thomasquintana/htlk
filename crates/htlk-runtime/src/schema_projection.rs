@@ -32,14 +32,14 @@ impl<'a> SchemaProjection<'a> {
         if !schemas.has_schema_type(&schema) {
             return Err(Error::UnresolvedType);
         }
-        if path.len() > limits.max_collection_entries {
+        if path.len() > limits.max_depth {
             return Err(Error::Limit("schema projection path"));
         }
         let mut bytes = 0usize;
         for step in path {
             let size = match step {
                 PathStep::Field(s) => {
-                    if s.len() > limits.max_text_bytes {
+                    if s.len() > limits.max_document_bytes {
                         return Err(Error::Limit("schema projection path"));
                     }
                     s.len()
@@ -155,7 +155,7 @@ fn append_pointer(
         .and_then(|n| n.checked_add(1))
         .and_then(|n| n.checked_add(pointer.len()))
         .ok_or(Error::Limit("schema projection path"))?;
-    if size > meter.program_limits().max_text_bytes {
+    if size > meter.program_limits().max_document_bytes {
         return Err(Error::Limit("schema projection path"));
     }
     meter.charge(size as u64)?;
@@ -239,7 +239,7 @@ fn declared(
             }
         }
         if let Some(Value::Array(children)) = node.get("details") {
-            if pending.len().saturating_add(children.len()) > limits.max_total_values {
+            if pending.len().saturating_add(children.len()) > limits.max_document_bytes {
                 return Err(Error::Limit("schema projection evaluation"));
             }
             pending

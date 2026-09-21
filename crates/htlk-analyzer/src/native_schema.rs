@@ -86,11 +86,7 @@ impl NativeSchemas {
         catalog.reference_closure(&uris, limits)?;
         let mut documents = BTreeMap::new();
         let mut projection_admission = crate::schema_projection::ProjectionAdmission::default();
-        let mut plan_size = PlanSize {
-            total: 0,
-            document: 0,
-            limits,
-        };
+        let mut plan_size = PlanSize { total: 0, limits };
         for uri in &uris {
             let document = catalog
                 .document(uri)
@@ -174,7 +170,6 @@ impl NativeSchemas {
                     }
                 }
             }
-            plan_size.document = 0;
             serde_json::to_writer(&mut plan_size, &native)
                 .map_err(|_| NativeSchemaError::CompilationInputLimit)?;
             documents.insert((*uri).to_owned(), native);
@@ -193,7 +188,6 @@ impl NativeSchemas {
             .map_err(|_| NativeSchemaError::InvalidSchema)?;
         let mut roots = BTreeMap::new();
         let mut schema_types = BTreeMap::new();
-        let mut admission_work = 0usize;
         let mut admission_bytes = 0usize;
         for (uri, schema) in &documents {
             let original = catalog
@@ -206,13 +200,7 @@ impl NativeSchemas {
             if crate::embedded_schema_base(original, limits)? == *uri {
                 schema_types.insert(original.digest(), uri.clone());
             }
-            let object_only = object_root(
-                catalog,
-                uri,
-                limits,
-                &mut admission_work,
-                &mut admission_bytes,
-            )?;
+            let object_only = object_root(catalog, uri, limits, &mut admission_bytes)?;
             let validator = jsonschema::options()
                 .with_draft(jsonschema::Draft::Draft202012)
                 .with_registry(&registry)
@@ -404,7 +392,6 @@ fn parse(document: &JsonDocument, limits: &Limits) -> Result<Json, NativeSchemaE
 }
 struct PlanSize<'a> {
     total: usize,
-    document: usize,
     limits: &'a Limits,
 }
 impl std::io::Write for PlanSize<'_> {
@@ -413,13 +400,7 @@ impl std::io::Write for PlanSize<'_> {
             .total
             .checked_add(bytes.len())
             .ok_or_else(|| std::io::Error::other("schema plan size overflow"))?;
-        self.document = self
-            .document
-            .checked_add(bytes.len())
-            .ok_or_else(|| std::io::Error::other("schema plan size overflow"))?;
-        if self.total > self.limits.max_total_payload_bytes
-            || self.document > self.limits.max_document_bytes
-        {
+        if self.total > self.limits.max_document_bytes {
             return Err(std::io::Error::other("schema plan byte limit"));
         }
         Ok(bytes.len())
@@ -563,7 +544,6 @@ fn object_root(
     catalog: &SchemaCatalog,
     root_uri: &str,
     limits: &Limits,
-    work: &mut usize,
     bytes: &mut usize,
 ) -> Result<bool, NativeSchemaError> {
     let empty = JsonPointer::new("", limits).map_err(SchemaResourceError::from)?;
@@ -575,17 +555,15 @@ fn object_root(
         .value();
     let mut seen = BTreeSet::new();
     loop {
-        *work = work
-            .checked_add(1)
-            .ok_or(NativeSchemaError::AdmissionLimit)?;
-        if *work > limits.max_total_values || seen.len() >= limits.max_collection_entries {
-            return Err(NativeSchemaError::AdmissionLimit);
-        }
-        for amount in std::iter::once(uri.len()).chain(pointer.tokens().iter().map(String::len)) {
+        // One visit marker plus the URI and pointer token text.
+        for amount in [1, uri.len()]
+            .into_iter()
+            .chain(pointer.tokens().iter().map(String::len))
+        {
             *bytes = bytes
                 .checked_add(amount)
                 .ok_or(NativeSchemaError::AdmissionLimit)?;
-            if *bytes > limits.max_total_payload_bytes {
+            if *bytes > limits.max_document_bytes {
                 return Err(NativeSchemaError::AdmissionLimit);
             }
         }

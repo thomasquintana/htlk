@@ -153,34 +153,34 @@ fn every_limit_counts_the_json_representation() {
         (
             br#""\ud83d\ude00""#.as_slice(),
             Limits {
-                max_text_bytes: 3,
+                max_document_bytes: 13,
                 ..Limits::default()
             },
-            LimitKind::TextBytes,
+            LimitKind::DocumentBytes,
         ),
         (
             br#"{"a":"bc"}"#.as_slice(),
             Limits {
-                max_total_payload_bytes: 2,
+                max_document_bytes: 9,
                 ..Limits::default()
             },
-            LimitKind::TotalPayloadBytes,
+            LimitKind::DocumentBytes,
         ),
         (
             br#"{"a":1}"#.as_slice(),
             Limits {
-                max_total_values: 2,
+                max_document_bytes: 6,
                 ..Limits::default()
             },
-            LimitKind::TotalValues,
+            LimitKind::DocumentBytes,
         ),
         (
             b"[1,2]".as_slice(),
             Limits {
-                max_collection_entries: 1,
+                max_document_bytes: 4,
                 ..Limits::default()
             },
-            LimitKind::CollectionEntries,
+            LimitKind::DocumentBytes,
         ),
         (
             b"[[0]]".as_slice(),
@@ -208,13 +208,12 @@ fn every_limit_counts_the_json_representation() {
         })
     ));
     let l = Limits {
-        max_text_bytes: 4,
+        max_document_bytes: 14,
         ..Limits::default()
     };
     assert!(J::new(br#""\ud83d\ude00""#, &l).is_ok());
     let l = Limits {
-        max_total_values: 3,
-        max_total_payload_bytes: 3,
+        max_document_bytes: 10,
         ..Limits::default()
     };
     assert!(J::new(br#"{"a":"bc"}"#, &l).is_ok());

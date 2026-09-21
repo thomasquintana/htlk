@@ -446,30 +446,17 @@ fn conversion_limits_and_codec_failures_remain_bounded() {
     let e = engine();
     let exact = Limits {
         max_document_bytes: 128,
-        max_text_bytes: 71,
-        max_byte_string_bytes: 0,
         max_depth: 1,
-        max_collection_entries: 4,
-        max_total_values: 9,
-        max_total_payload_bytes: 118,
     };
     let bytes = e.encode(&exact).unwrap();
     assert_eq!(bytes.len(), 128);
     assert_eq!(Engine::decode(&bytes, &exact).unwrap(), e);
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 6] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 127, |l| {
             l.max_document_bytes = 127
         }),
-        (LimitKind::TextBytes, 70, |l| l.max_text_bytes = 70),
         (LimitKind::Depth, 0, |l| l.max_depth = 0),
-        (LimitKind::CollectionEntries, 3, |l| {
-            l.max_collection_entries = 3
-        }),
-        (LimitKind::TotalValues, 8, |l| l.max_total_values = 8),
-        (LimitKind::TotalPayloadBytes, 117, |l| {
-            l.max_total_payload_bytes = 117
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut l = exact.clone();

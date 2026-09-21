@@ -61,8 +61,6 @@ fn limits_allow_tightening_but_reject_unsupported_depth() {
     let mut limits = Limits {
         max_depth: 0,
         max_document_bytes: 0,
-        max_total_values: 0,
-        ..Limits::default()
     };
     assert!(limits.validate().is_ok());
     assert_eq!(Limits::default().max_depth, 64);

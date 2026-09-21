@@ -6,20 +6,17 @@ pub const DECLARED_FIELDS: &str = "x-htlk-private-declared-fields";
 
 #[derive(Default)]
 pub(crate) struct ProjectionAdmission {
-    work: usize,
     bytes: usize,
 }
 impl ProjectionAdmission {
     fn charge(&mut self, bytes: usize, limits: &Limits) -> Result<(), crate::NativeSchemaError> {
-        self.work = self
-            .work
-            .checked_add(1)
-            .ok_or(crate::NativeSchemaError::AdmissionLimit)?;
+        // Include one byte for each derived entry, even when its text is empty.
         self.bytes = self
             .bytes
             .checked_add(bytes)
+            .and_then(|n| n.checked_add(1))
             .ok_or(crate::NativeSchemaError::AdmissionLimit)?;
-        if self.work > limits.max_total_values || self.bytes > limits.max_document_bytes {
+        if self.bytes > limits.max_document_bytes {
             return Err(crate::NativeSchemaError::AdmissionLimit);
         }
         Ok(())
@@ -87,9 +84,6 @@ impl ProjectionAdmission {
                 }
             }
         }
-        if fields.len() > limits.max_collection_entries {
-            return Err(N::AdmissionLimit);
-        }
         Ok(fields.into_iter().collect())
     }
     fn child(
@@ -105,7 +99,7 @@ impl ProjectionAdmission {
             .and_then(|n| n.checked_add(parent.len()))
             .and_then(|n| n.checked_add(1))
             .ok_or(crate::NativeSchemaError::AdmissionLimit)?;
-        if size > limits.max_text_bytes {
+        if size > limits.max_document_bytes {
             return Err(crate::NativeSchemaError::AdmissionLimit);
         }
         self.charge(size, limits)?;

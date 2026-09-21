@@ -96,9 +96,11 @@ applicable. `NativeSchemaDiagnostic` carries original document digests and JSON
 Pointers when the failure has a known schema location. Diagnostics do not retain
 submitted operand values or native validator message text.
 
-Existing codec limits bound encoded inputs and derived plans; private stage
-counters bound inference, schema declaration propagation and aggregate graph work.
-Counts include retained runtime checks/call signatures, not just result types.
+`Limits` exposes only `max_document_bytes` and `max_depth`. Encoded inputs and
+derived plans each receive a fresh byte budget. Derived index/graph/schema stages
+charge entry or visit markers plus associated bytes, including retained runtime
+checks and call signatures. Inference also uses the numeric byte ceiling as its
+private step allowance; callback compatibility retains its explicit work budget.
 Temporary representations have independently bounded overhead. Native JSON Schema
 validation has the capability contract documented below, not a claimed hard heap
 cap, whole-validation fuel counter, or in-process deadline. Runtime registration
@@ -224,7 +226,7 @@ checks the actual CBOR text/array/map/Boolean representation against codec limit
 including map keys, tag strings, presence flags, encoded lengths, and depth.
 Parsing begins only after bounded CBOR decoding (or bounded encoding for an
 existing Value). Normalization temporarily holds source members and sorting keys,
-bounded by the checked input's total values/bytes; its final result must also fit
+bounded by the checked input's encoded bytes; its final result must also fit
 the configured limits, including an expanded flattened-union array. Codec byte
 string limits do not constrain a type named `bytes`, which is text metadata.
 
@@ -437,7 +439,7 @@ explicitly declared optional properties yield absence. Private compiler annotati
 preserve field declarations through native evaluation without changing original
 JCS identities; authored annotations cannot impersonate them.
 Schema origin survives record/list materialization. Only computed roots needed
-by later projections are retained, under the existing aggregate payload ceiling;
+by later projections are retained, under the program's document-byte ceiling;
 native functions are not reinvoked to recover discarded schema context.
 
 Standalone execution contexts implement the native-call contract themselves.
@@ -912,10 +914,10 @@ this explicit boundary. Native bytes cannot cross the JSON boundary.
 
 Parsing checks decoded string sizes before string allocation. `serde_json`
 handles string decoding/escaping; `ryu-js` supplies ECMAScript float formatting.
-Private per-operation accounting applies existing `Limits` to JSON input/output
-bytes, depth, collection entries, values (including keys), individual decoded
-UTF-8 strings, and aggregate decoded string payload. These are logical ceilings,
-not exact heap counters. JSON is not charged CBOR headers. The parser, writer,
+Private per-operation accounting applies `max_document_bytes` to JSON input and
+output and `max_depth` to nesting. Decoded strings cannot exceed the already
+bounded input; output includes escaping, keys, and punctuation. These are
+representation ceilings, not exact heap counters. JSON is not charged CBOR headers. The parser, writer,
 clone, and failure cleanup have depth-128 tests on 512 KiB and 2 MiB stacks.
 
 `PolicyFields` and `EvaluatorLimits` describe the closed policy schema.
@@ -955,9 +957,8 @@ Object keys preserve exact Unicode spelling and may contain arbitrary strings.
 Array indices require unsigned decimal without leading zeros, except `0` itself.
 The `-` token and oversized/out-of-range indices name no existing array element.
 
-Input byte limits apply before parsing. Depth, collection-entry, and total-value
-limits each bound token count; text/payload limits bound individual/aggregate
-decoded token UTF-8 bytes. Tokens are sized before copying. Fragment decoding
+Input byte limits apply before parsing. `max_depth` bounds token count;
+decoded token text fits within the input byte ceiling. Tokens are sized before copying. Fragment decoding
 temporarily retains one input-size-bounded buffer before token construction;
 logical counters are not exact process-heap measurements. Lookup is iterative,
 including at the supported depth ceiling of 128.
@@ -1008,9 +1009,9 @@ at nested schema positions. This check does not validate schema keywords beyond
 those needed for standard location discovery or establish vocabulary support.
 
 Input JSON is rechecked under effective limits. Discovery is iterative and charges
-all queued/indexed locations before allocating pointers: `max_collection_entries`
-bounds location count, `max_total_values` counts locations plus retained path tokens,
-and `max_total_payload_bytes` bounds their aggregate escaped-pointer bytes.
+all queued/indexed locations before allocating pointers. Its derived byte budget
+counts one byte per location/token marker plus the aggregate escaped-pointer
+text, with the total bounded by `max_document_bytes`.
 Each pointer also observes its own pointer limits. Thus an individually valid
 JSON document may still exceed derived-index ceilings. Depth-128 discovery and
 cleanup are tested on 512 KiB and 2 MiB stacks. `SchemaLocationError` retains static
@@ -1063,10 +1064,10 @@ against a nonempty rootless base fail. Percent decoding of fragments occurs befo
 pointer/anchor lookup, with no form-URL plus-to-space conversion.
 
 Location discovery and resource metadata have separately bounded derived indexes.
-The resource index counts stored base/resource/anchor entries against collection
-and total-value ceilings, and copied URI/name bytes against aggregate payload.
-Individual URI input, intermediate, and output strings observe text, document-byte,
-and payload limits. Reference calls apply their supplied limits to query construction;
+The resource index charges a one-byte marker for each stored base/resource/anchor
+entry plus copied URI/name bytes against `max_document_bytes`.
+Individual URI input, intermediate, and output strings also observe the byte
+ceiling. Reference calls apply their supplied limits to query construction;
 they do not rebuild the immutable index. Tests cover RFC resolution vectors, exact
 limits, nested resources, anchor conflicts, and depth-128 indexing/cleanup on
 512 KiB and 2 MiB stacks. Errors retain static categories and underlying location
@@ -1123,9 +1124,9 @@ aliases retain their own indexed contexts. `RetrievalConflict` and `UnknownDocum
 distinguish conflicting snapshots from missing source contexts.
 
 Aggregate accounting includes submitted URI/JSON bytes before duplicate coalescing,
-retained child-index paths/bases/anchors, and merged URI keys. Total values and
-payload ceilings bound derived storage, while collection limits bound the input
-snapshot and merged resource tables. Child indexes retain their individual limits;
+retained child-index paths/bases/anchors, and merged URI keys. A one-byte marker
+per metadata record plus its associated bytes consumes a shared
+`max_document_bytes` budget. Child indexes retain their individual limits;
 a failing child may temporarily occupy one additional bounded index. Returned
 targets borrow indexed data rather than allocating extracted schema copies.
 
@@ -1176,10 +1177,9 @@ reached reference path. Targets prefer the source's own resource context, then a
 deterministic reached context. Consequently a local reference does not pull an
 unused equivalent alias into the closure merely because that alias sorts earlier.
 
-Every call uses fresh limits and rechecks reached JSON snapshots. Collection
-ceilings bound roots, contexts, known resource URIs, and reference records; total
-values account contexts, resources, schema visits, and reference processing.
-Payload accounting covers reached URI/snapshot bytes, constructed absolute
+Every call uses fresh limits and rechecks reached JSON snapshots. A shared
+`max_document_bytes` budget charges one-byte markers for contexts, resources,
+schema visits, and reference processing. Byte accounting also covers reached URI/snapshot bytes, constructed absolute
 references, source pointer paths, and target-root paths needed for pointer joins.
 This bounds repeated short-reference lookups into large resource-root pointers.
 No document bytes or extracted schema values are copied into returned references.
@@ -1420,10 +1420,10 @@ the RFC's Unicode literal ranges are accepted; no URI parser rewrites the templa
 Variable names are exact and case-sensitive. A dot is part of a name, not field
 projection; percent triplets are not decoded or case-folded. `%61` and `a` are
 different variables. Names are borrowed from bounded binding strings, collected
-once per binding, and reused for node matching. Distinct-variable counts use
-`max_collection_entries`; occurrence counts, including repetitions, use
-`max_total_values` per template. Encoding under tighter limits rechecks those
-derived ceilings. Invalid syntax reports `InvalidUriTemplate` with a byte offset.
+once per binding, and reused for node matching. The template's UTF-8 byte length
+is bounded by `max_document_bytes`, which also bounds variable occurrences;
+there is no separate distinct-variable or occurrence-count limit. Invalid syntax
+reports `InvalidUriTemplate` with a byte offset.
 
 This checks syntax and interface metadata. `expand_uri_template` supplies native
 scalar expansion, Unicode prefixes, and percent encoding. The composed verifier

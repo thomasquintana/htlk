@@ -23,15 +23,6 @@ pub fn expand_uri_template(
     limits: &Limits,
 ) -> Result<String, DocumentError> {
     limits.validate()?;
-    for (maximum, limit) in [
-        (limits.max_text_bytes, LimitKind::TextBytes),
-        (limits.max_document_bytes, LimitKind::DocumentBytes),
-        (limits.max_total_payload_bytes, LimitKind::TotalPayloadBytes),
-    ] {
-        if template.len() > maximum {
-            return Err(DocumentError::LimitExceeded { limit, maximum });
-        }
-    }
     cbor::encode(arguments, limits)?;
     let names = uri_template_variables(template, limits)?;
     let Value::Map(map) = arguments else {
@@ -84,17 +75,11 @@ impl fmt::Write for Expansion<'_> {
                         maximum: self.limits.max_document_bytes,
                     },
                 )?;
-                for (maximum, limit) in [
-                    (self.limits.max_text_bytes, LimitKind::TextBytes),
-                    (self.limits.max_document_bytes, LimitKind::DocumentBytes),
-                    (
-                        self.limits.max_total_payload_bytes,
-                        LimitKind::TotalPayloadBytes,
-                    ),
-                ] {
-                    if length > maximum {
-                        return Err(DocumentError::LimitExceeded { limit, maximum });
-                    }
+                if length > self.limits.max_document_bytes {
+                    return Err(DocumentError::LimitExceeded {
+                        limit: LimitKind::DocumentBytes,
+                        maximum: self.limits.max_document_bytes,
+                    });
                 }
                 self.text
                     .try_reserve(text.len())

@@ -384,12 +384,7 @@ fn retry_fields_are_required_and_typed() {
 fn wire_limits_bound_both_records_and_retry_normalization() {
     let base = Limits {
         max_document_bytes: 63,
-        max_text_bytes: 13,
-        max_byte_string_bytes: 0,
         max_depth: 2,
-        max_collection_entries: 3,
-        max_total_values: 11,
-        max_total_payload_bytes: 48,
     };
     let policy = R::new(
         3,
@@ -402,17 +397,9 @@ fn wire_limits_bound_both_records_and_retry_normalization() {
     assert_eq!(bytes.len(), 63);
     assert_eq!(R::decode(&bytes, &base).unwrap(), policy);
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 6] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 62, |l| l.max_document_bytes = 62),
-        (LimitKind::TextBytes, 12, |l| l.max_text_bytes = 12),
         (LimitKind::Depth, 1, |l| l.max_depth = 1),
-        (LimitKind::CollectionEntries, 2, |l| {
-            l.max_collection_entries = 2
-        }),
-        (LimitKind::TotalValues, 10, |l| l.max_total_values = 10),
-        (LimitKind::TotalPayloadBytes, 47, |l| {
-            l.max_total_payload_bytes = 47
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut tight = base.clone();
@@ -452,11 +439,6 @@ fn wire_limits_bound_both_records_and_retry_normalization() {
     let empty_limits = Limits {
         max_document_bytes: 1,
         max_depth: 0,
-        max_collection_entries: 0,
-        max_total_values: 1,
-        max_total_payload_bytes: 0,
-        max_text_bytes: 0,
-        max_byte_string_bytes: 0,
     };
     assert_eq!(E::new().encode(&empty_limits).unwrap(), [0xa0]);
     assert!(matches!(
@@ -466,12 +448,7 @@ fn wire_limits_bound_both_records_and_retry_normalization() {
     let one = E::new().with_max_mcp_calls(0).unwrap();
     let exact = Limits {
         max_document_bytes: 16,
-        max_text_bytes: 13,
         max_depth: 1,
-        max_collection_entries: 1,
-        max_total_values: 3,
-        max_total_payload_bytes: 13,
-        max_byte_string_bytes: 0,
     };
     assert_eq!(one.encode(&exact).unwrap().len(), 16);
     assert_eq!(
@@ -496,26 +473,13 @@ fn every_limit_conversion_ceiling_is_checked_before_building_the_map() {
     let options = E::new().with_max_mcp_calls(0).unwrap();
     let exact = Limits {
         max_document_bytes: 16,
-        max_text_bytes: 13,
         max_depth: 1,
-        max_collection_entries: 1,
-        max_total_values: 3,
-        max_total_payload_bytes: 13,
-        max_byte_string_bytes: 0,
     };
     let bytes = options.encode(&exact).unwrap();
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 6] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 15, |l| l.max_document_bytes = 15),
-        (LimitKind::TextBytes, 12, |l| l.max_text_bytes = 12),
         (LimitKind::Depth, 0, |l| l.max_depth = 0),
-        (LimitKind::CollectionEntries, 0, |l| {
-            l.max_collection_entries = 0
-        }),
-        (LimitKind::TotalValues, 2, |l| l.max_total_values = 2),
-        (LimitKind::TotalPayloadBytes, 12, |l| {
-            l.max_total_payload_bytes = 12
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut tight = exact.clone();

@@ -202,21 +202,20 @@ fn opaque_source_bases_and_unknown_anchors_remain_explicit() {
 fn aggregate_storage_and_query_limits_are_enforced() {
     let l = Limits::default();
     // One true snapshot and urn:a: input URI + JSON + retained base/resource URI
-    // copies + merged URI = 5 + 4 + 5 + 5 + 5 = 24 bytes; five metadata records.
+    // copies + merged URI = 24 text bytes plus five metadata record markers.
     let exact = Limits {
-        max_total_payload_bytes: 24,
-        max_total_values: 5,
+        max_document_bytes: 29,
         ..l.clone()
     };
     let c = C::new(vec![("urn:a".into(), j("true"))], &exact).unwrap();
     let tight = Limits {
-        max_total_payload_bytes: 23,
+        max_document_bytes: 28,
         ..exact.clone()
     };
     assert!(matches!(
         C::new(vec![("urn:a".into(), j("true"))], &tight),
         Err(E::LimitExceeded {
-            limit: LimitKind::TotalPayloadBytes,
+            limit: LimitKind::DocumentBytes,
             ..
         })
     ));
@@ -228,13 +227,13 @@ fn aggregate_storage_and_query_limits_are_enforced() {
         Err(E::LimitExceeded { .. })
     ));
     let tight = Limits {
-        max_text_bytes: 4,
+        max_document_bytes: 4,
         ..l
     };
     assert!(matches!(
         c.resolve("urn:a", &p(""), "#", &tight),
         Err(E::LimitExceeded {
-            limit: LimitKind::TextBytes,
+            limit: LimitKind::DocumentBytes,
             ..
         })
     ));

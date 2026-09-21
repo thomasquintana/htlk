@@ -146,44 +146,31 @@ fn malformed_missing_and_non_schema_references_fail() {
 fn closure_has_fresh_work_snapshot_and_context_limits() {
     let c = C::new(vec![("urn:a".into(), j("{}"))], &Limits::default()).unwrap();
     // Context URI + snapshot + known resource URI: 5 + 2 + 5 = 12 bytes.
-    // Context, resource, and schema-location visit: three logical work values.
+    // Context, resource, and schema-location visit: three one-byte markers.
     let exact = Limits {
-        max_total_values: 3,
-        max_total_payload_bytes: 12,
-        max_collection_entries: 1,
+        max_document_bytes: 15,
         ..Limits::default()
     };
     assert!(c.reference_closure(&["urn:a"], &exact).is_ok());
     let tight = Limits {
-        max_total_values: 2,
+        max_document_bytes: 14,
         ..exact.clone()
     };
     assert_eq!(
         c.reference_closure(&["urn:a"], &tight).unwrap_err(),
         E::LimitExceeded {
-            limit: LimitKind::TotalValues,
-            maximum: 2
+            limit: LimitKind::DocumentBytes,
+            maximum: 14
         }
     );
     let tight = Limits {
-        max_total_payload_bytes: 11,
-        ..exact.clone()
-    };
-    assert_eq!(
-        c.reference_closure(&["urn:a"], &tight).unwrap_err(),
-        E::LimitExceeded {
-            limit: LimitKind::TotalPayloadBytes,
-            maximum: 11
-        }
-    );
-    let tight = Limits {
-        max_text_bytes: 4,
+        max_document_bytes: 4,
         ..exact
     };
     assert!(matches!(
         c.reference_closure(&["urn:a"], &tight),
         Err(E::LimitExceeded {
-            limit: LimitKind::TextBytes,
+            limit: LimitKind::DocumentBytes,
             ..
         })
     ));
@@ -201,12 +188,7 @@ fn long_reference_cycles_do_not_consume_recursive_depth() {
         })
         .collect();
     let c = C::new(docs, &l).unwrap();
-    let tight = Limits {
-        max_depth: 2,
-        max_total_values: 2000,
-        max_collection_entries: 300,
-        ..l
-    };
+    let tight = Limits { max_depth: 2, ..l };
     let closure = c.reference_closure(&["urn:0"], &tight).unwrap();
     assert_eq!(closure.retrieval_uris().len(), 300);
     assert_eq!(closure.references().len(), 300);
@@ -233,14 +215,14 @@ fn short_references_cannot_amplify_large_resource_pointer_work() {
         20
     );
     let tight = Limits {
-        max_total_payload_bytes: 6000,
+        max_document_bytes: 6000,
         ..l
     };
     assert_eq!(
         c.reference_closure(&["urn:a", "urn:b"], &tight)
             .unwrap_err(),
         E::LimitExceeded {
-            limit: LimitKind::TotalPayloadBytes,
+            limit: LimitKind::DocumentBytes,
             maximum: 6000
         }
     );

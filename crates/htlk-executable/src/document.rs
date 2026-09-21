@@ -139,8 +139,8 @@ impl CanonicalDocument {
             f.documents.iter().map(|(id, doc)| {
                 check(
                     doc.as_bytes().len(),
-                    limits.max_byte_string_bytes,
-                    LimitKind::ByteStringBytes,
+                    limits.max_document_bytes,
+                    LimitKind::DocumentBytes,
                 )?;
                 JsonDocument::decode(doc.as_bytes(), limits)?;
                 let mut bytes = Vec::new();

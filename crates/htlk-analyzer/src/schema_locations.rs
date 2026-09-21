@@ -50,9 +50,7 @@ impl SchemaLocations {
         JsonDocument::decode(document.as_bytes(), limits)?;
         let mut builder = Builder {
             limits,
-            locations: 0,
-            payload: 0,
-            tokens: 0,
+            bytes: 0,
             work: Vec::new(),
         };
         builder.push(document.value(), &[], &[])?;
@@ -132,9 +130,7 @@ impl SchemaLocations {
 
 struct Builder<'a, 'd> {
     limits: &'a Limits,
-    locations: usize,
-    payload: usize,
-    tokens: usize,
+    bytes: usize,
     work: Vec<(&'d Value, JsonPointer)>,
 }
 impl<'d> Builder<'_, 'd> {
@@ -147,30 +143,24 @@ impl<'d> Builder<'_, 'd> {
         if !matches!(value, Value::Map(_) | Value::Bool(_)) {
             return Err(SchemaLocationError::InvalidSchema);
         }
-        self.locations = add(
-            self.locations,
-            1,
-            self.limits.max_collection_entries,
-            LimitKind::CollectionEntries,
-        )?;
         let depth = add(
             parent.len(),
             suffix.len(),
             self.limits.max_depth,
             LimitKind::Depth,
         )?;
-        // Charge the index entry itself and every retained decoded token.
-        self.tokens = add(
-            self.tokens,
+        // Charge one byte per index/token marker, including empty tokens.
+        self.bytes = add(
+            self.bytes,
             1,
-            self.limits.max_total_values,
-            LimitKind::TotalValues,
+            self.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )?;
-        self.tokens = add(
-            self.tokens,
+        self.bytes = add(
+            self.bytes,
             depth,
-            self.limits.max_total_values,
-            LimitKind::TotalValues,
+            self.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )?;
         let mut length = 0;
         for token in parent
@@ -194,11 +184,11 @@ impl<'d> Builder<'_, 'd> {
             }
         }
         // Encoded pointer bytes conservatively bound all retained token text.
-        self.payload = add(
-            self.payload,
+        self.bytes = add(
+            self.bytes,
             length,
-            self.limits.max_total_payload_bytes,
-            LimitKind::TotalPayloadBytes,
+            self.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )?;
         let mut text = String::new();
         text.try_reserve_exact(length).map_err(allocation)?;

@@ -408,30 +408,14 @@ fn conversion_and_ingress_respect_all_applicable_limits() {
     let e = E::literal(S::Bytes(vec![0, 255]));
     let exact = Limits {
         max_document_bytes: 12,
-        max_text_bytes: 7,
-        max_byte_string_bytes: 2,
         max_depth: 1,
-        max_collection_entries: 2,
-        max_total_values: 3,
-        max_total_payload_bytes: 9,
     };
     let bytes = e.encode(C::Eval, &exact).unwrap();
     assert_eq!(bytes.len(), 12);
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 7] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 11, |l| l.max_document_bytes = 11),
-        (LimitKind::TextBytes, 6, |l| l.max_text_bytes = 6),
-        (LimitKind::ByteStringBytes, 1, |l| {
-            l.max_byte_string_bytes = 1
-        }),
         (LimitKind::Depth, 0, |l| l.max_depth = 0),
-        (LimitKind::CollectionEntries, 1, |l| {
-            l.max_collection_entries = 1
-        }),
-        (LimitKind::TotalValues, 2, |l| l.max_total_values = 2),
-        (LimitKind::TotalPayloadBytes, 8, |l| {
-            l.max_total_payload_bytes = 8
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut limits = exact.clone();
@@ -468,13 +452,14 @@ fn conversion_and_ingress_respect_all_applicable_limits() {
 }
 
 #[test]
-fn normalized_paths_must_fit_the_final_collection_limit() {
+fn normalized_paths_must_fit_the_final_byte_limit() {
     let r = make(K::Ref {
         source: R::Input("x".parse().unwrap()),
         path: vec![P::Index(0), P::Index(1), P::Index(2)],
     });
+    let maximum = r.encode(C::Eval, &Limits::default()).unwrap().len();
     let limits = Limits {
-        max_collection_entries: 3,
+        max_document_bytes: maximum,
         ..Limits::default()
     };
     assert_eq!(
@@ -488,8 +473,8 @@ fn normalized_paths_must_fit_the_final_collection_limit() {
         )
         .unwrap_err(),
         Error::LimitExceeded {
-            limit: LimitKind::CollectionEntries,
-            maximum: 3
+            limit: LimitKind::DocumentBytes,
+            maximum
         }
     );
 }

@@ -149,44 +149,31 @@ fn resource_and_anchor_conflicts_and_malformed_declarations_fail() {
 fn metadata_and_resolution_apply_effective_limits() {
     let l = Limits::default();
     let doc = J::new(b"true", &l).unwrap();
-    // Retrieval key plus base: two records, two copies of eight-byte urn:test.
+    // Two record markers plus two copies of eight-byte urn:test.
     let exact = Limits {
-        max_collection_entries: 2,
-        max_total_values: 2,
-        max_total_payload_bytes: 16,
+        max_document_bytes: 18,
         ..l.clone()
     };
     let r = R::new(&doc, "urn:test", &exact).unwrap();
     let tight = Limits {
-        max_total_payload_bytes: 15,
+        max_document_bytes: 17,
         ..exact.clone()
     };
     assert!(matches!(
         R::new(&doc, "urn:test", &tight),
         Err(E::LimitExceeded {
-            limit: LimitKind::TotalPayloadBytes,
+            limit: LimitKind::DocumentBytes,
             ..
         })
     ));
     let tight = Limits {
-        max_collection_entries: 1,
-        ..exact
-    };
-    assert!(matches!(
-        R::new(&doc, "urn:test", &tight),
-        Err(E::LimitExceeded {
-            limit: LimitKind::CollectionEntries,
-            ..
-        })
-    ));
-    let tight = Limits {
-        max_text_bytes: 7,
+        max_document_bytes: 7,
         ..l
     };
     assert!(matches!(
         r.resolve(&p(""), "#", &tight),
         Err(E::LimitExceeded {
-            limit: LimitKind::TextBytes,
+            limit: LimitKind::DocumentBytes,
             ..
         })
     ));
@@ -280,13 +267,13 @@ fn embedded_bases_use_absolute_root_ids_or_raw_jcs_identity() {
         );
     }
     let tight = Limits {
-        max_text_bytes: 10,
+        max_document_bytes: 10,
         ..l
     };
     assert!(matches!(
         base(&doc, &tight),
         Err(E::LimitExceeded {
-            limit: LimitKind::TextBytes,
+            limit: LimitKind::DocumentBytes,
             ..
         })
     ));

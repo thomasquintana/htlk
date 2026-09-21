@@ -83,7 +83,7 @@ fn native_template_expansion_follows_scalar_rfc_vectors_and_bounds() {
     }
     assert!(expand_uri_template("{x}", &args(&[]), &l).is_err());
     let tight = Limits {
-        max_text_bytes: 8,
+        max_document_bytes: 8,
         ..l
     };
     assert!(expand_uri_template("{x}{x}", &args(&[("x", "abcde")]), &tight).is_err());

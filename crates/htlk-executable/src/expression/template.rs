@@ -155,16 +155,16 @@ impl PromptTemplate {
                         continue;
                     }
                     if let Some(TemplatePart::Text(previous)) = parts.last_mut() {
-                        let maximum = limits.max_text_bytes;
+                        let maximum = limits.max_document_bytes;
                         let len = previous.len().checked_add(s.len()).ok_or(
                             ExpressionError::LimitExceeded {
-                                limit: LimitKind::TextBytes,
+                                limit: LimitKind::DocumentBytes,
                                 maximum,
                             },
                         )?;
                         if len > maximum {
                             return Err(ExpressionError::LimitExceeded {
-                                limit: LimitKind::TextBytes,
+                                limit: LimitKind::DocumentBytes,
                                 maximum,
                             });
                         }

@@ -59,7 +59,6 @@ pub struct NativeRegistry {
     libraries: BTreeMap<Digest, LinkedLibrary>,
     limits: Limits,
     bytes: usize,
-    functions: usize,
     policies: BTreeSet<Digest>,
 }
 impl NativeRegistry {
@@ -73,7 +72,6 @@ impl NativeRegistry {
             libraries: BTreeMap::new(),
             limits: limits.clone(),
             bytes: 0,
-            functions: 0,
             policies: BTreeSet::new(),
         })
     }
@@ -94,10 +92,7 @@ impl NativeRegistry {
                 .bytes
                 .checked_add(32)
                 .ok_or(NativeRegistryError::Limit)?;
-            if bytes > self.limits.max_document_bytes
-                || self.policies.len().saturating_add(self.libraries.len())
-                    >= self.limits.max_collection_entries
-            {
+            if bytes > self.limits.max_document_bytes {
                 return Err(NativeRegistryError::Limit);
             }
             self.policies.insert(policy.digest());
@@ -137,15 +132,7 @@ impl NativeRegistry {
             .bytes
             .checked_add(encoded.len())
             .ok_or(NativeRegistryError::Limit)?;
-        let count = self
-            .functions
-            .checked_add(functions.len())
-            .ok_or(NativeRegistryError::Limit)?;
-        if bytes > self.limits.max_document_bytes
-            || count > self.limits.max_collection_entries
-            || self.libraries.len().saturating_add(self.policies.len())
-                >= self.limits.max_collection_entries
-        {
+        if bytes > self.limits.max_document_bytes {
             return Err(NativeRegistryError::Limit);
         }
         self.libraries.insert(
@@ -156,7 +143,6 @@ impl NativeRegistry {
             },
         );
         self.bytes = bytes;
-        self.functions = count;
         Ok(())
     }
     /// Checks complete library metadata, including unused public signatures.

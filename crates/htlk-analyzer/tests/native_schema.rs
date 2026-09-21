@@ -240,7 +240,7 @@ fn limits_and_invalid_schema_shapes_are_explicit_errors() {
             "https://e.test/root",
             &j(r#""too long""#),
             &Limits {
-                max_text_bytes: 1,
+                max_document_bytes: 1,
                 ..l
             }
         ),
@@ -271,7 +271,7 @@ fn limits_and_invalid_schema_shapes_are_explicit_errors() {
     )
     .unwrap();
     let tight = Limits {
-        max_total_values: 20,
+        max_document_bytes: 512,
         ..Limits::default()
     };
     assert!(
@@ -280,6 +280,6 @@ fn limits_and_invalid_schema_shapes_are_explicit_errors() {
     );
     assert!(matches!(
         N::compile(&c, O::default(), &tight),
-        Err(E::AdmissionLimit)
+        Err(E::CompilationInputLimit)
     ));
 }

@@ -25,7 +25,6 @@ impl JsonPointer {
             LimitKind::DocumentBytes,
         )?;
         let mut tokens = Vec::new();
-        let mut payload = 0;
         if text.is_empty() {
             return Ok(Self { tokens });
         }
@@ -36,12 +35,6 @@ impl JsonPointer {
         for raw in text[1..].split('/') {
             let count = tokens.len() + 1;
             check(count, limits.max_depth, LimitKind::Depth)?;
-            check(
-                count,
-                limits.max_collection_entries,
-                LimitKind::CollectionEntries,
-            )?;
-            check(count, limits.max_total_values, LimitKind::TotalValues)?;
             // Validate and count exact decoded UTF-8 bytes before copying a token.
             let mut pos = 0;
             let mut length = 0;
@@ -58,13 +51,6 @@ impl JsonPointer {
                 }
                 length += 1;
             }
-            check(length, limits.max_text_bytes, LimitKind::TextBytes)?;
-            payload = add(
-                payload,
-                length,
-                limits.max_total_payload_bytes,
-                LimitKind::TotalPayloadBytes,
-            )?;
             let mut token = String::new();
             token.try_reserve_exact(length).map_err(allocation)?;
             let mut chars = raw.chars();
@@ -227,13 +213,6 @@ fn check(n: usize, maximum: usize, limit: LimitKind) -> Result<(), JsonPointerEr
     } else {
         Ok(())
     }
-}
-fn add(a: usize, b: usize, maximum: usize, limit: LimitKind) -> Result<usize, JsonPointerError> {
-    let n = a
-        .checked_add(b)
-        .ok_or(JsonPointerError::LimitExceeded { limit, maximum })?;
-    check(n, maximum, limit)?;
-    Ok(n)
 }
 fn allocation(_: std::collections::TryReserveError) -> JsonPointerError {
     JsonPointerError::AllocationFailed

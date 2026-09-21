@@ -147,39 +147,21 @@ fn derived_index_accounting_can_reject_an_individually_valid_json_document() {
         &l,
     )
     .unwrap();
-    for (tight, kind) in [
-        (
-            Limits {
-                max_collection_entries: 30,
-                ..l.clone()
-            },
-            LimitKind::CollectionEntries,
-        ),
-        (
-            Limits {
-                max_total_values: 200,
-                ..l.clone()
-            },
-            LimitKind::TotalValues,
-        ),
-        (
-            Limits {
-                max_total_payload_bytes: 200,
-                ..l.clone()
-            },
-            LimitKind::TotalPayloadBytes,
-        ),
-    ] {
-        assert!(J::decode(doc.as_bytes(), &tight).is_ok());
-        assert!(
-            matches!(S::new(&doc, &tight), Err(E::LimitExceeded { limit, .. }) if limit == kind)
-        );
-    }
-    // 31 locations, 0+1+...+30 tokens, four encoded bytes per path token.
+    let tight = Limits {
+        max_document_bytes: 2355,
+        ..l.clone()
+    };
+    assert!(J::decode(doc.as_bytes(), &tight).is_ok());
+    assert!(matches!(
+        S::new(&doc, &tight),
+        Err(E::LimitExceeded {
+            limit: LimitKind::DocumentBytes,
+            ..
+        })
+    ));
+    // 31 location markers, 465 token markers, and 1860 encoded pointer bytes.
     let exact = Limits {
-        max_collection_entries: 31,
-        max_total_values: 496,
-        max_total_payload_bytes: 1860,
+        max_document_bytes: 2356,
         ..l
     };
     assert_eq!(S::new(&doc, &exact).unwrap().pointers().len(), 31);

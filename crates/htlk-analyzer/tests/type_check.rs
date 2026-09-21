@@ -552,7 +552,7 @@ fn derived_type_work_is_bounded_and_analysis_is_deterministic() {
     let a = check_expression(&e, C::Eval, &env, None, &l).unwrap();
     assert_eq!(check_expression(&e, C::Eval, &env, None, &l).unwrap(), a);
     let tight = Limits {
-        max_total_payload_bytes: 2000,
+        max_document_bytes: 2000,
         ..l
     };
     assert!(e.to_value(C::Eval, &tight).is_ok());

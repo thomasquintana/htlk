@@ -145,12 +145,7 @@ fn map_order_and_valid_limits_do_not_change_the_digest() {
     let reverse = Value::Map(Map::try_from_entries(entries.into_iter().rev()).unwrap());
     let tight = Limits {
         max_document_bytes: 8,
-        max_text_bytes: 2,
-        max_byte_string_bytes: 0,
-        max_collection_entries: 2,
         max_depth: 1,
-        max_total_values: 5,
-        max_total_payload_bytes: 3,
     };
     let digest = hash_cbor(&forward, &tight).unwrap();
     assert_eq!(
@@ -201,21 +196,11 @@ fn encoding_errors_propagate_unchanged() {
     );
     let limits = Limits {
         max_document_bytes: 11,
-        max_text_bytes: 2,
-        max_byte_string_bytes: 2,
         max_depth: 1,
-        max_collection_entries: 2,
-        max_total_values: 5,
-        max_total_payload_bytes: 6,
     };
-    let changes: [fn(&mut Limits); 8] = [
+    let changes: [fn(&mut Limits); 3] = [
         |l| l.max_document_bytes = 10,
-        |l| l.max_text_bytes = 1,
-        |l| l.max_byte_string_bytes = 1,
         |l| l.max_depth = 0,
-        |l| l.max_collection_entries = 1,
-        |l| l.max_total_values = 4,
-        |l| l.max_total_payload_bytes = 5,
         |l| l.max_depth = 129,
     ];
     for change in changes {

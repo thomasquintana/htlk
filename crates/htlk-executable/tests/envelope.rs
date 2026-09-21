@@ -272,12 +272,7 @@ fn codec_failures_preserve_error_and_offset() {
 fn all_codec_limits_bound_construction_encoding_and_decoding() {
     let limits = Limits {
         max_document_bytes: 137,
-        max_text_bytes: 71,
-        max_byte_string_bytes: 1,
         max_depth: 1,
-        max_collection_entries: 4,
-        max_total_values: 9,
-        max_total_payload_bytes: 127,
     };
     let envelope = ExecutableEnvelope::new(vec![0xf6], &limits).unwrap();
     let bytes = envelope.encode(&limits).unwrap();
@@ -287,22 +282,11 @@ fn all_codec_limits_bound_construction_encoding_and_decoding() {
         envelope
     );
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 7] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 136, |l| {
             l.max_document_bytes = 136
         }),
-        (LimitKind::TextBytes, 70, |l| l.max_text_bytes = 70),
-        (LimitKind::ByteStringBytes, 0, |l| {
-            l.max_byte_string_bytes = 0
-        }),
         (LimitKind::Depth, 0, |l| l.max_depth = 0),
-        (LimitKind::CollectionEntries, 3, |l| {
-            l.max_collection_entries = 3
-        }),
-        (LimitKind::TotalValues, 8, |l| l.max_total_values = 8),
-        (LimitKind::TotalPayloadBytes, 126, |l| {
-            l.max_total_payload_bytes = 126
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut tight = limits.clone();

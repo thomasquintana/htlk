@@ -70,18 +70,8 @@ pub enum ErrorKind {
 pub enum LimitKind {
     /// Complete encoded document size, including headers.
     DocumentBytes,
-    /// Bytes in one text string, including map keys.
-    TextBytes,
-    /// Bytes in one byte string.
-    ByteStringBytes,
     /// Value depth, with the root at zero.
     Depth,
-    /// Elements in one array or pairs in one map.
-    CollectionEntries,
-    /// Aggregate values, including containers and map keys.
-    TotalValues,
-    /// Aggregate text and byte-string payload bytes.
-    TotalPayloadBytes,
 }
 
 impl fmt::Display for Error {

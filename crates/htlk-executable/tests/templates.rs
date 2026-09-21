@@ -177,7 +177,7 @@ fn template_limits_include_normalized_text_and_metadata() {
     ));
     // Each input text fits 10 bytes, but joining the pair would exceed it.
     let limits = Limits {
-        max_text_bytes: 10,
+        max_document_bytes: 10,
         ..Limits::default()
     };
     assert_eq!(
@@ -188,7 +188,7 @@ fn template_limits_include_normalized_text_and_metadata() {
         )
         .unwrap_err(),
         Error::LimitExceeded {
-            limit: LimitKind::TextBytes,
+            limit: LimitKind::DocumentBytes,
             maximum: 10
         }
     );
@@ -213,27 +213,14 @@ fn template_conversion_and_decode_enforce_each_wire_ceiling() {
     .unwrap();
     let exact = Limits {
         max_document_bytes: 63,
-        max_text_bytes: 10,
-        max_byte_string_bytes: 0,
         max_depth: 3,
-        max_collection_entries: 2,
-        max_total_values: 15,
-        max_total_payload_bytes: 48,
     };
     let bytes = t.encode(&exact).unwrap();
     assert_eq!(T::decode(&bytes, &exact).unwrap(), t);
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 6] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 62, |l| l.max_document_bytes = 62),
-        (LimitKind::TextBytes, 9, |l| l.max_text_bytes = 9),
         (LimitKind::Depth, 2, |l| l.max_depth = 2),
-        (LimitKind::CollectionEntries, 1, |l| {
-            l.max_collection_entries = 1
-        }),
-        (LimitKind::TotalValues, 14, |l| l.max_total_values = 14),
-        (LimitKind::TotalPayloadBytes, 47, |l| {
-            l.max_total_payload_bytes = 47
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut l = exact.clone();

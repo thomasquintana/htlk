@@ -67,14 +67,10 @@ impl DocumentAnalysis for CanonicalDocument {
                 .ok_or(Error::MissingRecord("schema URI document"))?;
             for n in [uri.len(), document.as_bytes().len()] {
                 bytes = bytes.checked_add(n).ok_or(Error::LimitExceeded {
-                    limit: LimitKind::TotalPayloadBytes,
-                    maximum: limits.max_total_payload_bytes,
+                    limit: LimitKind::DocumentBytes,
+                    maximum: limits.max_document_bytes,
                 })?;
-                check(
-                    bytes,
-                    limits.max_total_payload_bytes,
-                    LimitKind::TotalPayloadBytes,
-                )?;
+                check(bytes, limits.max_document_bytes, LimitKind::DocumentBytes)?;
             }
         }
         let mut documents = Vec::new();

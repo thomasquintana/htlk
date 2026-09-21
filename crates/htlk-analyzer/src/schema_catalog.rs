@@ -37,16 +37,16 @@ impl SchemaCatalog {
             .map_err(SchemaLocationError::from)?;
         check(
             documents.len(),
-            limits.max_collection_entries,
-            LimitKind::CollectionEntries,
+            limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )?;
-        let mut accounting = Accounting {
-            limits,
-            values: 0,
-            payload: 0,
-        };
+        let mut accounting = Accounting { limits, bytes: 0 };
         for (uri, document) in &documents {
-            check(uri.len(), limits.max_text_bytes, LimitKind::TextBytes)?;
+            check(
+                uri.len(),
+                limits.max_document_bytes,
+                LimitKind::DocumentBytes,
+            )?;
             check(
                 document.as_bytes().len(),
                 limits.max_document_bytes,
@@ -79,11 +79,6 @@ impl SchemaCatalog {
                     // Input order cannot select a different representative:
                     // equivalent resource copies use the first sorted retrieval.
                 } else {
-                    check(
-                        resources.len() + 1,
-                        limits.max_collection_entries,
-                        LimitKind::CollectionEntries,
-                    )?;
                     accounting.record(Some(uri))?;
                     let mut key = String::new();
                     key.try_reserve_exact(uri.len()).map_err(allocation)?;
@@ -172,16 +167,11 @@ impl SchemaCatalog {
             .map_err(SchemaLocationError::from)?;
         check(
             roots.len(),
-            limits.max_collection_entries,
-            LimitKind::CollectionEntries,
+            limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )?;
-        check(roots.len(), limits.max_total_values, LimitKind::TotalValues)?;
         let mut work = ClosureWork {
-            accounting: Accounting {
-                limits,
-                values: 0,
-                payload: 0,
-            },
+            accounting: Accounting { limits, bytes: 0 },
             reached: BTreeSet::new(),
             pending: BTreeSet::new(),
             resources: BTreeMap::new(),
@@ -209,11 +199,6 @@ impl SchemaCatalog {
                     let Value::Text(reference) = value else {
                         return Err(Error::InvalidReference(kind.as_str()));
                     };
-                    check(
-                        pending.len() + 1,
-                        limits.max_collection_entries,
-                        LimitKind::CollectionEntries,
-                    )?;
                     work.accounting.record(None)?;
                     let uri = entry.index.reference_uri(pointer, reference, limits)?;
                     work.accounting.bytes(uri.len())?;
@@ -313,33 +298,17 @@ impl<'a> ClosureWork<'a, '_> {
         let l = self.accounting.limits;
         check(
             entry.retrieval.len(),
-            l.max_text_bytes,
-            LimitKind::TextBytes,
-        )?;
-        check(
-            entry.retrieval.len(),
             l.max_document_bytes,
             LimitKind::DocumentBytes,
-        )?;
-        check(
-            self.reached.len() + 1,
-            l.max_collection_entries,
-            LimitKind::CollectionEntries,
         )?;
         self.accounting.record(Some(&entry.retrieval))?;
         self.accounting.bytes(entry.document.as_bytes().len())?;
         JsonDocument::decode(entry.document.as_bytes(), l).map_err(SchemaLocationError::from)?;
         for (uri, _) in entry.index.resources() {
-            check(uri.len(), l.max_text_bytes, LimitKind::TextBytes)?;
             check(uri.len(), l.max_document_bytes, LimitKind::DocumentBytes)?;
             if let Some(previous) = self.resources.get_mut(uri) {
                 *previous = (*previous).min(i);
             } else {
-                check(
-                    self.resources.len() + 1,
-                    l.max_collection_entries,
-                    LimitKind::CollectionEntries,
-                )?;
                 self.accounting.record(Some(uri))?;
                 self.resources.insert(uri, i);
             }
@@ -452,37 +421,23 @@ impl<'a> ResolvedSchema<'a> {
 
 struct Accounting<'a> {
     limits: &'a Limits,
-    values: usize,
-    payload: usize,
+    bytes: usize,
 }
 impl Accounting<'_> {
     fn record(&mut self, text: Option<&str>) -> Result<(), Error> {
-        self.values = self.values.checked_add(1).ok_or(Error::LimitExceeded {
-            limit: LimitKind::TotalValues,
-            maximum: self.limits.max_total_values,
-        })?;
-        check(
-            self.values,
-            self.limits.max_total_values,
-            LimitKind::TotalValues,
-        )?;
-        if let Some(text) = text {
-            self.bytes(text.len())?;
-        }
-        Ok(())
+        // One byte per record marker, plus any associated text.
+        self.bytes(1)?;
+        self.bytes(text.map_or(0, str::len))
     }
     fn bytes(&mut self, count: usize) -> Result<(), Error> {
-        self.payload = self
-            .payload
-            .checked_add(count)
-            .ok_or(Error::LimitExceeded {
-                limit: LimitKind::TotalPayloadBytes,
-                maximum: self.limits.max_total_payload_bytes,
-            })?;
+        self.bytes = self.bytes.checked_add(count).ok_or(Error::LimitExceeded {
+            limit: LimitKind::DocumentBytes,
+            maximum: self.limits.max_document_bytes,
+        })?;
         check(
-            self.payload,
-            self.limits.max_total_payload_bytes,
-            LimitKind::TotalPayloadBytes,
+            self.bytes,
+            self.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )
     }
 }

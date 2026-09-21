@@ -212,13 +212,14 @@ fn aggregate_limits_and_embedded_json_limits_are_rechecked() {
     ));
     assert!(Doc::decode(&bytes, &small).is_err());
     let mut f = base(&l);
-    let large = JsonDocument::new(format!("\"{}\"", "x".repeat(100)).as_bytes(), &l).unwrap();
+    let large = JsonDocument::new(
+        format!("{}0{}", "[".repeat(20), "]".repeat(20)).as_bytes(),
+        &l,
+    )
+    .unwrap();
     f.documents.insert(large.digest(), large);
     let doc = Doc::new(f, &l).unwrap();
-    let small = Limits {
-        max_text_bytes: 99,
-        ..l
-    };
+    let small = Limits { max_depth: 19, ..l };
     assert!(matches!(doc.encode(&small), Err(Error::Json(_))));
     assert!(matches!(
         Doc::decode(&doc.encode(&Limits::default()).unwrap(), &small),

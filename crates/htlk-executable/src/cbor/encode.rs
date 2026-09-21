@@ -4,8 +4,8 @@ use super::{Error, ErrorKind, LimitKind, Limits, Value};
 /// Encodes exactly one value using the HTLK deterministic CBOR profile.
 ///
 /// Maps use canonical key order, floats use the shortest exact width, and
-/// integers remain distinct from floats. Both the root and every map key count
-/// toward the value budget. No partial output is returned on failure.
+/// integers remain distinct from floats. All headers and map keys count toward
+/// the byte budget. No partial output is returned on failure.
 ///
 /// # Errors
 /// Returns [`ErrorKind::InvalidLimits`] for unsupported configuration,
@@ -43,7 +43,6 @@ impl Encoder<'_> {
             Value::Text(value) => self.string(value.as_bytes(), true),
             Value::Bytes(value) => self.string(value, false),
             Value::Array(values) => {
-                self.accounting.collection(values.len())?;
                 let child_depth = self.child_depth(depth, !values.is_empty())?;
                 self.header(4, values.len() as u64)?;
                 for value in values {
@@ -52,7 +51,6 @@ impl Encoder<'_> {
                 Ok(())
             }
             Value::Map(values) => {
-                self.accounting.collection(values.len())?;
                 let child_depth = self.child_depth(depth, !values.is_empty())?;
                 self.header(5, values.len() as u64)?;
                 for (key, value) in values.iter() {
@@ -80,7 +78,6 @@ impl Encoder<'_> {
     }
 
     fn string(&mut self, bytes: &[u8], text: bool) -> Result<(), Error> {
-        self.accounting.payload(bytes.len(), text)?;
         let (header, len) = header(if text { 3 } else { 2 }, bytes.len() as u64);
         // Account for header plus full payload before allocating either.
         self.append(&[&header[..len], bytes])

@@ -807,7 +807,7 @@ impl Checker<'_> {
             .bytes
             .checked_add(bytes)
             .ok_or(ExpressionTypeError::InferenceLimit)?;
-        if self.bytes > self.limits.max_total_payload_bytes {
+        if self.bytes > self.limits.max_document_bytes {
             return Err(ExpressionTypeError::InferenceLimit);
         }
         self.combined_budget()
@@ -823,7 +823,7 @@ impl Checker<'_> {
             .work
             .checked_add(1)
             .ok_or(ExpressionTypeError::InferenceLimit)?;
-        if self.work > self.limits.max_total_values {
+        if self.work > self.limits.max_document_bytes {
             return Err(ExpressionTypeError::InferenceLimit);
         }
         self.combined_budget()
@@ -893,9 +893,6 @@ impl Checker<'_> {
         } = &kind
         {
             self.account(name.len())?;
-        }
-        if self.checks.len() >= self.limits.max_collection_entries {
-            return Err(ExpressionTypeError::InferenceLimit);
         }
         self.checks.try_reserve(1).map_err(allocation)?;
         self.checks.push(RuntimeTypeCheck {
@@ -988,9 +985,6 @@ impl Checker<'_> {
         let port = self.copy_port(result)?;
         let schema_derived = self.schema_origin_flag(expr, &port, before.0, before.1, depth)?;
         self.account(size_of_val(path))?;
-        if self.nodes.len() >= self.limits.max_collection_entries {
-            return Err(ExpressionTypeError::InferenceLimit);
-        }
         self.nodes.try_reserve(1).map_err(allocation)?;
         self.nodes.push(ExpressionNodeType {
             expression_path: path.to_vec(),
@@ -1327,9 +1321,6 @@ impl Checker<'_> {
                 });
                 let port = self.copy_port(&actual)?;
                 self.account(size_of_val(child.as_slice()))?;
-                if self.nodes.len() >= self.limits.max_collection_entries {
-                    return Err(ExpressionTypeError::InferenceLimit);
-                }
                 self.nodes.try_reserve(1).map_err(allocation)?;
                 self.nodes.push(ExpressionNodeType {
                     expression_path: child,
@@ -1345,9 +1336,6 @@ impl Checker<'_> {
         }
         self.account(size_of_val(path))?;
         self.account(name.as_str().len() + size_of::<ExpressionCallType>())?;
-        if self.calls.len() >= self.limits.max_collection_entries {
-            return Err(ExpressionTypeError::InferenceLimit);
-        }
         let return_constraint = self.copy_port(&returns)?;
         self.calls.try_reserve(1).map_err(allocation)?;
         self.calls.push(ExpressionCallType {
@@ -1461,7 +1449,7 @@ impl Checker<'_> {
                 .work
                 .checked_add(1)
                 .ok_or(ExpressionTypeError::InferenceLimit)?;
-            if self.work > self.limits.max_total_values {
+            if self.work > self.limits.max_document_bytes {
                 return Err(ExpressionTypeError::InferenceLimit);
             }
             current = next;
@@ -1471,7 +1459,7 @@ impl Checker<'_> {
             .bytes
             .checked_add(size)
             .ok_or(ExpressionTypeError::InferenceLimit)?;
-        if self.bytes > self.limits.max_total_payload_bytes {
+        if self.bytes > self.limits.max_document_bytes {
             return Err(ExpressionTypeError::InferenceLimit);
         }
         Ok(current.clone())

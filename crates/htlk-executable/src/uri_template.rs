@@ -14,17 +14,13 @@ pub fn variables<'a>(
     limits: &Limits,
 ) -> Result<BTreeSet<&'a str>, DocumentError> {
     limits.validate()?;
-    for (maximum, limit) in [
-        (limits.max_text_bytes, LimitKind::TextBytes),
-        (limits.max_document_bytes, LimitKind::DocumentBytes),
-        (limits.max_total_payload_bytes, LimitKind::TotalPayloadBytes),
-    ] {
-        if template.len() > maximum {
-            return Err(DocumentError::LimitExceeded { limit, maximum });
-        }
+    if template.len() > limits.max_document_bytes {
+        return Err(DocumentError::LimitExceeded {
+            limit: LimitKind::DocumentBytes,
+            maximum: limits.max_document_bytes,
+        });
     }
     let mut names = BTreeSet::new();
-    let mut mentions = 0usize;
     let mut pos = 0;
     while pos < template.len() {
         let c = template[pos..].chars().next().expect("remaining character");
@@ -55,24 +51,6 @@ pub fn variables<'a>(
                 };
                 if !valid_name(name) {
                     return Err(invalid(offset));
-                }
-                mentions = mentions
-                    .checked_add(1)
-                    .ok_or(DocumentError::LimitExceeded {
-                        limit: LimitKind::TotalValues,
-                        maximum: limits.max_total_values,
-                    })?;
-                if mentions > limits.max_total_values {
-                    return Err(DocumentError::LimitExceeded {
-                        limit: LimitKind::TotalValues,
-                        maximum: limits.max_total_values,
-                    });
-                }
-                if !names.contains(name) && names.len() >= limits.max_collection_entries {
-                    return Err(DocumentError::LimitExceeded {
-                        limit: LimitKind::CollectionEntries,
-                        maximum: limits.max_collection_entries,
-                    });
                 }
                 names.insert(name);
                 offset += spec.len() + 1;
@@ -203,24 +181,17 @@ mod tests {
         }
     }
     #[test]
-    fn variable_discovery_has_independent_logical_bounds() {
+    fn variable_discovery_is_bounded_by_template_bytes() {
         let l = Limits {
-            max_collection_entries: 1,
-            max_total_values: 2,
+            max_document_bytes: 6,
             ..Limits::default()
         };
         assert!(variables("{x}{x}", &l).is_ok());
-        assert!(matches!(
-            variables("{x}{y}", &l),
-            Err(DocumentError::LimitExceeded {
-                limit: LimitKind::CollectionEntries,
-                ..
-            })
-        ));
+        assert_eq!(variables("{x}{y}", &l).unwrap().len(), 2);
         assert!(matches!(
             variables("{x}{x}{x}", &l),
             Err(DocumentError::LimitExceeded {
-                limit: LimitKind::TotalValues,
+                limit: LimitKind::DocumentBytes,
                 ..
             })
         ));

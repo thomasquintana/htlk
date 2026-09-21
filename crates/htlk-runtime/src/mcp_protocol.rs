@@ -71,7 +71,7 @@ fn base64_data(data: &str, limits: &Limits) -> Result<(), McpValidationError> {
         total = total
             .checked_add(n)
             .ok_or(McpValidationError::BinaryLimit)?;
-        if total > limits.max_byte_string_bytes {
+        if total > limits.max_document_bytes {
             return Err(McpValidationError::BinaryLimit);
         }
     }

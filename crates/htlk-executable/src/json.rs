@@ -172,43 +172,13 @@ fn add(a: usize, b: usize, max: usize, limit: LimitKind) -> Result<usize, JsonEr
 }
 struct Accounting<'a> {
     limits: &'a Limits,
-    values: usize,
-    payload: usize,
 }
 impl<'a> Accounting<'a> {
     fn new(limits: &'a Limits) -> Self {
-        Self {
-            limits,
-            values: 0,
-            payload: 0,
-        }
+        Self { limits }
     }
     fn enter(&mut self, depth: usize) -> Result<(), JsonError> {
-        check(depth, self.limits.max_depth, LimitKind::Depth)?;
-        self.values = add(
-            self.values,
-            1,
-            self.limits.max_total_values,
-            LimitKind::TotalValues,
-        )?;
-        Ok(())
-    }
-    fn text(&mut self, len: usize) -> Result<(), JsonError> {
-        check(len, self.limits.max_text_bytes, LimitKind::TextBytes)?;
-        self.payload = add(
-            self.payload,
-            len,
-            self.limits.max_total_payload_bytes,
-            LimitKind::TotalPayloadBytes,
-        )?;
-        Ok(())
-    }
-    fn item(&self, count: usize) -> Result<(), JsonError> {
-        check(
-            count,
-            self.limits.max_collection_entries,
-            LimitKind::CollectionEntries,
-        )
+        check(depth, self.limits.max_depth, LimitKind::Depth)
     }
 }
 
@@ -278,7 +248,6 @@ impl Parser<'_> {
             return Ok(Value::Array(values));
         }
         loop {
-            self.budget.item(values.len() + 1)?;
             let value = self.value(depth + 1)?;
             values.try_reserve(1).map_err(allocation)?;
             values.push(value);
@@ -301,7 +270,6 @@ impl Parser<'_> {
             return Ok(Value::Map(Map::new()));
         }
         loop {
-            self.budget.item(fields.len() + 1)?;
             self.budget.enter(depth + 1)?;
             self.space();
             let start = self.pos;
@@ -379,11 +347,10 @@ impl Parser<'_> {
             len = add(
                 len,
                 count,
-                self.budget.limits.max_text_bytes,
-                LimitKind::TextBytes,
+                self.budget.limits.max_document_bytes,
+                LimitKind::DocumentBytes,
             )?;
         }
-        self.budget.text(len)?;
         serde_json::from_slice(&self.bytes[start..self.pos])
             .map_err(|_| JsonError::Syntax { offset: start })
     }
@@ -581,10 +548,7 @@ impl Output {
             Value::Null => self.append(b"null"),
             Value::Bool(true) => self.append(b"true"),
             Value::Bool(false) => self.append(b"false"),
-            Value::Text(s) => {
-                budget.text(s.len())?;
-                self.string(s)
-            }
+            Value::Text(s) => self.string(s),
             Value::Bytes(_) => Err(JsonError::UnsupportedValue),
             Value::Integer(n) => {
                 if n.unsigned_abs() > SAFE {
@@ -607,7 +571,6 @@ impl Output {
         budget: &mut Accounting<'_>,
         depth: usize,
     ) -> Result<(), JsonError> {
-        budget.item(values.len())?;
         self.append(b"[")?;
         for (i, value) in values.iter().enumerate() {
             if i != 0 {
@@ -624,7 +587,14 @@ impl Output {
         budget: &mut Accounting<'_>,
         depth: usize,
     ) -> Result<(), JsonError> {
-        budget.item(values.len())?;
+        // Even the smallest JSON member needs bytes. Preflight before allocating
+        // the sorting index; exact punctuation, escaping and values charge below.
+        add(
+            self.bytes.len(),
+            values.len(),
+            self.maximum,
+            LimitKind::DocumentBytes,
+        )?;
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(values.len())
@@ -637,7 +607,6 @@ impl Output {
                 self.append(b",")?;
             }
             budget.enter(depth + 1)?;
-            budget.text(key.len())?;
             self.string(key)?;
             self.append(b":")?;
             self.value(value, budget, depth + 1)?;

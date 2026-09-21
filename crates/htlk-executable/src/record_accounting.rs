@@ -24,11 +24,11 @@ impl std::fmt::Display for EncodingLimitError {
 }
 impl std::error::Error for EncodingLimitError {}
 
-/// Incremental pre-allocation accounting for composite canonical records.
+/// Incremental encoded-byte and depth checks for composite canonical records.
+/// Callers supply the complete shape and actual depth of each item. After an
+/// error, abandon this accounting operation; charges are not rolled back.
 pub struct RecordAccounting<'a> {
     limits: &'a Limits,
-    values: usize,
-    payload: usize,
     bytes: usize,
 }
 
@@ -73,22 +73,11 @@ impl<'a> RecordAccounting<'a> {
     /// Returns unsupported limit configuration.
     pub fn new(limits: &'a Limits) -> Result<Self, htlk_cbor::Error> {
         limits.validate()?;
-        Ok(Self {
-            limits,
-            values: 0,
-            payload: 0,
-            bytes: 0,
-        })
+        Ok(Self { limits, bytes: 0 })
     }
 
     fn enter(&mut self, depth: usize) -> Result<(), EncodingLimitError> {
         check(depth, self.limits.max_depth, LimitKind::Depth)?;
-        self.values = add(
-            self.values,
-            1,
-            self.limits.max_total_values,
-            LimitKind::TotalValues,
-        )?;
         Ok(())
     }
 
@@ -102,27 +91,23 @@ impl<'a> RecordAccounting<'a> {
         Ok(())
     }
 
-    /// Accounts for a container header and checks its entry count.
+    /// Accounts for a container header before its children and preflights one byte per entry.
+    /// Children must still be charged separately at their actual encoded sizes.
     pub fn collection(&mut self, len: usize, depth: usize) -> Result<(), EncodingLimitError> {
         self.enter(depth)?;
-        check(
+        self.bytes(header_size(len as u64))?;
+        add(
+            self.bytes,
             len,
-            self.limits.max_collection_entries,
-            LimitKind::CollectionEntries,
+            self.limits.max_document_bytes,
+            LimitKind::DocumentBytes,
         )?;
-        self.bytes(header_size(len as u64))
+        Ok(())
     }
 
     /// Accounts for an exact UTF-8 string, including its canonical header.
     pub fn text(&mut self, text: &str, depth: usize) -> Result<(), EncodingLimitError> {
         self.enter(depth)?;
-        check(text.len(), self.limits.max_text_bytes, LimitKind::TextBytes)?;
-        self.payload = add(
-            self.payload,
-            text.len(),
-            self.limits.max_total_payload_bytes,
-            LimitKind::TotalPayloadBytes,
-        )?;
         self.bytes(header_size(text.len() as u64))?;
         self.bytes(text.len())
     }
@@ -142,17 +127,6 @@ impl<'a> RecordAccounting<'a> {
         depth: usize,
     ) -> Result<(), EncodingLimitError> {
         self.enter(depth)?;
-        check(
-            value.len(),
-            self.limits.max_byte_string_bytes,
-            LimitKind::ByteStringBytes,
-        )?;
-        self.payload = add(
-            self.payload,
-            value.len(),
-            self.limits.max_total_payload_bytes,
-            LimitKind::TotalPayloadBytes,
-        )?;
         self.bytes(header_size(value.len() as u64))?;
         self.bytes(value.len())
     }
@@ -229,7 +203,7 @@ mod tests {
             })
         );
         assert_eq!(
-            add(usize::MAX - 1, 1, usize::MAX, LimitKind::TotalValues).unwrap(),
+            add(usize::MAX - 1, 1, usize::MAX, LimitKind::DocumentBytes).unwrap(),
             usize::MAX
         );
     }
@@ -265,8 +239,6 @@ mod tests {
                     .unwrap()
                     .len()
             );
-            assert_eq!(accounting.values, 1);
-            assert_eq!(accounting.payload, 0);
         }
     }
 }

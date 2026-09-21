@@ -117,7 +117,6 @@ pub struct ScopeGraphPlan {
     environments: BTreeMap<ExpressionSite, ExpressionTypeEnvironment>,
     bindings: Vec<BindingPlan>,
     boundaries: Vec<EdgeBoundaryPlan>,
-    work: usize,
     bytes: usize,
 }
 impl ScopeGraphPlan {
@@ -228,7 +227,6 @@ fn expression_error(e: impl Into<crate::ExpressionTypeError>) -> ScopeVerificati
     error(ScopeVerificationErrorKind::Expression(Box::new(e.into())))
 }
 struct Budget<'a> {
-    work: usize,
     bytes: usize,
     limits: &'a Limits,
 }
@@ -243,15 +241,13 @@ impl Budget<'_> {
         Ok(port.clone())
     }
     fn charge(&mut self, bytes: usize) -> Result<(), ScopeVerificationError> {
-        self.work = self
-            .work
-            .checked_add(1)
-            .ok_or_else(|| error(ScopeVerificationErrorKind::Limit))?;
+        // Charge one byte per derived entry in addition to its associated data.
         self.bytes = self
             .bytes
             .checked_add(bytes)
+            .and_then(|n| n.checked_add(1))
             .ok_or_else(|| error(ScopeVerificationErrorKind::Limit))?;
-        if self.work > self.limits.max_total_values || self.bytes > self.limits.max_document_bytes {
+        if self.bytes > self.limits.max_document_bytes {
             return Err(error(ScopeVerificationErrorKind::Limit));
         }
         Ok(())
@@ -477,11 +473,7 @@ pub fn verify_scope_graph(
         libraries,
         templates,
         schemas,
-        budget: Budget {
-            work: 0,
-            bytes: 0,
-            limits,
-        },
+        budget: Budget { bytes: 0, limits },
         expressions: BTreeMap::new(),
         environments: BTreeMap::new(),
         dependencies: BTreeSet::new(),
@@ -766,7 +758,6 @@ pub fn verify_scope_graph(
         environments: checker.environments,
         bindings,
         boundaries,
-        work: checker.budget.work,
         bytes: checker.budget.bytes,
     })
 }
@@ -879,11 +870,7 @@ pub(crate) fn verify_linked_graphs(
             }
         }
     }
-    let mut budget = Budget {
-        work: 0,
-        bytes: 0,
-        limits,
-    };
+    let mut budget = Budget { bytes: 0, limits };
     let mut cache = BTreeMap::new();
     let mut plans = BTreeMap::new();
     for (site, scope, until) in uses {
@@ -930,10 +917,6 @@ pub(crate) fn verify_linked_graphs(
                 limits,
             )
             .map_err(wrap)?;
-            budget.work = budget
-                .work
-                .checked_add(plan.work)
-                .ok_or_else(|| wrap(error(ScopeVerificationErrorKind::Limit)))?;
             budget.charge(plan.bytes).map_err(wrap)?;
             let plan = std::sync::Arc::new(plan);
             cache.insert(key, std::sync::Arc::clone(&plan));

@@ -415,28 +415,15 @@ fn conversion_and_ingress_honor_wire_limits() {
     let ty = make(K::Enum(vec!["aa".into(), "z".into()]));
     let limits = Limits {
         max_document_bytes: 12,
-        max_text_bytes: 4,
-        max_byte_string_bytes: 0,
         max_depth: 2,
-        max_collection_entries: 2,
-        max_total_values: 5,
-        max_total_payload_bytes: 7,
     };
     let bytes = ty.encode(C::Value, &limits).unwrap();
     assert_eq!(bytes, b"\x82\x64enum\x82\x62aa\x61z");
     assert_eq!(T::decode(&bytes, C::Value, &limits).unwrap(), ty);
     type Case = (LimitKind, usize, fn(&mut Limits));
-    let cases: [Case; 6] = [
+    let cases: [Case; 2] = [
         (LimitKind::DocumentBytes, 11, |l| l.max_document_bytes = 11),
-        (LimitKind::TextBytes, 3, |l| l.max_text_bytes = 3),
         (LimitKind::Depth, 1, |l| l.max_depth = 1),
-        (LimitKind::CollectionEntries, 1, |l| {
-            l.max_collection_entries = 1
-        }),
-        (LimitKind::TotalValues, 4, |l| l.max_total_values = 4),
-        (LimitKind::TotalPayloadBytes, 6, |l| {
-            l.max_total_payload_bytes = 6
-        }),
     ];
     for (limit, maximum, adjust) in cases {
         let mut tight = limits.clone();
@@ -457,27 +444,10 @@ fn conversion_and_ingress_honor_wire_limits() {
             &htlk_cbor::ErrorKind::LimitExceeded { limit, maximum }
         );
     }
-    // A type named bytes is text metadata, not a byte-string payload.
-    assert!(
-        primitive(P::Bytes)
-            .encode(
-                C::Value,
-                &Limits {
-                    max_byte_string_bytes: 0,
-                    ..Limits::default()
-                }
-            )
-            .is_ok()
-    );
     let port = Port::new(primitive(P::String), false);
     let tight = Limits {
         max_document_bytes: 23,
-        max_text_bytes: 8,
-        max_byte_string_bytes: 0,
         max_depth: 1,
-        max_collection_entries: 2,
-        max_total_values: 5,
-        max_total_payload_bytes: 18,
     };
     let bytes = port.encode(C::Value, &tight).unwrap();
     assert_eq!(bytes.len(), 23);
@@ -513,18 +483,24 @@ fn conversion_and_ingress_honor_wire_limits() {
 }
 
 #[test]
-fn flattened_union_must_fit_its_final_collection_limit() {
+fn flattened_union_must_fit_its_final_byte_limit() {
     let a = make(K::Union(vec![primitive(P::String), primitive(P::Boolean)]));
     let b = make(K::Union(vec![primitive(P::Null), primitive(P::Integer)]));
+    let flattened = make(K::Union(vec![a.clone(), b.clone()]));
+    let maximum = flattened
+        .encode(C::Value, &Limits::default())
+        .unwrap()
+        .len()
+        - 1;
     let tight = Limits {
-        max_collection_entries: 2,
+        max_document_bytes: maximum,
         ..Limits::default()
     };
     assert!(matches!(
         T::new(K::Union(vec![a, b]), C::Value, &tight),
         Err(TypeError::LimitExceeded {
-            limit: LimitKind::CollectionEntries,
-            maximum: 2
+            limit: LimitKind::DocumentBytes,
+            ..
         })
     ));
 }

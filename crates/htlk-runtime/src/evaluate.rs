@@ -210,6 +210,9 @@ impl EvaluationFrame {
     ) -> Result<(), EvaluationError> {
         if let EvaluationOutcome::Failed { code, message } = &outcome {
             let mut accounting = crate::record_accounting::RecordAccounting::new(limits)?;
+            accounting
+                .collection(2, 0)
+                .map_err(|_| EvaluationError::Limit("outcome metadata"))?;
             for (text, depth) in [
                 ("code", 1),
                 (code.as_str(), 1),
@@ -220,9 +223,6 @@ impl EvaluationFrame {
                     .text(text, depth)
                     .map_err(|_| EvaluationError::Limit("outcome metadata"))?;
             }
-            accounting
-                .collection(2, 0)
-                .map_err(|_| EvaluationError::Limit("outcome metadata"))?;
         }
         self.outcomes.insert(node, outcome);
         Ok(())
