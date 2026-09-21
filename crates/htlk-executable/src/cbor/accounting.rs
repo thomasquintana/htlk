@@ -1,20 +1,4 @@
-use super::{Error, ErrorKind, LimitKind, Limits};
-
-/// Per-operation usage checked against borrowed, reusable limits.
-/// Callers perform checks before allocation/descent.
-pub(crate) struct Accounting<'a> {
-    pub(crate) limits: &'a Limits,
-}
-
-impl<'a> Accounting<'a> {
-    pub(crate) fn new(limits: &'a Limits) -> Self {
-        Self { limits }
-    }
-
-    pub(crate) fn enter(&mut self, depth: usize) -> Result<(), Error> {
-        check(depth, self.limits.max_depth, LimitKind::Depth)
-    }
-}
+use super::{Error, ErrorKind, LimitKind};
 
 pub(crate) fn check(value: usize, maximum: usize, limit: LimitKind) -> Result<(), Error> {
     if value > maximum {

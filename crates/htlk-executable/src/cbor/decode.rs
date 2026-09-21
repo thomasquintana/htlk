@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use cbor2::core::{Decoder as HeaderDecoder, Header};
 
-use super::accounting::{Accounting, add, check};
+use super::accounting::{add, check};
 use super::{Error, ErrorKind, FiniteFloat, LimitKind, Limits, Map, Value};
 
 /// Decodes exactly one canonical HTLK CBOR value under fresh resource limits.
@@ -35,7 +35,7 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Value, Error> {
     let mut decoder = Decoder {
         input: bytes,
         position: 0,
-        accounting: Accounting::new(limits),
+        limits,
     };
     let value = decoder.value(0)?;
     if decoder.position != bytes.len() {
@@ -47,7 +47,7 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Value, Error> {
 struct Decoder<'a> {
     input: &'a [u8],
     position: usize,
-    accounting: Accounting<'a>,
+    limits: &'a Limits,
 }
 
 impl<'a> Decoder<'a> {
@@ -57,7 +57,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn value_inner(&mut self, depth: usize) -> Result<Value, Error> {
-        self.accounting.enter(depth)?;
+        check(depth, self.limits.max_depth, LimitKind::Depth)?;
         let initial = self.take(1)?[0];
         let major = initial >> 5;
         let additional = initial & 31;
@@ -129,12 +129,12 @@ impl<'a> Decoder<'a> {
         let len = length(
             argument,
             LimitKind::DocumentBytes,
-            self.accounting.limits.max_document_bytes,
+            self.limits.max_document_bytes,
         )?;
         add(
             self.position,
             len,
-            self.accounting.limits.max_document_bytes,
+            self.limits.max_document_bytes,
             LimitKind::DocumentBytes,
         )?;
         self.take(len)
@@ -152,7 +152,7 @@ impl<'a> Decoder<'a> {
         let len = length(
             argument,
             LimitKind::DocumentBytes,
-            self.accounting.limits.max_document_bytes,
+            self.limits.max_document_bytes,
         )?;
         // Every child needs at least one byte; a map pair needs at least two.
         // Check the minimum required bytes before allocation or descent.
@@ -160,7 +160,7 @@ impl<'a> Decoder<'a> {
             add(
                 len,
                 len,
-                self.accounting.limits.max_document_bytes,
+                self.limits.max_document_bytes,
                 LimitKind::DocumentBytes,
             )?
         } else {
@@ -169,7 +169,7 @@ impl<'a> Decoder<'a> {
         add(
             self.position,
             children,
-            self.accounting.limits.max_document_bytes,
+            self.limits.max_document_bytes,
             LimitKind::DocumentBytes,
         )?;
         if children > self.input.len() - self.position {
@@ -178,7 +178,7 @@ impl<'a> Decoder<'a> {
         let child_depth = if len == 0 {
             depth
         } else {
-            add(depth, 1, self.accounting.limits.max_depth, LimitKind::Depth)?
+            add(depth, 1, self.limits.max_depth, LimitKind::Depth)?
         };
         Ok((len, child_depth))
     }
@@ -223,7 +223,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn key(&mut self, depth: usize) -> Result<&'a str, Error> {
-        self.accounting.enter(depth)?;
+        check(depth, self.limits.max_depth, LimitKind::Depth)?;
         let initial = self.take(1)?[0];
         if initial >> 5 != 3 {
             return Err(Error::new(ErrorKind::UnsupportedType));

@@ -1,4 +1,4 @@
-use super::accounting::{Accounting, add};
+use super::accounting::{add, check};
 use super::{Error, ErrorKind, LimitKind, Limits, Value};
 
 /// Encodes exactly one value using the HTLK deterministic CBOR profile.
@@ -22,7 +22,7 @@ pub fn encode(value: &Value, limits: &Limits) -> Result<Vec<u8>, Error> {
     limits.validate()?;
     let mut encoder = Encoder {
         output: Vec::new(),
-        accounting: Accounting::new(limits),
+        limits,
     };
     encoder.value(value, 0)?;
     Ok(encoder.output)
@@ -30,12 +30,12 @@ pub fn encode(value: &Value, limits: &Limits) -> Result<Vec<u8>, Error> {
 
 struct Encoder<'a> {
     output: Vec<u8>,
-    accounting: Accounting<'a>,
+    limits: &'a Limits,
 }
 
 impl Encoder<'_> {
     fn value(&mut self, value: &Value, depth: usize) -> Result<(), Error> {
-        self.accounting.enter(depth)?;
+        check(depth, self.limits.max_depth, LimitKind::Depth)?;
         match value {
             Value::Null | Value::Bool(_) | Value::Integer(_) | Value::Float(_) => {
                 self.scalar(value)
@@ -54,7 +54,7 @@ impl Encoder<'_> {
                 let child_depth = self.child_depth(depth, !values.is_empty())?;
                 self.header(5, values.len() as u64)?;
                 for (key, value) in values.iter() {
-                    self.accounting.enter(child_depth)?;
+                    check(child_depth, self.limits.max_depth, LimitKind::Depth)?;
                     self.string(key.as_bytes(), true)?;
                     self.value(value, child_depth)?;
                 }
@@ -66,7 +66,7 @@ impl Encoder<'_> {
     fn child_depth(&self, depth: usize, has_children: bool) -> Result<usize, Error> {
         if has_children {
             // Checked before the next recursive call, not after entering it.
-            add(depth, 1, self.accounting.limits.max_depth, LimitKind::Depth)
+            add(depth, 1, self.limits.max_depth, LimitKind::Depth)
         } else {
             Ok(depth)
         }
@@ -93,7 +93,7 @@ impl Encoder<'_> {
     }
 
     fn append(&mut self, parts: &[&[u8]]) -> Result<(), Error> {
-        let maximum = self.accounting.limits.max_document_bytes;
+        let maximum = self.limits.max_document_bytes;
         let mut needed = self.output.len();
         for part in parts {
             needed = add(needed, part.len(), maximum, LimitKind::DocumentBytes)?;
@@ -153,7 +153,7 @@ mod tests {
         };
         let mut encoder = Encoder {
             output: Vec::new(),
-            accounting: Accounting::new(&limits),
+            limits: &limits,
         };
         assert!(encoder.string(b"abc", true).is_err());
         assert_eq!(encoder.output.capacity(), 0);
