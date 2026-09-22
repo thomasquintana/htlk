@@ -3,11 +3,6 @@ use std::fmt;
 use crate::cbor as htlk_cbor;
 use htlk_cbor::{Limits, Map, Value};
 
-impl serde::Serialize for ExecutableEnvelope {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serde::Serialize::serialize(&self.record, serializer)
-    }
-}
 use sha2::{Digest as _, Sha256};
 
 use crate::digest::{Digest, ParseDigestError};

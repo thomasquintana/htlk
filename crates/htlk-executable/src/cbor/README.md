@@ -5,12 +5,10 @@ and runtime. Provides validated values, bounded operations, reusable limits,
 and structured errors with input offsets.
 
 The adapter uses pinned `cbor2` primitives for integer/header and float decoding
-and its Serde serializer for preferred scalar/header encoding. HTLK owns the
-restricted profile, canonical-ingress checks, traversal and resource accounting.
-`Value`, `Map`, and `FiniteFloat` implement `serde::Serialize` with their value
-shapes: byte strings use `serialize_bytes`, floats remain floats, and maps emit
-their canonical entry order. Generic Serde serializers do not apply HTLK codec
-limits; use `encode` and `decode` at bounded canonical wire boundaries.
+and preferred scalar/header encoding into fixed nine-byte scratch buffers.
+HTLK owns the restricted profile, canonical-ingress checks, traversal and resource
+accounting. `Value`, `Map`, and `FiniteFloat` expose no generic Serde serialization;
+use `encode` and `decode` at bounded canonical wire boundaries.
 
 ## HTLK 0.1 encoding profile
 

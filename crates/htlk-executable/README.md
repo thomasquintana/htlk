@@ -33,7 +33,7 @@ actual ordinary/loop-body and expression use context.
 ## Canonical CBOR
 
 The public `cbor` module replaces the standalone codec package. Its adapter uses
-pinned **cbor2 1.1.5** primitives and Serde while retaining HTLK's restricted
+pinned **cbor2 1.1.5** header/scalar primitives while retaining HTLK's restricted
 deterministic profile, resource accounting, fallible allocation and strict ingress.
 It rejects nonminimal encodings, negative zero, nonfinite floats, duplicate or
 out-of-order keys, nontext keys, tags, indefinite lengths and trailing data.
@@ -57,21 +57,22 @@ including all headers and map keys. The default byte ceiling is 16 MiB; the
 default depth is 64 and implementation ceiling 128;
 controlled-stack tests cover construction, encoding, decoding and cleanup.
 
-## Serde
+## Explicit canonical conversion
 
-Canonical records implement `serde::Serialize` through explicit wire mappings,
-rather than Rust's default enum tags. Byte strings remain bytes, expressions keep
-their canonical tagged arrays, and record maps retain canonical key order.
-Record serialization prepares a wire view under default codec limits. For custom
-ceilings, call `to_value` with those limits and serialize the resulting `cbor::Value`.
-Generic serializers do not themselves establish canonical JSON or CBOR validity.
-Use the bounded `encode`/`decode` and `JsonDocument` APIs at canonical boundaries.
+Public model types do not implement `serde::Serialize`. Use bounded `to_value`
+wire views, `encode`/`decode`, and `JsonDocument` at canonical boundaries, with
+explicit limits and contexts where required. Byte strings remain bytes,
+expressions keep their canonical tagged arrays, and maps retain canonical order.
+Internal JSON string processing still uses `serde_json`; Serde remains a backend
+implementation detail rather than a public model capability.
 
 ```rust
-use htlk_executable::{Expression, ScalarLiteral, ExpressionContext, cbor::Limits};
+use htlk_executable::{Expression, ScalarLiteral, ExpressionContext, JsonDocument, cbor::Limits};
 
 let expression = Expression::literal(ScalarLiteral::Integer(42));
-assert_eq!(serde_json::to_string(&expression)?, r#"["literal",42]"#);
+let value = expression.to_value(ExpressionContext::Eval, &Limits::default())?;
+let json = JsonDocument::from_value(&value, &Limits::default())?;
+assert_eq!(json.as_bytes(), br#"["literal",42]"#);
 let bytes = expression.encode(ExpressionContext::Eval, &Limits::default())?;
 assert_eq!(Expression::decode(&bytes, ExpressionContext::Eval, &Limits::default())?, expression);
 # Ok::<(), Box<dyn std::error::Error>>(())

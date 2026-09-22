@@ -2,8 +2,8 @@
 
 This reference covers three layers of the shared Draft 0.1 executable APIs:
 
-- `htlk-executable` owns canonical records, bounded construction, Serde wire
-  serialization, `cbor`, canonical JSON, digests and envelopes.
+- `htlk-executable` owns canonical records, bounded construction, explicit wire
+  conversions, `cbor`, canonical JSON, digests and envelopes.
 - `htlk-analyzer` owns semantic linkage, expression/scope/document analysis,
   structured diagnostics, inferred signatures, structural bounds and the offline
   schema backend. It depends on the model, not the compiler or runtime.
@@ -28,9 +28,15 @@ records. `CanonicalDocument` checks representation and record identities. The
 analyzer's `LinkedDocument` adds focused semantic linkage and structural checks;
 `analyze_document` produces complete immutable semantic results and obligations.
 
-The model's `cbor` adapter uses pinned cbor2 primitives and Serde while retaining
+The model's `cbor` adapter uses pinned cbor2 header/scalar primitives while retaining
 HTLK's strict profile/accounting. RustCrypto's `sha2` supplies hashing. Source-based
 native identities compose contributions from each owning published package.
+
+Public executable model types do not implement `serde::Serialize`. Use their
+bounded `to_value` and `encode`/`decode` APIs, supplying limits and contexts where
+required. Use `JsonDocument::from_value` for an explicit canonical JSON conversion;
+that boundary applies JSON-specific numeric normalization and rejects native bytes.
+Internal JSON string processing retains `serde_json` and its Serde implementation.
 
 ## Verify a complete executable
 

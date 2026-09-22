@@ -16,7 +16,6 @@ mod metadata;
 mod options;
 mod policy;
 pub mod record_accounting;
-mod serialize;
 mod types;
 mod uri_template;
 

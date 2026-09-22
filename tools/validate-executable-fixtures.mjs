@@ -116,11 +116,11 @@ const model = implementation('htlk.model-implementation/0.1\n', [
   ...sources('htlk-executable', [
     'implementation.rs', 'lib.rs', 'document.rs', 'envelope.rs', 'digest.rs',
     'identifier.rs', 'json.rs', 'json_pointer.rs', 'metadata.rs', 'options.rs', 'policy.rs',
-    'record_accounting.rs', 'uri_template.rs', 'serialize.rs',
+    'record_accounting.rs', 'uri_template.rs',
     'expression/mod.rs', 'expression/wire.rs', 'expression/template.rs',
     'graph/mod.rs', 'graph/wire.rs', 'types/mod.rs', 'types/wire.rs',
     'cbor/mod.rs', 'cbor/accounting.rs', 'cbor/decode.rs', 'cbor/encode.rs',
-    'cbor/error.rs', 'cbor/limits.rs', 'cbor/value.rs', 'cbor/serde.rs',
+    'cbor/error.rs', 'cbor/limits.rs', 'cbor/value.rs',
   ]),
   Buffer.from('cbor2=1.1.5;half=2.7.1'),
 ]);

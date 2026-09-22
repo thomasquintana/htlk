@@ -12,7 +12,7 @@ harnesses. The root crate is a facade over two focused libraries:
 - [`htlk-runtime`](https://crates.io/crates/htlk-runtime) provides foundations for native Rust graph execution with actors, LLMs, SQLite, and MCP servers.
 
 Both components share [`htlk-executable`](crates/htlk-executable/README.md) for
-canonical Draft 0.1 records, bounded construction, Serde wire mappings, the public
+canonical Draft 0.1 records, bounded construction, explicit wire conversions, the public
 `cbor` adapter, canonical JSON, digests and envelopes. They also share
 [`htlk-analyzer`](crates/htlk-analyzer/README.md) for semantic linkage, typing,
 graph verification, offline schema preparation and immutable document-bound results.

@@ -17,6 +17,26 @@ fn float(value: f64) -> Value {
 }
 
 #[test]
+fn mixed_values_preserve_scalar_types_bytes_and_canonical_map_order() {
+    let value = Value::Array(vec![
+        Value::Integer(1),
+        float(1.0),
+        Value::Bytes(vec![0, 255]),
+        Value::Map(
+            Map::try_from_entries([("aa".into(), Value::Null), ("z".into(), Value::Bool(true))])
+                .unwrap(),
+        ),
+    ]);
+    assert_eq!(
+        encoded(value),
+        [
+            0x84, 0x01, 0xf9, 0x3c, 0x00, 0x42, 0x00, 0xff, 0xa2, 0x61, b'z', 0xf5, 0x62, b'a',
+            b'a', 0xf6,
+        ]
+    );
+}
+
+#[test]
 fn scalar_vectors() {
     // Compatible finite/scalar examples from RFC 8949 Appendix A, plus i64 extrema.
     let vectors: Vec<(Value, &[u8])> = vec![

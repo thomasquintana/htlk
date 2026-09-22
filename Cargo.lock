@@ -867,7 +867,6 @@ dependencies = [
  "cbor2",
  "half",
  "ryu-js",
- "serde",
  "serde_json",
  "sha2",
  "url",

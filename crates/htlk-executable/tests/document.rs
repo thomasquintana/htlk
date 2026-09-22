@@ -286,19 +286,19 @@ fn document_on_controlled_stacks() {
 }
 
 #[test]
-fn serde_preserves_complete_document_and_envelope_wire_shapes() {
+fn explicit_document_wire_view_and_envelope_round_trip() {
     let limits = Limits::default();
     let document = Doc::new(base(&limits), &limits).unwrap();
     let expected = document.encode(&limits).unwrap();
-    let mut buffer = vec![0u8; expected.len()];
-    assert_eq!(cbor2::to_slice(&document, &mut buffer).unwrap(), expected);
+    assert_eq!(
+        cbor::encode(&document.to_value(&limits).unwrap(), &limits).unwrap(),
+        expected
+    );
     let envelope = document.envelope(&limits).unwrap();
     let expected = envelope.encode(&limits).unwrap();
-    let mut buffer = vec![0u8; expected.len()];
-    assert_eq!(cbor2::to_slice(&envelope, &mut buffer).unwrap(), expected);
     assert_eq!(
         Doc::from_envelope(
-            &ExecutableEnvelope::decode(&buffer, &limits).unwrap(),
+            &ExecutableEnvelope::decode(&expected, &limits).unwrap(),
             &limits
         )
         .unwrap(),

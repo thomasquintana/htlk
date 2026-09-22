@@ -19,7 +19,6 @@ pub fn implementation_digest() -> Digest {
         include_bytes!("policy.rs"),
         include_bytes!("record_accounting.rs"),
         include_bytes!("uri_template.rs"),
-        include_bytes!("serialize.rs"),
         include_bytes!("expression/mod.rs"),
         include_bytes!("expression/wire.rs"),
         include_bytes!("expression/template.rs"),
@@ -34,7 +33,6 @@ pub fn implementation_digest() -> Digest {
         include_bytes!("cbor/error.rs"),
         include_bytes!("cbor/limits.rs"),
         include_bytes!("cbor/value.rs"),
-        include_bytes!("cbor/serde.rs"),
         b"cbor2=1.1.5;half=2.7.1",
     ];
     let mut hash = Sha256::new();

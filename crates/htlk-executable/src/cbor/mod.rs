@@ -6,7 +6,6 @@ mod decode;
 mod encode;
 mod error;
 mod limits;
-mod serde;
 mod value;
 
 pub use decode::decode;

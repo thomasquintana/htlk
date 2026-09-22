@@ -6,8 +6,8 @@ The planned domain API compiles `.htlk` source and source bundles into canonical
 executable graphs. Source collection and natural-language planning are host work.
 Source parsing, imports, inspection, and graph composition remain to be implemented.
 
-`htlk-executable` supplies canonical graph records, bounded construction, Serde
-wire mappings and the public `cbor` codec. `htlk-analyzer` supplies focused
+`htlk-executable` supplies canonical graph records, bounded construction, explicit
+wire conversions and the public `cbor` codec. `htlk-analyzer` supplies focused
 expression/scope analysis, whole-document verification, inferred information and
 structured diagnostics for compiler and agent-facing feedback. Both are available
 as this crate's `executable` and `analyzer` modules. Compiler production and agent

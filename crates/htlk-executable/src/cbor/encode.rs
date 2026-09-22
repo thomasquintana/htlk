@@ -1,5 +1,6 @@
 use super::accounting::{add, check};
 use super::{Error, ErrorKind, LimitKind, Limits, Value};
+use cbor2::core::{Encoder as HeaderEncoder, Header, simple};
 
 /// Encodes exactly one value using the HTLK deterministic CBOR profile.
 ///
@@ -37,9 +38,22 @@ impl Encoder<'_> {
     fn value(&mut self, value: &Value, depth: usize) -> Result<(), Error> {
         check(depth, self.limits.max_depth, LimitKind::Depth)?;
         match value {
-            Value::Null | Value::Bool(_) | Value::Integer(_) | Value::Float(_) => {
-                self.scalar(value)
+            Value::Null => self.scalar(Header::Simple(simple::NULL)),
+            Value::Bool(value) => self.scalar(Header::Simple(if *value {
+                simple::TRUE
+            } else {
+                simple::FALSE
+            })),
+            Value::Integer(value) => {
+                self.scalar(if *value < 0 {
+                    // CBOR's negative argument is -1 - value. Complementing
+                    // the bits avoids negation overflow even for i64::MIN.
+                    Header::Negative(!(*value as u64))
+                } else {
+                    Header::Positive(*value as u64)
+                })
             }
+            Value::Float(value) => self.scalar(Header::Float(f64::from(*value))),
             Value::Text(value) => self.string(value.as_bytes(), true),
             Value::Bytes(value) => self.string(value, false),
             Value::Array(values) => {
@@ -83,13 +97,9 @@ impl Encoder<'_> {
         self.append(&[&header[..len], bytes])
     }
 
-    fn scalar(&mut self, value: &Value) -> Result<(), Error> {
-        // Only fixed-size scalars enter this function. Let cbor2's Serde
-        // serializer choose preferred integer and lossless float widths.
-        let mut scratch = [0; 9];
-        let bytes = cbor2::to_slice(value, &mut scratch)
-            .expect("HTLK scalar serialization fits nine bytes");
-        self.append(&[bytes])
+    fn scalar(&mut self, value: Header) -> Result<(), Error> {
+        let (bytes, len) = encode_header(value);
+        self.append(&[&bytes[..len]])
     }
 
     fn append(&mut self, parts: &[&[u8]]) -> Result<(), Error> {
@@ -115,12 +125,21 @@ impl Encoder<'_> {
 
 /// Shortest header, using fixed stack scratch even for the largest argument.
 fn header(major: u8, argument: u64) -> ([u8; 9], usize) {
-    let mut bytes = [0; 9];
-    let len = cbor2::to_slice(&argument, &mut bytes)
-        .expect("a u64 header fits nine bytes")
-        .len();
+    let (mut bytes, len) = encode_header(Header::Positive(argument));
     // All definite-length headers share the unsigned argument encoding.
     bytes[0] |= major << 5;
+    (bytes, len)
+}
+
+/// The pinned backend chooses the same preferred widths as its Serde path.
+/// Only headers enter the backend; bodies and allocations remain HTLK-owned.
+fn encode_header(header: Header) -> ([u8; 9], usize) {
+    let mut bytes = [0; 9];
+    let mut remaining = bytes.as_mut_slice();
+    HeaderEncoder::from(&mut remaining)
+        .push(header)
+        .expect("HTLK scalar and length headers fit nine bytes");
+    let len = 9 - remaining.len();
     (bytes, len)
 }
 

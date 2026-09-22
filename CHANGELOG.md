@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared `htlk-analyzer` with focused expression/scope/linkage checks, offline
   schema preparation, structured diagnostics, explicit runtime obligations and
   immutable document-bound analysis results.
-- Explicit Serde serialization for canonical model records and values, using
-  pinned cbor2 primitives behind the bounded `htlk_executable::cbor` adapter.
+- Explicit canonical conversion and codec APIs for model records and values,
+  using pinned cbor2 primitives behind the bounded `htlk_executable::cbor` adapter.
+  Public model `serde::Serialize` support has been removed; internal JSON
+  processing retains `serde_json`.
 - Composed `verify_executable` admission with an immutable verified graph, borrowed
   checked execution plans, structured diagnostics, and exact host policy/profile linking.
 - Full scope binding coverage, whole-port compatibility, wait-dependency cycles,
