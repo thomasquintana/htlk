@@ -32,6 +32,12 @@ The model's `cbor` adapter uses pinned cbor2 header/scalar primitives while reta
 HTLK's strict profile/accounting. RustCrypto's `sha2` supplies hashing. Source-based
 native identities compose contributions from each owning published package.
 
+CBOR errors expose human-facing Display prose and structured `kind()` and
+zero-based `offset()` accessors. Use those accessors rather than parsing message
+text. Canonicality explanations retain the `NonCanonicalEncoding` category;
+equality remains based on category and offset. Display and Debug omit input
+contents. Applications choose their own prose or structured logging format.
+
 Public executable model types do not implement `serde::Serialize`. Use their
 bounded `to_value` and `encode`/`decode` APIs, supplying limits and contexts where
 required. Use `JsonDocument::from_value` for an explicit canonical JSON conversion;

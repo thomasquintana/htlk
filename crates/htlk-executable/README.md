@@ -57,6 +57,12 @@ including all headers and map keys. The default byte ceiling is 16 MiB; the
 default depth is 64 and implementation ceiling 128;
 controlled-stack tests cover construction, encoding, decoding and cleanup.
 
+CBOR errors provide human-facing Display prose, including canonicality reasons
+and configured resource maxima. Use `kind()` and zero-based `offset()` for
+structured handling rather than parsing messages. Equality compares category and
+offset; private diagnostic details do not affect it. Display and Debug omit input
+contents, and applications control logging formats.
+
 ## Explicit canonical conversion
 
 Public model types do not implement `serde::Serialize`. Use bounded `to_value`

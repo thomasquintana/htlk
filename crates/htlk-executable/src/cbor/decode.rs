@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use cbor2::core::{Decoder as HeaderDecoder, Header};
 
 use super::accounting::{add, check};
+use super::error::CanonicalityReason;
 use super::{Error, ErrorKind, FiniteFloat, LimitKind, Limits, Map, Value};
 
 /// Decodes exactly one canonical HTLK CBOR value under fresh resource limits.
@@ -105,7 +106,7 @@ impl<'a> Decoder<'a> {
             25 => (2, 0x100),
             26 => (4, 0x1_0000),
             27 => (8, 0x1_0000_0000),
-            31 => return Err(Error::new(ErrorKind::NonCanonicalEncoding)),
+            31 => return Err(Error::noncanonical(CanonicalityReason::IndefiniteLength)),
             _ => return Err(Error::new(ErrorKind::UnsupportedType)),
         };
         // Decode the shared argument as an unsigned header. This preserves u64
@@ -120,7 +121,7 @@ impl<'a> Decoder<'a> {
             unreachable!("unsigned header prefix")
         };
         if argument < minimum {
-            return Err(Error::new(ErrorKind::NonCanonicalEncoding));
+            return Err(Error::noncanonical(CanonicalityReason::NonminimalHeader));
         }
         Ok(argument)
     }
@@ -239,11 +240,11 @@ impl<'a> Decoder<'a> {
             22 => return Ok(Value::Null),
             24 => {
                 let simple = self.take(1)?[0];
-                return Err(Error::new(if (20..=22).contains(&simple) {
-                    ErrorKind::NonCanonicalEncoding
+                return Err(if (20..=22).contains(&simple) {
+                    Error::noncanonical(CanonicalityReason::WideSimple)
                 } else {
-                    ErrorKind::UnsupportedType
-                }));
+                    Error::new(ErrorKind::UnsupportedType)
+                });
             }
             25..=27 => {
                 let start = self.position - 1;
@@ -263,13 +264,13 @@ impl<'a> Decoder<'a> {
             return Err(Error::new(ErrorKind::NonFiniteFloat));
         }
         if value == 0.0 && value.is_sign_negative() {
-            return Err(Error::new(ErrorKind::NonCanonicalEncoding));
+            return Err(Error::noncanonical(CanonicalityReason::NegativeZero));
         }
         if additional > 25 && cbor2::core::f64_to_f16(value).is_some() {
-            return Err(Error::new(ErrorKind::NonCanonicalEncoding));
+            return Err(Error::noncanonical(CanonicalityReason::WideFloat));
         }
         if additional == 27 && cbor2::core::f64_to_f32(value).is_some() {
-            return Err(Error::new(ErrorKind::NonCanonicalEncoding));
+            return Err(Error::noncanonical(CanonicalityReason::WideFloat));
         }
         Ok(Value::Float(FiniteFloat::new(value)?))
     }

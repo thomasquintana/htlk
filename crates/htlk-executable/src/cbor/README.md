@@ -71,6 +71,24 @@ preflight errors point to the collection header; document-limit errors point
 to zero. Invalid limit configuration has no input offset. Diagnostics contain
 categories and positions rather than protected input contents.
 
+`Error` Display is human-facing prose, for example, “CBOR input ended before the
+value was complete at byte 3.” Canonicality messages explain nonminimal headers,
+indefinite-length markers, unnecessary float/simple-value widths, and negative
+zero. All remain `ErrorKind::NonCanonicalEncoding`. Error equality compares only
+the category and offset, not private diagnostic details.
+
+Use `kind()` and `offset()` for programmatic handling; do not parse Display text.
+Applications choose prose or structured logging and own the log format. Display
+and Debug contain no map keys, text values, byte payloads, or document excerpts.
+
+```rust
+use htlk_executable::cbor::{decode, ErrorKind, Limits};
+
+let error = decode(&[0x81, 0x18], &Limits::default()).unwrap_err();
+assert!(matches!(error.kind(), ErrorKind::UnexpectedEnd));
+assert_eq!(error.offset(), Some(2));
+```
+
 A byte string remains opaque even if it contains CBOR. Registration must
 explicitly decode its nested payload; outer canonicality says nothing about
 the payload's canonicality.

@@ -1,7 +1,7 @@
 use super::{Error, ErrorKind};
 
 const DEFAULT_DEPTH: usize = 64;
-const MAX_SUPPORTED_DEPTH: usize = 128;
+pub(super) const MAX_SUPPORTED_DEPTH: usize = 128;
 
 /// Resource ceilings for one codec operation.
 ///

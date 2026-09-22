@@ -9,6 +9,112 @@ fn reject(bytes: &[u8], kind: ErrorKind, offset: usize) {
 }
 
 #[test]
+fn canonicality_prose_explains_decoder_rejections() {
+    let cases: &[(&[u8], &str)] = &[
+        (
+            &[0x18, 0],
+            "CBOR integer or length header is wider than necessary at byte 1.",
+        ),
+        (
+            &[0x78, 1, b'a'],
+            "CBOR integer or length header is wider than necessary at byte 1.",
+        ),
+        (
+            &[0x5f, 0xff],
+            "The CBOR header uses an indefinite-length marker, which HTLK does not allow at byte 1.",
+        ),
+        (
+            &[0x1f],
+            "The CBOR header uses an indefinite-length marker, which HTLK does not allow at byte 1.",
+        ),
+        (
+            &[0xfa, 0x3f, 0xc0, 0, 0],
+            "CBOR floating-point encoding is wider than necessary at byte 1.",
+        ),
+        (
+            &[0xfb, 0x40, 0xf8, 0x6a, 0, 0, 0, 0, 0],
+            "CBOR floating-point encoding is wider than necessary at byte 1.",
+        ),
+        (
+            &[0xf9, 0x80, 0],
+            "CBOR encodes negative zero, but canonical encoding requires positive zero at byte 1.",
+        ),
+        (
+            &[0xfb, 0x80, 0, 0, 0, 0, 0, 0, 0],
+            "CBOR encodes negative zero, but canonical encoding requires positive zero at byte 1.",
+        ),
+        (
+            &[0xf8, 20],
+            "CBOR Boolean or null encoding is wider than necessary at byte 1.",
+        ),
+        (
+            &[0xf8, 21],
+            "CBOR Boolean or null encoding is wider than necessary at byte 1.",
+        ),
+        (
+            &[0xf8, 22],
+            "CBOR Boolean or null encoding is wider than necessary at byte 1.",
+        ),
+    ];
+    let mut previous = None;
+    for (bytes, expected) in cases {
+        // The outer array must not overwrite the inner value's offset.
+        let nested = [&[0x81], *bytes].concat();
+        let error = decode(&nested, &Limits::default()).unwrap_err();
+        assert_eq!(error.kind(), &ErrorKind::NonCanonicalEncoding);
+        assert_eq!(error.offset(), Some(1));
+        assert_eq!(error.to_string(), *expected);
+        if let Some(previous) = previous {
+            assert_eq!(error, previous);
+        }
+        previous = Some(error);
+    }
+    let error = decode(&[0x81, 0xa1, 0x78, 1, b'a', 0xf6], &Limits::default()).unwrap_err();
+    assert_eq!(error.kind(), &ErrorKind::NonCanonicalEncoding);
+    assert_eq!(error.offset(), Some(2));
+    assert_eq!(
+        error.to_string(),
+        "CBOR integer or length header is wider than necessary at byte 2."
+    );
+}
+
+#[test]
+fn diagnostics_omit_keys_text_and_byte_payloads() {
+    let limits = Limits::default();
+    let value = Value::Map(
+        Map::try_from_entries([
+            ("private-key".into(), Value::Text("private-text".into())),
+            (
+                "payload-key".into(),
+                Value::Bytes(b"private-bytes".to_vec()),
+            ),
+        ])
+        .unwrap(),
+    );
+    let mut bytes = encode(&value, &limits).unwrap();
+    bytes.push(0xff);
+    let trailing = decode(&bytes, &limits).unwrap_err();
+    let duplicate = Map::try_from_entries([
+        ("private-key".into(), value.clone()),
+        ("private-key".into(), value),
+    ])
+    .unwrap_err();
+    for error in [trailing, duplicate] {
+        for diagnostic in [error.to_string(), format!("{error:?}")] {
+            for secret in [
+                "private-key",
+                "private-text",
+                "payload-key",
+                "private-bytes",
+            ] {
+                assert!(!diagnostic.contains(secret));
+            }
+            assert!(!diagnostic.contains(&format!("{:?}", b"private-bytes")));
+        }
+    }
+}
+
+#[test]
 fn malformed_noncanonical_and_unsupported_inputs() {
     let fixtures: Vec<(&[u8], ErrorKind, usize)> = vec![
         (&[], ErrorKind::UnexpectedEnd, 0),
