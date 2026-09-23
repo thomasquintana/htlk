@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::digest::Digest;
 use crate::{
-    DocumentError as Error, DocumentFields, JsonDocument, McpBinding, McpBindingKind as Kind,
-    NodeFields, PortTable, PrimitiveType, ValueTypeKind,
+    BuiltinType, DocumentError as Error, DocumentFields, JsonDocument, McpBinding,
+    McpBindingKind as Kind, NodeFields, PortTable, ValueTypeKind,
 };
 
 pub(crate) fn descriptor(
@@ -78,10 +78,10 @@ pub(crate) fn ports(n: &NodeFields, binding: &McpBinding, f: &DocumentFields) ->
             if !n.inputs.is_empty() {
                 return Err(Error::McpInterfaceMismatch);
             }
-            primitive_output(&n.outputs, PrimitiveType::ResourceSnapshot)?;
+            builtin_output(&n.outputs, BuiltinType::McpResourceResult)?;
         }
         Kind::Prompt { .. } => {
-            primitive_output(&n.outputs, PrimitiveType::McpPromptResult)?;
+            builtin_output(&n.outputs, BuiltinType::McpPromptResult)?;
             let port = n
                 .inputs
                 .get("arguments")
@@ -111,7 +111,7 @@ pub(crate) fn ports(n: &NodeFields, binding: &McpBinding, f: &DocumentFields) ->
                 if expected.get(name.as_str()) != Some(&port.required())
                     || !matches!(
                         port.value_type().kind(),
-                        ValueTypeKind::Primitive(PrimitiveType::String)
+                        ValueTypeKind::Builtin(BuiltinType::String)
                     )
                 {
                     return Err(Error::McpInterfaceMismatch);
@@ -122,18 +122,20 @@ pub(crate) fn ports(n: &NodeFields, binding: &McpBinding, f: &DocumentFields) ->
     }
     Ok(())
 }
-fn primitive_output(table: &PortTable, ty: PrimitiveType) -> Result<(), Error> {
-    if table.len() == 1 && table.get("value").is_some_and(|p| {
-        p.required()
-            && matches!(p.value_type().kind(), ValueTypeKind::Primitive(actual) if *actual == ty)
-    }) {
+fn builtin_output(table: &PortTable, ty: BuiltinType) -> Result<(), Error> {
+    if table.len() == 1
+        && table.get("value").is_some_and(|p| {
+            p.required()
+                && matches!(p.value_type().kind(), ValueTypeKind::Builtin(actual) if *actual == ty)
+        })
+    {
         Ok(())
     } else {
         Err(Error::McpInterfaceMismatch)
     }
 }
 pub(crate) fn template_ports(n: &NodeFields, variables: &BTreeSet<&str>) -> Result<(), Error> {
-    primitive_output(&n.outputs, PrimitiveType::ResourceSnapshot)?;
+    builtin_output(&n.outputs, BuiltinType::McpResourceResult)?;
     let port = n
         .inputs
         .get("arguments")
@@ -151,7 +153,7 @@ pub(crate) fn template_ports(n: &NodeFields, variables: &BTreeSet<&str>) -> Resu
                 || !p.required()
                 || !matches!(
                     p.value_type().kind(),
-                    ValueTypeKind::Primitive(PrimitiveType::String)
+                    ValueTypeKind::Builtin(BuiltinType::String)
                 )
         })
     {

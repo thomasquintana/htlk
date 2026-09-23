@@ -6,7 +6,7 @@ use htlk_cbor::{LimitKind, Limits, Map, Value};
 use super::*;
 use crate::digest::ParseDigestError;
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};
-use crate::{ParseIdentifierError, Port, PrimitiveType, TypeContext, TypeError, ValueTypeKind};
+use crate::{BuiltinType, ParseIdentifierError, Port, TypeContext, TypeError, ValueTypeKind};
 
 /// Expression/template record validation and bounded-conversion failure.
 /// Only static schema descriptions are retained, not untrusted input contents.
@@ -488,8 +488,8 @@ impl<'a> Builder<'a> {
     }
     pub(super) fn parameter(&mut self, port: &Port, d: usize) -> Result<Value, ExpressionError> {
         let p = match port.value_type().kind() {
-            ValueTypeKind::Primitive(
-                p @ (PrimitiveType::String | PrimitiveType::Integer | PrimitiveType::Boolean),
+            ValueTypeKind::Builtin(
+                p @ (BuiltinType::String | BuiltinType::Integer | BuiltinType::Boolean),
             ) => p,
             _ => return Err(ExpressionError::InvalidTemplateParameter),
         };
@@ -852,9 +852,7 @@ pub(super) fn parse_parameter(v: &Value, limits: &Limits) -> Result<Port, Expres
     let port = Port::from_value(v, TypeContext::Value, limits)?;
     if !matches!(
         port.value_type().kind(),
-        ValueTypeKind::Primitive(
-            PrimitiveType::String | PrimitiveType::Integer | PrimitiveType::Boolean
-        )
+        ValueTypeKind::Builtin(BuiltinType::String | BuiltinType::Integer | BuiltinType::Boolean)
     ) {
         return Err(ExpressionError::InvalidTemplateParameter);
     }

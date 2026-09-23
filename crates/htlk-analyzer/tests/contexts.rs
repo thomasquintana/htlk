@@ -14,7 +14,7 @@ fn ports(name: &str) -> PortTable {
     PortTable::new(
         vec![(
             name.parse().unwrap(),
-            Port::new(ValueType::primitive(PrimitiveType::String), true),
+            Port::new(ValueType::builtin(BuiltinType::String), true),
         )],
         &Limits::default(),
     )
@@ -78,7 +78,7 @@ fn context_matrix_is_enforced_through_nested_expressions() {
     for source in &sources {
         env.references.insert(
             source.clone(),
-            Port::new(ValueType::primitive(PrimitiveType::String), true),
+            Port::new(ValueType::builtin(BuiltinType::String), true),
         );
     }
     env.outcomes.insert("worker".parse().unwrap());
@@ -240,7 +240,7 @@ fn node_contract_contexts_are_analyzed_at_their_actual_site() {
         node.outputs = PortTable::new(
             vec![(
                 "value".parse().unwrap(),
-                Port::new(ValueType::primitive(PrimitiveType::Boolean), true),
+                Port::new(ValueType::builtin(BuiltinType::Boolean), true),
             )],
             &l,
         )
@@ -277,7 +277,7 @@ fn undeclared_generic_variables_are_rejected_in_parameters_and_results() {
         &l,
     )
     .unwrap();
-    let null = Port::new(ValueType::primitive(PrimitiveType::Null), true);
+    let null = Port::new(ValueType::builtin(BuiltinType::Null), true);
     for signature in [
         FunctionSignature::new(vec![], vec![Port::new(t.clone(), true)], null.clone(), &l).unwrap(),
         FunctionSignature::new(vec![], vec![], Port::new(t, true), &l).unwrap(),

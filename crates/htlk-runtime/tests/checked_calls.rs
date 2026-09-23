@@ -3,8 +3,8 @@ use htlk_analyzer::{ExpressionCallType, ExpressionTypeEnvironment};
 use htlk_cbor::{Limits, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
-    EvaluatorLimits, Expression, ExpressionContext as C, ExpressionKind as E, FunctionId,
-    FunctionSignature, Identifier, Library, PathStep, Port, PrimitiveType as P, PromptTemplate,
+    BuiltinType as P, EvaluatorLimits, Expression, ExpressionContext as C, ExpressionKind as E,
+    FunctionId, FunctionSignature, Identifier, Library, PathStep, Port, PromptTemplate,
     TypeContext, ValueReference, ValueType as T, ValueTypeKind as K, digest::Digest,
 };
 use htlk_runtime::{
@@ -29,7 +29,7 @@ fn id() -> Digest {
     Digest::from_bytes([5; 32])
 }
 fn port(p: P, required: bool) -> Port {
-    Port::new(T::primitive(p), required)
+    Port::new(T::builtin(p), required)
 }
 fn variable() -> T {
     T::new(
@@ -392,7 +392,7 @@ impl EvaluationContext for CallbackNative {
 }
 fn callback_fixture() -> (ExpressionTypeEnvironment, Expression) {
     let broad = T::new(
-        K::Union(vec![T::primitive(P::Integer), T::primitive(P::String)]),
+        K::Union(vec![T::builtin(P::Integer), T::builtin(P::String)]),
         TypeContext::Value,
         &Limits::default(),
     )

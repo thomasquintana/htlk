@@ -3,7 +3,7 @@ use htlk_analyzer::ExpressionTypeEnvironment;
 use htlk_cbor::{Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
-    EvaluatorLimits, PathStep, Port, PrimitiveType as P, TypeContext, ValueType as T,
+    BuiltinType as P, EvaluatorLimits, PathStep, Port, TypeContext, ValueType as T,
     ValueTypeKind as K,
 };
 use htlk_runtime::{CheckedExpression, EvaluationFrame};
@@ -52,7 +52,7 @@ fn project(value: &Value, t: &T, fields: &[&str]) -> Result<EvaluationValue, Err
 }
 #[test]
 fn optional_fields_extra_members_and_null_are_distinct() {
-    let t = record(vec![("optional", T::primitive(P::Integer), false)]);
+    let t = record(vec![("optional", T::builtin(P::Integer), false)]);
     let v = map(vec![("extra", Value::Integer(1))]);
     validate_typed_value(&v, &t, None, &Limits::default(), &policy()).unwrap();
     assert_eq!(
@@ -74,7 +74,7 @@ fn optional_fields_extra_members_and_null_are_distinct() {
         ),
         Err(Error::OperandType)
     );
-    let required = record(vec![("required", T::primitive(P::Integer), true)]);
+    let required = record(vec![("required", T::builtin(P::Integer), true)]);
     assert_eq!(
         validate_typed_value(&v, &required, None, &Limits::default(), &policy()),
         Err(Error::OperandType)
@@ -82,8 +82,8 @@ fn optional_fields_extra_members_and_null_are_distinct() {
 }
 #[test]
 fn union_projection_uses_declared_variants_at_each_path_step() {
-    let a = record(vec![("a", T::primitive(P::Integer), true)]);
-    let b = record(vec![("b", T::primitive(P::Integer), true)]);
+    let a = record(vec![("a", T::builtin(P::Integer), true)]);
+    let b = record(vec![("b", T::builtin(P::Integer), true)]);
     let union = ty(K::Union(vec![a.clone(), b.clone()]));
     let v = map(vec![
         ("a", Value::Integer(1)),
@@ -108,12 +108,12 @@ fn union_projection_uses_declared_variants_at_each_path_step() {
 }
 #[test]
 fn maps_indices_json_and_limits_are_strict() {
-    let t = ty(K::Map(Box::new(T::primitive(P::Integer))));
+    let t = ty(K::Map(Box::new(T::builtin(P::Integer))));
     assert_eq!(
         project(&map(vec![]), &t, &["missing"]),
         Err(Error::InvalidProjection)
     );
-    let list = ty(K::List(Box::new(T::primitive(P::Integer))));
+    let list = ty(K::List(Box::new(T::builtin(P::Integer))));
     assert_eq!(
         project_typed_value(
             &Value::Array(vec![]),
@@ -128,7 +128,7 @@ fn maps_indices_json_and_limits_are_strict() {
     assert_eq!(
         validate_typed_value(
             &Value::Bytes(vec![1]),
-            &T::primitive(P::Json),
+            &T::builtin(P::Json),
             None,
             &Limits::default(),
             &policy()
@@ -168,7 +168,7 @@ fn checked_execution_enforces_dynamic_operands_and_keeps_laziness() {
     .unwrap();
     let mut env = ExpressionTypeEnvironment::default();
     env.references
-        .insert(source.clone(), Port::new(T::primitive(P::Json), true));
+        .insert(source.clone(), Port::new(T::builtin(P::Json), true));
     let mut frame = EvaluationFrame::default();
     frame
         .bind(
@@ -254,10 +254,7 @@ fn checked_reference_projection_can_read_large_roots_for_small_outputs() {
     let mut env = ExpressionTypeEnvironment::default();
     env.references.insert(
         source.clone(),
-        Port::new(
-            record(vec![("value", T::primitive(P::Integer), false)]),
-            true,
-        ),
+        Port::new(record(vec![("value", T::builtin(P::Integer), false)]), true),
     );
     let expression = Expression::new(
         E::Ref {
@@ -312,7 +309,7 @@ fn runtime_type_depth_on_controlled_stacks() {
                     max_depth: 128,
                     ..Limits::default()
                 };
-                let mut t = T::primitive(P::Integer);
+                let mut t = T::builtin(P::Integer);
                 let mut v = Value::Integer(1);
                 for _ in 0..120 {
                     t = T::new(K::List(Box::new(t)), TypeContext::Value, &codec).unwrap();
@@ -380,7 +377,7 @@ fn optional_parent_presence_does_not_require_the_final_optional_member() {
         Port::new(
             record(vec![(
                 "parent",
-                record(vec![("child", T::primitive(P::Boolean), false)]),
+                record(vec![("child", T::builtin(P::Boolean), false)]),
                 false,
             )]),
             true,
@@ -423,7 +420,7 @@ fn declared_json_result_rejects_non_json_extra_fields_on_structural_error_values
     let source = ValueReference::Input("error".parse().unwrap());
     let mut env = ExpressionTypeEnvironment::default();
     env.references
-        .insert(source.clone(), Port::new(T::primitive(P::Error), true));
+        .insert(source.clone(), Port::new(T::builtin(P::Error), true));
     let expression = Expression::new(
         E::Ref {
             source: source.clone(),
@@ -433,7 +430,7 @@ fn declared_json_result_rejects_non_json_extra_fields_on_structural_error_values
         &limits,
     )
     .unwrap();
-    let expected = Port::new(T::primitive(P::Json), true);
+    let expected = Port::new(T::builtin(P::Json), true);
     let checked =
         CheckedExpression::new(&expression, C::Eval, &env, Some(&expected), &limits).unwrap();
     let mut frame = EvaluationFrame::default();
@@ -461,13 +458,13 @@ fn json_preparation_counts_collection_work_and_keeps_native_value_size_distinct(
     let limits = Limits::default();
     let mut budget = policy();
     budget.max_value_bytes = htlk_cbor::encode(&value, &limits).unwrap().len() as u64;
-    validate_typed_value(&value, &T::primitive(P::Json), None, &limits, &budget).unwrap();
+    validate_typed_value(&value, &T::builtin(P::Json), None, &limits, &budget).unwrap();
     budget = policy();
     budget.max_collection_visits = 1;
     assert!(matches!(
         validate_typed_value(
             &Value::Array(vec![Value::Null, Value::Null]),
-            &T::primitive(P::Json),
+            &T::builtin(P::Json),
             None,
             &limits,
             &budget

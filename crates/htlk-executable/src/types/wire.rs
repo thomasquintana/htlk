@@ -3,7 +3,7 @@ use std::fmt::{self, Write as _};
 use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
-use super::{Port, PrimitiveType, TypeContext, ValueType, ValueTypeKind};
+use super::{BuiltinType, Port, TypeContext, ValueType, ValueTypeKind};
 use crate::digest::{Digest, ParseDigestError};
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};
 use crate::{Identifier, ParseIdentifierError};
@@ -19,7 +19,7 @@ pub enum TypeError {
     Codec(htlk_cbor::Error),
     /// A record/array/scalar has the wrong shape at the named schema site.
     InvalidShape(&'static str),
-    /// Text is not a supported canonical primitive (aliases are not accepted).
+    /// Text is not a supported canonical built-in type name (aliases are not accepted).
     UnknownPrimitive,
     /// A tagged type array uses an unknown constructor.
     UnknownConstructor,
@@ -72,7 +72,7 @@ impl fmt::Display for TypeError {
         match self {
             Self::Codec(error) => write!(f, "type record: {error}"),
             Self::InvalidShape(site) => write!(f, "invalid type record shape: {site}"),
-            Self::UnknownPrimitive => f.write_str("unknown canonical primitive type"),
+            Self::UnknownPrimitive => f.write_str("unknown canonical built-in type"),
             Self::UnknownConstructor => f.write_str("unknown canonical type constructor"),
             Self::UnknownPortField => f.write_str("unknown port field"),
             Self::MissingPortField(field) => write!(f, "missing port field: {field}"),
@@ -171,7 +171,7 @@ impl<'a> Builder<'a> {
     fn ty(&mut self, kind: &ValueTypeKind, depth: usize) -> Result<Value, TypeError> {
         use ValueTypeKind as K;
         match kind {
-            K::Primitive(primitive) => self.text(primitive.as_str(), depth),
+            K::Builtin(builtin) => self.text(builtin.as_str(), depth),
             K::List(child) | K::Map(child) => {
                 let mut values = self.tagged(
                     if matches!(kind, K::List(_)) {
@@ -337,7 +337,7 @@ pub(super) fn parse_type(
 ) -> Result<ValueType, TypeError> {
     use ValueTypeKind as K;
     if let Value::Text(name) = value {
-        return Ok(ValueType::primitive(PrimitiveType::parse(name)?));
+        return Ok(ValueType::builtin(BuiltinType::parse(name)?));
     }
     let values = array(value, "type")?;
     let Some(first) = values.first() else {

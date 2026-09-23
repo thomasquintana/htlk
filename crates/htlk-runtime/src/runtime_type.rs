@@ -1,9 +1,9 @@
 //! Actual-value constraints and typed projections for checked expression execution.
 
 use crate::{
-    EvaluationError as Error, EvaluationMeter, EvaluationResult, EvaluationUsage,
+    BuiltinType as P, EvaluationError as Error, EvaluationMeter, EvaluationResult, EvaluationUsage,
     EvaluationValue as ResultValue, EvaluatorLimits, JsonDocument, JsonError, McpValidationError,
-    NativeSchemas, PathStep, PrimitiveType as P, TypeContext, ValueType as T, ValueTypeKind as K,
+    NativeSchemas, PathStep, TypeContext, ValueType as T, ValueTypeKind as K,
 };
 use htlk_cbor::{Limits, Value};
 use htlk_executable::cbor as htlk_cbor;
@@ -72,7 +72,7 @@ fn matches_type(
     meter.charge(1)?;
     meter.inspect(value)?;
     match ty.kind() {
-        K::Primitive(p) => matches_primitive(value, *p, schemas, meter, depth),
+        K::Builtin(p) => matches_builtin(value, *p, schemas, meter, depth),
         K::List(item) => {
             let Value::Array(items) = value else {
                 return Ok(false);
@@ -144,7 +144,7 @@ fn matches_type(
     }
 }
 // Keep protocol/regex temporaries out of recursive collection validation frames.
-fn matches_primitive(
+fn matches_builtin(
     value: &Value,
     p: P,
     schemas: Option<&NativeSchemas>,
@@ -182,7 +182,7 @@ fn matches_primitive(
                 .ok_or(Error::UnresolvedType)?;
             matches_type(value, &shape, schemas, meter, depth + 1)
         }
-        P::ResourceSnapshot => {
+        P::McpResourceResult => {
             inspect_collections(value, meter)?;
             match crate::mcp_protocol::snapshot_shape(value, meter.codec_limits()) {
                 Ok(_) => Ok(true),
@@ -399,14 +399,14 @@ fn projected_types(
         (K::Map(item), PathStep::Field(_)) | (K::List(item), PathStep::Index(_)) => {
             Some(item.as_ref())
         }
-        (K::Primitive(P::Json), _) => Some(ty),
+        (K::Builtin(P::Json), _) => Some(ty),
         (K::Union(types), _) => {
             for ty in types {
                 projected_types(ty, step, out, meter, depth + 1)?;
             }
             None
         }
-        (K::Primitive(p), _) => {
+        (K::Builtin(p), _) => {
             if let Some(record) = crate::builtin_record_type(*p, meter.program_limits())? {
                 projected_types(&record, step, out, meter, depth + 1)?;
             }
@@ -506,7 +506,7 @@ fn select<'a>(
                 },
             )
         }
-        K::Primitive(P::Json) => {
+        K::Builtin(P::Json) => {
             let selected = match (value, step) {
                 (Value::Map(m), PathStep::Field(name)) => {
                     meter.charge((name.len() as u64).saturating_mul(u64::from(
@@ -524,7 +524,7 @@ fn select<'a>(
                 None => Selection::Invalid,
             })
         }
-        K::Primitive(p) => {
+        K::Builtin(p) => {
             let Some(record) = crate::builtin_record_type(*p, meter.program_limits())? else {
                 return Ok(Selection::Invalid);
             };

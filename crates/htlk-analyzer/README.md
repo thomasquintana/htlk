@@ -14,7 +14,7 @@ callers cannot construct a result by attaching arbitrary plans.
 
 ```rust
 use htlk_executable::{Expression, ExpressionContext, ExpressionKind, ValueReference,
-    Port, PrimitiveType, ValueType, cbor::Limits};
+    Port, BuiltinType, ValueType, cbor::Limits};
 use htlk_analyzer::{ExpressionTypeEnvironment, check_condition};
 
 let limits = Limits::default();
@@ -24,10 +24,10 @@ let expression = Expression::new(ExpressionKind::Ref {
 }, ExpressionContext::Preconditions, &limits)?;
 let mut declarations = ExpressionTypeEnvironment::default();
 declarations.references.insert(source,
-    Port::new(ValueType::primitive(PrimitiveType::Boolean), true));
+    Port::new(ValueType::builtin(BuiltinType::Boolean), true));
 let analysis = check_condition(&expression, ExpressionContext::Preconditions,
     &declarations, &limits)?;
-assert_eq!(analysis.result().value_type(), &ValueType::primitive(PrimitiveType::Boolean));
+assert_eq!(analysis.result().value_type(), &ValueType::builtin(BuiltinType::Boolean));
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

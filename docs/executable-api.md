@@ -165,20 +165,30 @@ is independently applied by the codec.
 ## Canonical types and ports
 
 `ValueType` describes permitted data, whereas `htlk_executable::cbor::Value` holds actual
-data. It exposes a read-only `ValueTypeKind`: primitive, list, map, record, union,
-enum, schema digest, signature variable, or function type. `PrimitiveType` contains
-the exact closed primitive names from the CDDL. Source aliases (including `text`)
-must be resolved by the compiler before reaching this canonical model.
+data. It exposes a read-only `ValueTypeKind`: built-in, list, map, record, union,
+enum, schema digest, signature variable, or function type. `BuiltinType` is the
+closed set of language-defined built-in types, including both scalar and structured
+types. Source aliases (including `text`) must be resolved by the compiler before
+reaching this canonical model.
+
+`BuiltinType::McpResourceResult` describes returned resource contents plus
+provenance/request information; its canonical wire spelling remains
+`"ResourceSnapshot"`. `BuiltinType::McpPromptResult` describes returned prompt
+messages and metadata, with canonical wire spelling `"McpPromptResult"`.
+`"McpResourceResult"` is not accepted as a wire spelling or alias. These remain
+distinct named built-in types, not ordinary record aliases. `builtin_record_type`
+exposes their expanded shapes and field presence requirements; MCP operation
+boundaries still require the appropriate named result type.
 
 ```rust
 use htlk_executable::cbor::Limits;
-use htlk_executable::{Port, PrimitiveType, TypeContext, ValueType, ValueTypeKind};
+use htlk_executable::{Port, BuiltinType, TypeContext, ValueType, ValueTypeKind};
 
 let limits = Limits::default();
 let context = TypeContext::Value;
 let nullable = ValueType::new(ValueTypeKind::Union(vec![
-    ValueType::primitive(PrimitiveType::String),
-    ValueType::primitive(PrimitiveType::Null),
+    ValueType::builtin(BuiltinType::String),
+    ValueType::builtin(BuiltinType::Null),
 ]), context, &limits)?;
 let port = Port::new(nullable, false);
 assert!(!port.required());
@@ -339,19 +349,19 @@ a branch that would short circuit during execution.
 ```rust
 use htlk_executable::cbor::Limits;
 use htlk_executable::{Expression, ExpressionContext, ExpressionKind,
-    Port, PrimitiveType, ValueReference, ValueType};
+    Port, BuiltinType, ValueReference, ValueType};
 use htlk_analyzer::{ExpressionTypeEnvironment,check_condition};
 
 let limits = Limits::default();
 let source = ValueReference::Input("allowed".parse()?);
 let mut environment = ExpressionTypeEnvironment::default();
 environment.references.insert(source.clone(),
-    Port::new(ValueType::primitive(PrimitiveType::Boolean), true));
+    Port::new(ValueType::builtin(BuiltinType::Boolean), true));
 let expression = Expression::new(ExpressionKind::Ref { source, path: vec![] },
     ExpressionContext::Preconditions, &limits)?;
 let analysis = check_condition(&expression, ExpressionContext::Preconditions,
     &environment, &limits)?;
-assert_eq!(analysis.result().value_type(), &ValueType::primitive(PrimitiveType::Boolean));
+assert_eq!(analysis.result().value_type(), &ValueType::builtin(BuiltinType::Boolean));
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -574,11 +584,11 @@ are checked at the use site by the verifier/evaluator.
 ```rust
 use htlk_executable::cbor::Limits;
 use htlk_executable::{Expression, ExpressionContext, ExpressionKind, Port,
-    PrimitiveType, PromptTemplate, ScalarLiteral, TemplatePart, ValueType};
+    BuiltinType, PromptTemplate, ScalarLiteral, TemplatePart, ValueType};
 
 let limits = Limits::default();
 let template = PromptTemplate::new(
-    vec![("name".parse()?, Port::new(ValueType::primitive(PrimitiveType::String), true))],
+    vec![("name".parse()?, Port::new(ValueType::builtin(BuiltinType::String), true))],
     vec![TemplatePart::Text("Hi ".into()), TemplatePart::Slot("name".parse()?)],
     &limits,
 )?;
@@ -736,11 +746,11 @@ not apply authored defaults to incomplete records.
 use htlk_executable::cbor::Limits;
 use htlk_executable::{Edge, EdgeDestination, EdgeSource, Expression,
     ExpressionContext, ExpressionKind, Node, NodeFields, Operation, Port,
-    PortTable, PrimitiveType, Scope, ScopeContext, ScopeFields, ValueReference,
+    PortTable, BuiltinType, Scope, ScopeContext, ScopeFields, ValueReference,
     ValueType};
 
 let limits = Limits::default();
-let string_port = Port::new(ValueType::primitive(PrimitiveType::String), true);
+let string_port = Port::new(ValueType::builtin(BuiltinType::String), true);
 let inputs = PortTable::new(vec![("question".parse()?, string_port.clone())], &limits)?;
 let expression = Expression::new(ExpressionKind::Ref {
     source: ValueReference::Input("question".parse()?), path: vec![],
@@ -1401,9 +1411,10 @@ function signatures in a reached library.
 
 Failures report `InvalidDescriptor` with a static field label,
 `ToolSchemaMismatch`, `McpInterfaceMismatch`, or `UnreachedSchemaType`.
-Fixed resource reads require no inputs and one required `value: ResourceSnapshot`
-output. Prompt fetches require one required `arguments` record and one required
-`value: McpPromptResult` output. Prompt record fields exactly match descriptor
+Fixed resource reads require no inputs and one required `value` output of type
+`BuiltinType::McpResourceResult`. Prompt fetches require one required `arguments`
+record and one required `value` output of type `BuiltinType::McpPromptResult`.
+Prompt record fields exactly match descriptor
 argument names, are primitive strings, and use descriptor `required` flags;
 omitted flags mean optional. External names are preserved, including names that
 are not HTLK identifiers. Omitted or empty descriptor argument arrays still
@@ -1420,8 +1431,8 @@ performed by `validate_mcp_descriptors` and included in `verify_executable`.
 
 Resource-template nodes require one required `arguments` record containing exactly
 the template's distinct variables, all required primitive strings, and one required
-`value: ResourceSnapshot` output. Even a template with no variables requires a
-present empty arguments record. Repeated references contribute one interface field
+`value` output of type `BuiltinType::McpResourceResult`. Even a template with no
+variables requires a present empty arguments record. Repeated references contribute one interface field
 while remaining unchanged in the exact template string and binding identity.
 
 The syntax checker follows [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570)

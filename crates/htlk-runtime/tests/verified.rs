@@ -3,11 +3,11 @@ use htlk_analyzer::{ExpressionSite, ScopeUse, ScopeVerificationErrorKind, embedd
 use htlk_cbor::{Limits, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
-    CanonicalDocument, DocumentFields, Edge, EdgeDestination as D, EdgeSource as S,
-    EvaluatorLimits, ExecutableEnvelope, ExecutionLimits, ExecutionProfile, Expression,
-    ExpressionContext as C, ExpressionKind as E, Node, NodeFields, Operation, PolicyDocument,
-    PolicyFields, Port, PortTable, PrimitiveType as P, ScalarLiteral as L, Scope,
-    ScopeContext as Role, ScopeFields, ValueReference, ValueType, digest::Digest,
+    BuiltinType as P, CanonicalDocument, DocumentFields, Edge, EdgeDestination as D,
+    EdgeSource as S, EvaluatorLimits, ExecutableEnvelope, ExecutionLimits, ExecutionProfile,
+    Expression, ExpressionContext as C, ExpressionKind as E, Node, NodeFields, Operation,
+    PolicyDocument, PolicyFields, Port, PortTable, ScalarLiteral as L, Scope, ScopeContext as Role,
+    ScopeFields, ValueReference, ValueType, digest::Digest,
 };
 use htlk_runtime::{
     EvaluationError, EvaluationFrame, EvaluationValue, ExecutableVerificationError as Error,
@@ -52,7 +52,7 @@ fn ports(names: &[&str]) -> PortTable {
             .map(|name| {
                 (
                     name.parse().unwrap(),
-                    Port::new(ValueType::primitive(P::Boolean), true),
+                    Port::new(ValueType::builtin(P::Boolean), true),
                 )
             })
             .collect(),
@@ -330,7 +330,7 @@ fn repeated_task_uses_share_plans_and_preserve_use_locations() {
 fn waits_and_loop_boundaries_are_admitted_and_until_uses_the_body_context() {
     let limits = Limits::default();
     let registry = registry();
-    let json = Port::new(ValueType::primitive(P::Json), true);
+    let json = Port::new(ValueType::builtin(P::Json), true);
     let mut wait = NodeFields::new(
         "waiter".parse().unwrap(),
         Operation::Wait {
@@ -527,7 +527,7 @@ fn all_mcp_binding_kinds_pass_the_complete_offline_admission_boundary() {
         ValueType::new(
             ValueTypeKind::Record(vec![(
                 name.into(),
-                Port::new(ValueType::primitive(P::String), true),
+                Port::new(ValueType::builtin(P::String), true),
             )]),
             TypeContext::Value,
             &limits,
@@ -554,7 +554,7 @@ fn all_mcp_binding_kinds_pass_the_complete_offline_admission_boundary() {
             },
             r#"{"name":"note","uri":"file:///note"}"#.into(),
             None,
-            ValueType::primitive(P::ResourceSnapshot),
+            ValueType::builtin(P::McpResourceResult),
         ),
         (
             K::Template {
@@ -562,7 +562,7 @@ fn all_mcp_binding_kinds_pass_the_complete_offline_admission_boundary() {
             },
             r#"{"name":"by_id","uriTemplate":"file:///{id}"}"#.into(),
             Some(record("id")),
-            ValueType::primitive(P::ResourceSnapshot),
+            ValueType::builtin(P::McpResourceResult),
         ),
         (
             K::Prompt {
@@ -570,7 +570,7 @@ fn all_mcp_binding_kinds_pass_the_complete_offline_admission_boundary() {
             },
             r#"{"name":"prompt","arguments":[{"name":"text","required":true}]}"#.into(),
             Some(record("text")),
-            ValueType::primitive(P::McpPromptResult),
+            ValueType::builtin(P::McpPromptResult),
         ),
     ];
     for (kind, descriptor, input, output) in cases {

@@ -12,6 +12,12 @@ The model depends on neither crate.
 
 - `Identifier`, `ValueType`, `Port`, `Expression` and `PromptTemplate` provide
   immutable normalized declarations with read-only views.
+- `BuiltinType` is the closed set of language-defined scalar and structured
+  built-in types, used through `ValueType::builtin` and `ValueTypeKind::Builtin`.
+  `McpResourceResult` holds returned resource contents plus provenance/request
+  information; `McpPromptResult` holds returned prompt messages and metadata.
+  Their canonical wire names remain `ResourceSnapshot` and `McpPromptResult`;
+  `McpResourceResult` is a Rust name only, not an accepted wire spelling.
 - `Scope`, `Node`, `Edge`, `PortTable` and `Operation` preserve canonical graph
   records, including closed shapes, positive bounds, unique IDs and array order.
 - `ExecutionProfile`, `Library`, `FunctionSignature`, `ServerIdentity` and

@@ -4,9 +4,9 @@ use htlk_cbor::{LimitKind, Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::{Digest, RecordKind, record_digest};
 use htlk_executable::{
-    Edge, EdgeDestination as D, EdgeSource as S, ExecutionLimits, Expression as E,
-    ExpressionContext as EC, ExpressionKind as EK, GraphRecordError as Error, Node, NodeFields,
-    Operation as O, Port, PortTable, PrimitiveType as P, RetryPolicy, ScalarLiteral as L, Scope,
+    BuiltinType as P, Edge, EdgeDestination as D, EdgeSource as S, ExecutionLimits,
+    Expression as E, ExpressionContext as EC, ExpressionKind as EK, GraphRecordError as Error,
+    Node, NodeFields, Operation as O, Port, PortTable, RetryPolicy, ScalarLiteral as L, Scope,
     ScopeContext as C, ScopeFields, ValueReference, ValueType,
 };
 use std::error::Error as _;
@@ -15,12 +15,7 @@ fn table(names: &[&str], ty: P) -> PortTable {
     PortTable::new(
         names
             .iter()
-            .map(|n| {
-                (
-                    n.parse().unwrap(),
-                    Port::new(ValueType::primitive(ty), true),
-                )
-            })
+            .map(|n| (n.parse().unwrap(), Port::new(ValueType::builtin(ty), true)))
             .collect(),
         &Limits::default(),
     )
@@ -149,7 +144,7 @@ fn port_tables_require_identifiers_and_value_types() {
         PortTable::decode(&ports.encode(&l).unwrap(), &l).unwrap(),
         ports
     );
-    let p = Port::new(ValueType::primitive(P::String), false);
+    let p = Port::new(ValueType::builtin(P::String), false);
     let value = Value::Map(
         Map::try_from_entries([(
             "customerId".into(),
@@ -296,7 +291,7 @@ fn primitive_layouts_reserved_names_and_context_free_representation() {
     f.outputs = PortTable::new(
         vec![(
             "value".parse().unwrap(),
-            Port::new(ValueType::primitive(P::String), false),
+            Port::new(ValueType::builtin(P::String), false),
         )],
         &l,
     )

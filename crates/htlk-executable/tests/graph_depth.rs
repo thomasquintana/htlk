@@ -3,9 +3,9 @@
 use htlk_cbor::Limits;
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
-    Edge, EdgeDestination as D, EdgeSource as S, Expression as E, ExpressionContext as EC,
-    GraphRecordError as Error, Node, NodeFields, Operation, Port, PortTable, PrimitiveType as P,
-    ScalarLiteral, Scope, ScopeContext as C, ScopeFields, ValueType,
+    BuiltinType as P, Edge, EdgeDestination as D, EdgeSource as S, Expression as E,
+    ExpressionContext as EC, GraphRecordError as Error, Node, NodeFields, Operation, Port,
+    PortTable, ScalarLiteral, Scope, ScopeContext as C, ScopeFields, ValueType,
 };
 
 fn fields(depth: usize, limits: &Limits) -> ScopeFields {
@@ -16,7 +16,7 @@ fn fields(depth: usize, limits: &Limits) -> ScopeFields {
         PortTable::new(
             vec![(
                 name.parse().unwrap(),
-                Port::new(ValueType::primitive(P::String), true),
+                Port::new(ValueType::builtin(P::String), true),
             )],
             limits,
         )

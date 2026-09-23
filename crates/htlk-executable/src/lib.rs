@@ -40,5 +40,5 @@ pub use metadata::{
 pub use options::{ExecutionLimits, ExecutionOptionsError, RetryPolicy};
 pub use policy::{EvaluatorLimits, PolicyDocument, PolicyError, PolicyFields};
 pub use types::builtin_record_type;
-pub use types::{Port, PrimitiveType, TypeContext, TypeError, ValueType, ValueTypeKind};
+pub use types::{BuiltinType, Port, TypeContext, TypeError, ValueType, ValueTypeKind};
 pub use uri_template::variables as uri_template_variables;

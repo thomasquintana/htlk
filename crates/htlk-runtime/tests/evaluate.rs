@@ -3,10 +3,9 @@ use htlk_cbor::{FiniteFloat, Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
-    BinaryOperator as B, CoreFunction as C, EvaluatorLimits, Expression as E,
+    BinaryOperator as B, BuiltinType as P, CoreFunction as C, EvaluatorLimits, Expression as E,
     ExpressionContext as Context, ExpressionKind as K, FunctionId as F, Identifier, PathStep, Port,
-    PrimitiveType as P, PromptTemplate, ScalarLiteral as S, TemplatePart, ValueReference as R,
-    ValueType,
+    PromptTemplate, ScalarLiteral as S, TemplatePart, ValueReference as R, ValueType,
 };
 use htlk_runtime::{
     EvaluationArgument as A, EvaluationContext, EvaluationError as Err, EvaluationFrame as Frame,
@@ -330,7 +329,7 @@ fn outcomes_and_prompt_rendering_are_native_and_ordered() {
     let template = PromptTemplate::new(
         vec![(
             "n".parse().unwrap(),
-            Port::new(ValueType::primitive(P::Integer), true),
+            Port::new(ValueType::builtin(P::Integer), true),
         )],
         vec![
             TemplatePart::Text("n=".into()),

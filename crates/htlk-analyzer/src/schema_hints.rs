@@ -1,7 +1,7 @@
 //! Conservative representation-family refinement at original schema locations.
 //! These hints do not replace complete native validation or perform schema subtyping.
 use crate::{
-    JsonPointer, NativeSchemaError as Error, PathStep, PrimitiveType as P, SchemaCatalog,
+    BuiltinType as P, JsonPointer, NativeSchemaError as Error, PathStep, SchemaCatalog,
     SchemaResourceError, TypeContext, ValueType as T, ValueTypeKind as K,
 };
 use htlk_cbor::{Limits, Value};
@@ -31,27 +31,27 @@ pub(crate) fn projection_type(
     // An empty present-value family can still describe a legitimately absent
     // optional property (for example properties: {x:false}); preserve its checks.
     if mask == ANY || mask == 0 {
-        return Ok(T::primitive(P::Json));
+        return Ok(T::builtin(P::Json));
     }
     let mut types = Vec::new();
     for (bit, primitive) in [(NULL, P::Null), (BOOL, P::Boolean), (STRING, P::String)] {
         if mask & bit != 0 {
-            types.push(T::primitive(primitive));
+            types.push(T::builtin(primitive));
         }
     }
     if mask & NUMBER != 0 {
-        types.extend([T::primitive(P::Integer), T::primitive(P::Float)]);
+        types.extend([T::builtin(P::Integer), T::builtin(P::Float)]);
     }
     if mask & ARRAY != 0 {
         types.push(T::new(
-            K::List(Box::new(T::primitive(P::Json))),
+            K::List(Box::new(T::builtin(P::Json))),
             TypeContext::Value,
             limits,
         )?);
     }
     if mask & OBJECT != 0 {
         types.push(T::new(
-            K::Map(Box::new(T::primitive(P::Json))),
+            K::Map(Box::new(T::builtin(P::Json))),
             TypeContext::Value,
             limits,
         )?);

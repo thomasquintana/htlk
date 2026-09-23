@@ -21,9 +21,12 @@ pub enum TypeContext {
     Signature,
 }
 
-/// The closed set of canonical HTLK primitive type names.
+/// The closed set of language-defined HTLK built-in types, both scalar and structured.
+///
+/// Structured built-ins remain distinct named types, with record shapes exposed by
+/// [`builtin_record_type`]. Canonical wire spellings are defined by [`Self::as_str`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PrimitiveType {
+pub enum BuiltinType {
     /// Unicode scalar text.
     String,
     /// Signed 64-bit integer.
@@ -40,16 +43,21 @@ pub enum PrimitiveType {
     Json,
     /// A pattern/flags record validated by the pinned regex engine.
     Regex,
-    /// Ordered normalized MCP resource contents.
-    ResourceSnapshot,
-    /// A validated MCP prompt result.
+    /// Returned MCP resource contents plus provenance and request information.
+    /// The canonical wire name is `ResourceSnapshot`.
+    McpResourceResult,
+    /// Returned MCP prompt messages and metadata.
     McpPromptResult,
     /// The runtime's structured error value.
     Error,
 }
 
-impl PrimitiveType {
-    /// Returns the exact canonical spelling, without source aliases.
+impl BuiltinType {
+    /// Returns the exact canonical wire spelling, without source aliases.
+    ///
+    /// Rust names and wire names are separate: [`Self::McpResourceResult`] uses
+    /// `ResourceSnapshot`, while [`Self::McpPromptResult`] uses `McpPromptResult`.
+    /// `McpResourceResult` is not an accepted wire spelling or parsing alias.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::String => "string",
@@ -60,12 +68,13 @@ impl PrimitiveType {
             Self::Bytes => "bytes",
             Self::Json => "json",
             Self::Regex => "regex",
-            Self::ResourceSnapshot => "ResourceSnapshot",
+            Self::McpResourceResult => "ResourceSnapshot",
             Self::McpPromptResult => "McpPromptResult",
             Self::Error => "Error",
         }
     }
 
+    // Accept only the canonical wire spellings from as_str, not Rust variant names.
     fn parse(text: &str) -> Result<Self, TypeError> {
         match text {
             "string" => Ok(Self::String),
@@ -76,7 +85,7 @@ impl PrimitiveType {
             "bytes" => Ok(Self::Bytes),
             "json" => Ok(Self::Json),
             "regex" => Ok(Self::Regex),
-            "ResourceSnapshot" => Ok(Self::ResourceSnapshot),
+            "ResourceSnapshot" => Ok(Self::McpResourceResult),
             "McpPromptResult" => Ok(Self::McpPromptResult),
             "Error" => Ok(Self::Error),
             _ => Err(TypeError::UnknownPrimitive),
@@ -84,7 +93,7 @@ impl PrimitiveType {
     }
 }
 
-impl fmt::Display for PrimitiveType {
+impl fmt::Display for BuiltinType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -97,8 +106,8 @@ impl fmt::Display for PrimitiveType {
 /// ordered by canonical CBOR key bytes. Function parameter order is semantic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ValueTypeKind {
-    /// One of the closed primitive type names.
-    Primitive(PrimitiveType),
+    /// One of the closed set of scalar or structured built-in types.
+    Builtin(BuiltinType),
     /// Homogeneous list.
     List(Box<ValueType>),
     /// Arbitrary string-keyed homogeneous map.
@@ -134,10 +143,10 @@ pub struct ValueType {
 }
 
 impl ValueType {
-    /// Constructs a primitive type, which is valid in either context.
-    pub const fn primitive(primitive: PrimitiveType) -> Self {
+    /// Constructs a named built-in type, which is valid in either context.
+    pub const fn builtin(builtin: BuiltinType) -> Self {
         Self {
-            kind: ValueTypeKind::Primitive(primitive),
+            kind: ValueTypeKind::Builtin(builtin),
         }
     }
 
@@ -220,22 +229,22 @@ pub struct Port {
     required: bool,
 }
 
-/// Returns the canonical record shape of a structured built-in primitive.
+/// Returns the canonical record shape of a structured built-in type.
 ///
 /// # Errors
 /// Returns type construction or codec limits for the expanded declaration.
 pub fn builtin_record_type(
-    primitive: PrimitiveType,
+    builtin: BuiltinType,
     limits: &Limits,
 ) -> Result<Option<ValueType>, TypeError> {
-    use PrimitiveType as P;
+    use BuiltinType as P;
     use ValueTypeKind as K;
     let make = |kind| ValueType::new(kind, TypeContext::Value, limits);
-    let string = || Port::new(ValueType::primitive(P::String), true);
-    let fields = match primitive {
+    let string = || Port::new(ValueType::builtin(P::String), true);
+    let fields = match builtin {
         P::Error => vec![("code".into(), string()), ("message".into(), string())],
         P::Regex => vec![("pattern".into(), string()), ("flags".into(), string())],
-        P::ResourceSnapshot => {
+        P::McpResourceResult => {
             let mut variants = Vec::new();
             for (kind, field, ty) in [("text", "text", P::String), ("bytes", "data", P::Bytes)] {
                 let tag = make(K::Enum(vec![kind.into()]))?;
@@ -244,9 +253,9 @@ pub fn builtin_record_type(
                     ("uri".into(), string()),
                     (
                         "mime_type".into(),
-                        Port::new(ValueType::primitive(P::String), false),
+                        Port::new(ValueType::builtin(P::String), false),
                     ),
-                    (field.into(), Port::new(ValueType::primitive(ty), true)),
+                    (field.into(), Port::new(ValueType::builtin(ty), true)),
                 ]))?);
             }
             let contents = make(K::List(Box::new(make(K::Union(variants))?)))?;
@@ -263,16 +272,16 @@ pub fn builtin_record_type(
                 ("role".into(), Port::new(role, true)),
                 (
                     "content".into(),
-                    Port::new(ValueType::primitive(P::Json), true),
+                    Port::new(ValueType::builtin(P::Json), true),
                 ),
             ]))?;
             let messages = make(K::List(Box::new(message)))?;
-            let meta = make(K::Map(Box::new(ValueType::primitive(P::Json))))?;
+            let meta = make(K::Map(Box::new(ValueType::builtin(P::Json))))?;
             vec![
                 ("messages".into(), Port::new(messages, true)),
                 (
                     "description".into(),
-                    Port::new(ValueType::primitive(P::String), false),
+                    Port::new(ValueType::builtin(P::String), false),
                 ),
                 ("_meta".into(), Port::new(meta, false)),
             ]

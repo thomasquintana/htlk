@@ -1,9 +1,9 @@
 //! Scope-local expression admission, binding coverage, and full wait dependencies.
 use crate::{
-    EdgeDestination, EdgeSource, Expression, ExpressionAnalysis, ExpressionContext as C,
-    ExpressionKind as E, ExpressionTypeEnvironment, FunctionId, Identifier, Library, NativeSchemas,
-    NodeFields, Operation, Port, PrimitiveType, PromptTemplate, ScalarLiteral, Scope, ScopeContext,
-    ScopeFields, TypeContext, ValueReference as R, ValueType, digest::Digest,
+    BuiltinType, EdgeDestination, EdgeSource, Expression, ExpressionAnalysis,
+    ExpressionContext as C, ExpressionKind as E, ExpressionTypeEnvironment, FunctionId, Identifier,
+    Library, NativeSchemas, NodeFields, Operation, Port, PromptTemplate, ScalarLiteral, Scope,
+    ScopeContext, ScopeFields, TypeContext, ValueReference as R, ValueType, digest::Digest,
 };
 use htlk_cbor::Limits;
 use htlk_executable::cbor as htlk_cbor;
@@ -479,7 +479,7 @@ pub fn verify_scope_graph(
         dependencies: BTreeSet::new(),
         current_path: Vec::new(),
     };
-    let boolean = Port::new(ValueType::primitive(PrimitiveType::Boolean), true);
+    let boolean = Port::new(ValueType::builtin(BuiltinType::Boolean), true);
     let guard_context = C::Guard {
         loop_body: role == ScopeContext::LoopBody,
     };

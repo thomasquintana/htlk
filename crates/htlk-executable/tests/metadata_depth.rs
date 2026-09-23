@@ -13,7 +13,7 @@ fn signature(depth: usize, l: &Limits) -> FunctionSignature {
         vec![],
         vec![Port::new(ty, true)],
         Port::new(
-            ValueType::primitive(htlk_executable::PrimitiveType::Boolean),
+            ValueType::builtin(htlk_executable::BuiltinType::Boolean),
             true,
         ),
         l,

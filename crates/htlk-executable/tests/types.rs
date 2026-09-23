@@ -6,12 +6,12 @@ use htlk_cbor::{LimitKind, Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
-    Identifier, Port, PrimitiveType as P, TypeContext as C, TypeError, ValueType as T,
+    BuiltinType as P, Identifier, Port, TypeContext as C, TypeError, ValueType as T,
     ValueTypeKind as K,
 };
 
-fn primitive(p: P) -> T {
-    T::primitive(p)
+fn builtin(p: P) -> T {
+    T::builtin(p)
 }
 fn make(kind: K) -> T {
     T::new(kind, C::Value, &Limits::default()).unwrap()
@@ -41,7 +41,7 @@ fn check_type(ty: &T, context: C) {
 }
 
 #[test]
-fn primitive_names_and_simple_golden_bytes() {
+fn builtin_names_and_simple_golden_bytes() {
     for (p, name) in [
         (P::String, "string"),
         (P::Integer, "integer"),
@@ -51,11 +51,11 @@ fn primitive_names_and_simple_golden_bytes() {
         (P::Bytes, "bytes"),
         (P::Json, "json"),
         (P::Regex, "regex"),
-        (P::ResourceSnapshot, "ResourceSnapshot"),
+        (P::McpResourceResult, "ResourceSnapshot"),
         (P::McpPromptResult, "McpPromptResult"),
         (P::Error, "Error"),
     ] {
-        let ty = primitive(p);
+        let ty = builtin(p);
         assert_eq!(p.as_str(), name);
         assert_eq!(p.to_string(), name);
         assert_eq!(
@@ -65,12 +65,12 @@ fn primitive_names_and_simple_golden_bytes() {
         check_type(&ty, C::Value);
         check_type(&ty, C::Signature);
     }
-    let list = make(K::List(Box::new(primitive(P::String))));
+    let list = make(K::List(Box::new(builtin(P::String))));
     assert_eq!(
         list.encode(C::Value, &Limits::default()).unwrap(),
         b"\x82\x64list\x66string"
     );
-    let map = make(K::Map(Box::new(primitive(P::Integer))));
+    let map = make(K::Map(Box::new(builtin(P::Integer))));
     assert_eq!(
         map.encode(C::Value, &Limits::default()).unwrap(),
         b"\x82\x63map\x67integer"
@@ -78,7 +78,7 @@ fn primitive_names_and_simple_golden_bytes() {
     check_type(&list, C::Value);
     check_type(&map, C::Value);
     assert_eq!(
-        primitive(P::Null)
+        builtin(P::Null)
             .encode(C::Value, &Limits::default())
             .unwrap(),
         b"\x64null"
@@ -87,9 +87,34 @@ fn primitive_names_and_simple_golden_bytes() {
 }
 
 #[test]
+fn mcp_result_rust_names_preserve_canonical_wire_bytes() {
+    let limits = Limits::default();
+    for (builtin, bytes) in [
+        (P::McpResourceResult, b"\x70ResourceSnapshot".as_slice()),
+        (P::McpPromptResult, b"\x6fMcpPromptResult".as_slice()),
+    ] {
+        for context in [C::Value, C::Signature] {
+            let ty = T::builtin(builtin);
+            assert_eq!(ty.encode(context, &limits).unwrap(), bytes);
+            assert_eq!(T::decode(bytes, context, &limits).unwrap(), ty);
+        }
+    }
+    for context in [C::Value, C::Signature] {
+        assert_eq!(
+            T::from_value(&text("McpResourceResult"), context, &limits),
+            Err(TypeError::UnknownPrimitive)
+        );
+        assert_eq!(
+            T::decode(b"\x71McpResourceResult", context, &limits),
+            Err(TypeError::UnknownPrimitive)
+        );
+    }
+}
+
+#[test]
 fn ports_keep_requiredness_separate_from_nullability() {
-    let nullable = make(K::Union(vec![primitive(P::String), primitive(P::Null)]));
-    for ty in [primitive(P::String), nullable] {
+    let nullable = make(K::Union(vec![builtin(P::String), builtin(P::Null)]));
+    for ty in [builtin(P::String), nullable] {
         for required in [true, false] {
             let port = Port::new(ty.clone(), required);
             assert_eq!(port.value_type(), &ty);
@@ -110,7 +135,7 @@ fn ports_keep_requiredness_separate_from_nullability() {
             );
         }
     }
-    let port = Port::new(primitive(P::String), false);
+    let port = Port::new(builtin(P::String), false);
     assert_eq!(
         port.encode(C::Value, &Limits::default()).unwrap(),
         b"\xa2\x64type\x66string\x68required\xf4"
@@ -119,11 +144,11 @@ fn ports_keep_requiredness_separate_from_nullability() {
 
 #[test]
 fn normalization_is_explicit_and_does_not_change_semantic_order() {
-    let nested = make(K::Union(vec![primitive(P::Integer), primitive(P::String)]));
+    let nested = make(K::Union(vec![builtin(P::Integer), builtin(P::String)]));
     let union = make(K::Union(vec![
-        primitive(P::Boolean),
+        builtin(P::Boolean),
         nested,
-        primitive(P::String),
+        builtin(P::String),
     ]));
     assert_eq!(
         union.to_value(C::Value, &Limits::default()).unwrap(),
@@ -153,8 +178,8 @@ fn normalization_is_explicit_and_does_not_change_semantic_order() {
     check_type(&enumeration, C::Value);
     for kind in [
         K::Union(vec![]),
-        K::Union(vec![primitive(P::String)]),
-        K::Union(vec![primitive(P::String), primitive(P::String)]),
+        K::Union(vec![builtin(P::String)]),
+        K::Union(vec![builtin(P::String), builtin(P::String)]),
     ] {
         assert_eq!(
             T::new(kind, C::Value, &Limits::default()).unwrap_err(),
@@ -217,12 +242,9 @@ fn canonical_ingress_never_repairs_types() {
 #[test]
 fn record_fields_are_exact_strings_and_normalized_maps() {
     let fields = vec![
-        ("customerId".into(), Port::new(primitive(P::String), true)),
-        ("".into(), Port::new(primitive(P::Null), false)),
-        (
-            "Content-Type".into(),
-            Port::new(primitive(P::String), false),
-        ),
+        ("customerId".into(), Port::new(builtin(P::String), true)),
+        ("".into(), Port::new(builtin(P::Null), false)),
+        ("Content-Type".into(), Port::new(builtin(P::String), false)),
     ];
     let a = make(K::Record(fields.clone()));
     let b = make(K::Record(fields.into_iter().rev().collect()));
@@ -246,8 +268,8 @@ fn record_fields_are_exact_strings_and_normalized_maps() {
         b"\x82\x66record\xa0"
     );
     let duplicate = K::Record(vec![
-        ("x".into(), Port::new(primitive(P::Null), false)),
-        ("x".into(), Port::new(primitive(P::String), true)),
+        ("x".into(), Port::new(builtin(P::Null), false)),
+        ("x".into(), Port::new(builtin(P::String), true)),
     ]);
     let TypeError::Codec(error) = T::new(duplicate, C::Value, &Limits::default()).unwrap_err()
     else {
@@ -268,7 +290,7 @@ fn signature_restrictions_apply_recursively_and_parameters_keep_order() {
         K::Function {
             parameters: vec![
                 Port::new(variable.clone(), false),
-                Port::new(primitive(P::String), true),
+                Port::new(builtin(P::String), true),
             ],
             returns: Box::new(Port::new(variable.clone(), false)),
         },
@@ -291,7 +313,7 @@ fn signature_restrictions_apply_recursively_and_parameters_keep_order() {
     let zero = T::new(
         K::Function {
             parameters: vec![],
-            returns: Box::new(Port::new(primitive(P::Null), true)),
+            returns: Box::new(Port::new(builtin(P::Null), true)),
         },
         C::Signature,
         &limits,
@@ -444,7 +466,7 @@ fn conversion_and_ingress_honor_wire_limits() {
             &htlk_cbor::ErrorKind::LimitExceeded { limit, maximum }
         );
     }
-    let port = Port::new(primitive(P::String), false);
+    let port = Port::new(builtin(P::String), false);
     let tight = Limits {
         max_document_bytes: 23,
         max_depth: 1,
@@ -484,8 +506,8 @@ fn conversion_and_ingress_honor_wire_limits() {
 
 #[test]
 fn flattened_union_must_fit_its_final_byte_limit() {
-    let a = make(K::Union(vec![primitive(P::String), primitive(P::Boolean)]));
-    let b = make(K::Union(vec![primitive(P::Null), primitive(P::Integer)]));
+    let a = make(K::Union(vec![builtin(P::String), builtin(P::Boolean)]));
+    let b = make(K::Union(vec![builtin(P::Null), builtin(P::Integer)]));
     let flattened = make(K::Union(vec![a.clone(), b.clone()]));
     let maximum = flattened
         .encode(C::Value, &Limits::default())

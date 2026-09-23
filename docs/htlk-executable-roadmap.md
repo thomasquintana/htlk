@@ -67,7 +67,8 @@ and borrows admitted execution plans without per-evaluation plan copying.
 - [x] Connect resource-template expansion to the native implementation and
   verify scalar expansion, Unicode prefix limits, percent encoding, and modifiers.
   RFC 6570 syntax, interfaces, and bounded scalar expansion are implemented.
-- [x] Provide shared validation contracts for normalized `ResourceSnapshot` and
+- [x] Provide shared validation contracts for normalized `McpResourceResult`
+  (canonical wire name `ResourceSnapshot`) and
   `McpPromptResult` values; the runtime still owns live MCP calls and drift handling.
 
 ### 3. Resolve and type-check expressions

@@ -7,7 +7,7 @@ use super::*;
 use crate::digest::ParseDigestError;
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};
 use crate::{
-    ExecutionOptionsError, ExpressionError, ParseIdentifierError, PrimitiveType, TypeContext,
+    BuiltinType, ExecutionOptionsError, ExpressionError, ParseIdentifierError, TypeContext,
     TypeError, ValueTypeKind,
 };
 
@@ -756,7 +756,7 @@ fn validate_node(f: &NodeFields) -> Result<(), GraphRecordError> {
                 p.required()
                     && matches!(
                         p.value_type().kind(),
-                        ValueTypeKind::Primitive(PrimitiveType::Json)
+                        ValueTypeKind::Builtin(BuiltinType::Json)
                     )
             }))
     {

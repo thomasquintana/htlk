@@ -7,7 +7,7 @@ use htlk_executable::{cbor::Limits, *};
 #[test]
 fn unknown_slots_and_unused_parameters_fail_after_model_construction() {
     let limits = Limits::default();
-    let parameter = Port::new(ValueType::primitive(PrimitiveType::String), true);
+    let parameter = Port::new(ValueType::builtin(BuiltinType::String), true);
     for template in [
         PromptTemplate::new(
             vec![],

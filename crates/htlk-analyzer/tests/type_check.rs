@@ -7,16 +7,16 @@ use htlk_cbor::Limits;
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
-    BinaryOperator as B, CoreFunction, Expression as E, ExpressionContext as C,
+    BinaryOperator as B, BuiltinType as P, CoreFunction, Expression as E, ExpressionContext as C,
     ExpressionKind as K, FunctionId, FunctionSignature as Sig, Library, PathStep, Port,
-    PrimitiveType as P, ScalarLiteral as L, TypeContext as TC, ValueReference as R, ValueType as T,
+    ScalarLiteral as L, TypeContext as TC, ValueReference as R, ValueType as T,
     ValueTypeKind as TK,
 };
 fn d() -> Digest {
     Digest::from_bytes([1; 32])
 }
 fn t(p: P) -> T {
-    T::primitive(p)
+    T::builtin(p)
 }
 fn port(p: P) -> Port {
     Port::new(t(p), true)
@@ -265,7 +265,7 @@ fn projections_keep_union_presence_and_schema_obligations() {
     );
     env.references.insert(
         R::Input("snapshot".parse().unwrap()),
-        port(P::ResourceSnapshot),
+        port(P::McpResourceResult),
     );
     let projected = expr(K::Ref {
         source: R::Input("snapshot".parse().unwrap()),

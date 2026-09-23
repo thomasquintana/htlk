@@ -824,10 +824,7 @@ mod tests {
     #[test]
     fn callback_input_budget_failures_preserve_ordered_meter_charges() {
         let limits = Limits::default();
-        let port = Port::new(
-            crate::ValueType::primitive(crate::PrimitiveType::Boolean),
-            true,
-        );
+        let port = Port::new(crate::ValueType::builtin(crate::BuiltinType::Boolean), true);
         let signature = crate::ValueType::new(
             crate::ValueTypeKind::Function {
                 parameters: vec![port.clone()],

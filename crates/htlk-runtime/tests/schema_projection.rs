@@ -321,7 +321,7 @@ fn schema_roots_nested_in_structural_records_keep_their_context() {
 #[test]
 fn known_schema_families_reject_disjoint_boundaries_without_numeric_coercion() {
     use htlk_executable::{
-        Expression, ExpressionContext as C, ExpressionKind as E, Port, PrimitiveType as P,
+        BuiltinType as P, Expression, ExpressionContext as C, ExpressionKind as E, Port,
         TypeContext, ValueReference, ValueType as T, ValueTypeKind as K,
     };
     let (schemas, id) = compile(
@@ -346,7 +346,7 @@ fn known_schema_families_reject_disjoint_boundaries_without_numeric_coercion() {
         &limits,
     )
     .unwrap();
-    let integer = Port::new(T::primitive(P::Integer), true);
+    let integer = Port::new(T::builtin(P::Integer), true);
     assert!(matches!(
         CheckedExpression::with_schemas(
             &expression,
@@ -363,7 +363,7 @@ fn known_schema_families_reject_disjoint_boundaries_without_numeric_coercion() {
             .unwrap();
     assert_eq!(
         checked.analysis().result().value_type(),
-        &T::primitive(P::Boolean)
+        &T::builtin(P::Boolean)
     );
     let expression = Expression::new(
         E::Ref {
@@ -380,7 +380,7 @@ fn known_schema_families_reject_disjoint_boundaries_without_numeric_coercion() {
     let K::Union(types) = checked.analysis().result().value_type().kind() else {
         panic!("schema integer must preserve possible native integer and float representations");
     };
-    assert!(types.contains(&T::primitive(P::Integer)) && types.contains(&T::primitive(P::Float)));
+    assert!(types.contains(&T::builtin(P::Integer)) && types.contains(&T::builtin(P::Float)));
 }
 
 #[test]

@@ -3,12 +3,12 @@
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
-    ExpressionError as Error, Port, PrimitiveType as P, PromptTemplate as T, TemplatePart as Part,
+    BuiltinType as P, ExpressionError as Error, Port, PromptTemplate as T, TemplatePart as Part,
     ValueType,
 };
 
 fn parameter(p: P) -> Port {
-    Port::new(ValueType::primitive(p), true)
+    Port::new(ValueType::builtin(p), true)
 }
 fn value(parameters: Value, parts: Vec<Value>) -> Value {
     Value::Map(

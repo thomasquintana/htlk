@@ -2,8 +2,8 @@
 
 use crate::digest::Digest;
 use crate::{
-    BinaryOperator as B, CoreFunction as C, Expression, ExpressionContext, ExpressionKind as E,
-    FunctionId, FunctionSignature, Identifier, Library, PathStep, Port, PrimitiveType as P,
+    BinaryOperator as B, BuiltinType as P, CoreFunction as C, Expression, ExpressionContext,
+    ExpressionKind as E, FunctionId, FunctionSignature, Identifier, Library, PathStep, Port,
     PromptTemplate, ScalarLiteral as L, TypeContext, ValueReference, ValueType as T,
     ValueTypeKind as K,
 };
@@ -369,7 +369,7 @@ fn analyze_expression(
         checker
             .bindings
             .entry(name)
-            .or_insert_with(|| T::primitive(P::Json));
+            .or_insert_with(|| T::builtin(P::Json));
     }
     for operation in std::mem::take(&mut checker.operations) {
         match operation {
@@ -492,7 +492,7 @@ pub fn check_condition(
         expression,
         context,
         environment,
-        Some(&Port::new(T::primitive(P::Boolean), true)),
+        Some(&Port::new(T::builtin(P::Boolean), true)),
         limits,
     )
 }
@@ -1030,7 +1030,7 @@ impl Checker<'_> {
         path: &[usize],
         depth: usize,
     ) -> Result<Port, ExpressionTypeError> {
-        let required = |p| Port::new(T::primitive(p), true);
+        let required = |p| Port::new(T::builtin(p), true);
         match expr.kind() {
             E::Literal(literal) => Ok(required(match literal {
                 L::String(_) => P::String,
@@ -1076,7 +1076,7 @@ impl Checker<'_> {
                             .to_vec(),
                     ))?
                 } else {
-                    self.union(vec![T::primitive(P::Error), T::primitive(P::Null)])?
+                    self.union(vec![T::builtin(P::Error), T::builtin(P::Null)])?
                 };
                 Ok(Port::new(ty, true))
             }
@@ -1118,8 +1118,8 @@ impl Checker<'_> {
     ) -> Result<Port, ExpressionTypeError> {
         let child = self.child(path, 0)?;
         let port = self.infer(value, &child, depth + 1)?;
-        self.require(&port, T::primitive(P::Boolean), &child)?;
-        Ok(Port::new(T::primitive(P::Boolean), true))
+        self.require(&port, T::builtin(P::Boolean), &child)?;
+        Ok(Port::new(T::builtin(P::Boolean), true))
     }
     #[inline(never)]
     fn infer_binary(
@@ -1135,7 +1135,7 @@ impl Checker<'_> {
         let left = self.infer(left, &lp, depth + 1)?;
         let right = self.infer(right, &rp, depth + 1)?;
         self.binary_constraints(operator, &left, &right, [&lp, &rp], path)?;
-        Ok(Port::new(T::primitive(P::Boolean), true))
+        Ok(Port::new(T::builtin(P::Boolean), true))
     }
     #[inline(never)]
     fn binary_constraints(
@@ -1148,8 +1148,8 @@ impl Checker<'_> {
     ) -> Result<(), ExpressionTypeError> {
         let [lp, rp] = operands;
         if matches!(operator, B::And | B::Or) {
-            self.require(left, T::primitive(P::Boolean), lp)?;
-            self.require(right, T::primitive(P::Boolean), rp)?;
+            self.require(left, T::builtin(P::Boolean), lp)?;
+            self.require(right, T::builtin(P::Boolean), rp)?;
         } else {
             if !left.required() {
                 self.add_check(lp, RuntimeTypeCheckKind::Present)?;
@@ -1223,7 +1223,7 @@ impl Checker<'_> {
         let child = self.child(path, 0)?;
         let actual = self.infer(argument, &child, depth + 1)?;
         if core == C::Present {
-            return Ok(Port::new(T::primitive(P::Boolean), true));
+            return Ok(Port::new(T::builtin(P::Boolean), true));
         }
         let ty = self.copy_type(actual.value_type())?;
         self.account(size_of_val(child.as_slice()))?;
@@ -1232,7 +1232,7 @@ impl Checker<'_> {
         if !actual.required() {
             self.add_check(&child, RuntimeTypeCheckKind::Present)?;
         }
-        Ok(Port::new(T::primitive(P::Integer), true))
+        Ok(Port::new(T::builtin(P::Integer), true))
     }
     #[inline(never)]
     fn infer_render(
@@ -1261,7 +1261,7 @@ impl Checker<'_> {
             let expected = Port::new(self.copy_type(expected.value_type())?, true);
             self.constraint(&actual, &expected, &child, false)?;
         }
-        Ok(Port::new(T::primitive(P::String), true))
+        Ok(Port::new(T::builtin(P::String), true))
     }
     #[inline(never)]
     fn call(
@@ -1656,8 +1656,8 @@ impl Checker<'_> {
                     projected.push(self.copy_type(t)?)
                 }
                 (
-                    K::Primitive(
-                        p @ (P::Error | P::Regex | P::ResourceSnapshot | P::McpPromptResult),
+                    K::Builtin(
+                        p @ (P::Error | P::Regex | P::McpResourceResult | P::McpPromptResult),
                     ),
                     PathStep::Field(key),
                 ) => {
@@ -1672,8 +1672,8 @@ impl Checker<'_> {
                         optional = true;
                     }
                 }
-                (K::Primitive(P::Json), _) => {
-                    projected.push(T::primitive(P::Json));
+                (K::Builtin(P::Json), _) => {
+                    projected.push(T::builtin(P::Json));
                     optional |= *schema_context;
                 }
                 (K::Schema(id), _) => {
@@ -1689,7 +1689,7 @@ impl Checker<'_> {
                         Some(schemas) => schemas
                             .projection_type(id, std::slice::from_ref(step), self.limits)
                             .map_err(|e| ExpressionTypeError::Schema(Box::new(e)))?,
-                        None => T::primitive(P::Json),
+                        None => T::builtin(P::Json),
                     });
                     optional = true;
                 }
@@ -1734,9 +1734,9 @@ impl Checker<'_> {
         )?;
         Ok(Port::new(ty, false))
     }
-    fn builtin_record(&mut self, primitive: P) -> Result<T, ExpressionTypeError> {
+    fn builtin_record(&mut self, builtin: P) -> Result<T, ExpressionTypeError> {
         self.step(0)?;
-        let ty = crate::builtin_record_type(primitive, self.limits)?
+        let ty = crate::builtin_record_type(builtin, self.limits)?
             .ok_or(ExpressionTypeError::InvalidProjection)?;
         self.charge_type(&ty)?;
         Ok(ty)
@@ -1797,15 +1797,13 @@ impl Checker<'_> {
                     Match::Never
                 })
             }
-            (K::Enum(_), K::Primitive(P::String)) => Ok(Match::Yes),
-            (_, K::Primitive(P::Json)) => Ok(match actual.kind() {
-                K::Primitive(P::String | P::Boolean | P::Null | P::Regex | P::McpPromptResult)
+            (K::Enum(_), K::Builtin(P::String)) => Ok(Match::Yes),
+            (_, K::Builtin(P::Json)) => Ok(match actual.kind() {
+                K::Builtin(P::String | P::Boolean | P::Null | P::Regex | P::McpPromptResult)
                 | K::Schema(_) => Match::Yes,
                 _ => Match::Runtime,
             }),
-            (K::Primitive(P::Json), _) | (K::Schema(_), _) | (_, K::Schema(_)) => {
-                Ok(Match::Runtime)
-            }
+            (K::Builtin(P::Json), _) | (K::Schema(_), _) | (_, K::Schema(_)) => Ok(Match::Runtime),
             (K::List(a), K::List(b)) | (K::Map(a), K::Map(b)) => self.compatible(a, b, depth + 1),
             (K::Record(a), K::Record(b)) => {
                 let mut result = Match::Yes;
@@ -1851,8 +1849,8 @@ impl Checker<'_> {
                 }
                 Ok(result)
             }
-            (K::Primitive(P::Error | P::Regex), K::Record(_)) => {
-                let names = if matches!(actual.kind(), K::Primitive(P::Error)) {
+            (K::Builtin(P::Error | P::Regex), K::Record(_)) => {
+                let names = if matches!(actual.kind(), K::Builtin(P::Error)) {
                     ["code", "message"]
                 } else {
                     ["pattern", "flags"]
@@ -1860,16 +1858,16 @@ impl Checker<'_> {
                 let record = self.make(K::Record(
                     names
                         .into_iter()
-                        .map(|n| (n.into(), Port::new(T::primitive(P::String), true)))
+                        .map(|n| (n.into(), Port::new(T::builtin(P::String), true)))
                         .collect(),
                 ))?;
                 self.compatible(&record, expected, depth + 1)
             }
-            (K::Record(_), K::Primitive(P::Error)) => {
+            (K::Record(_), K::Builtin(P::Error)) => {
                 let record = self.make(K::Record(
                     ["code", "message"]
                         .into_iter()
-                        .map(|n| (n.into(), Port::new(T::primitive(P::String), true)))
+                        .map(|n| (n.into(), Port::new(T::builtin(P::String), true)))
                         .collect(),
                 ))?;
                 self.compatible(actual, &record, depth + 1)
@@ -1932,7 +1930,7 @@ const OBJECT: u16 = 128;
 const JSON: u16 = NULL | BOOL | INT | FLOAT | TEXT | ARRAY | OBJECT;
 fn families(ty: &T) -> u16 {
     match ty.kind() {
-        K::Primitive(p) => match p {
+        K::Builtin(p) => match p {
             P::Null => NULL,
             P::Boolean => BOOL,
             P::Integer => INT,
@@ -1974,14 +1972,14 @@ fn comparison(op: B, a: &T, b: &T) -> Match {
 }
 fn length_match(ty: &T) -> Match {
     match ty.kind() {
-        K::Primitive(
-            P::String | P::Bytes | P::Regex | P::Error | P::ResourceSnapshot | P::McpPromptResult,
+        K::Builtin(
+            P::String | P::Bytes | P::Regex | P::Error | P::McpResourceResult | P::McpPromptResult,
         )
         | K::Enum(_)
         | K::List(_)
         | K::Map(_)
         | K::Record(_) => Match::Yes,
-        K::Primitive(P::Json) | K::Schema(_) | K::Var(_) => Match::Runtime,
+        K::Builtin(P::Json) | K::Schema(_) | K::Var(_) => Match::Runtime,
         K::Union(types) => {
             let results: Vec<_> = types.iter().map(length_match).collect();
             if results.iter().all(|r| *r == Match::Yes) {

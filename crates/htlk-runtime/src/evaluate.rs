@@ -2,9 +2,9 @@
 
 use crate::digest::Digest;
 use crate::{
-    BinaryOperator as B, CoreFunction, EvaluatorLimits, Expression, ExpressionContext,
-    ExpressionError, ExpressionKind as E, Identifier, PathStep, PrimitiveType, PromptTemplate,
-    ScalarLiteral as L, TemplatePart, ValueReference, ValueTypeKind,
+    BinaryOperator as B, BuiltinType, CoreFunction, EvaluatorLimits, Expression, ExpressionContext,
+    ExpressionError, ExpressionKind as E, Identifier, PathStep, PromptTemplate, ScalarLiteral as L,
+    TemplatePart, ValueReference, ValueTypeKind,
 };
 use htlk_cbor::{Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
@@ -917,9 +917,9 @@ fn render(
             EvaluationValue::Absent => return Err(EvaluationError::AbsentOperand),
         };
         let text = match (port.value_type().kind(), value) {
-            (ValueTypeKind::Primitive(PrimitiveType::String), Value::Text(s)) => s,
-            (ValueTypeKind::Primitive(PrimitiveType::Integer), Value::Integer(n)) => n.to_string(),
-            (ValueTypeKind::Primitive(PrimitiveType::Boolean), Value::Bool(v)) => v.to_string(),
+            (ValueTypeKind::Builtin(BuiltinType::String), Value::Text(s)) => s,
+            (ValueTypeKind::Builtin(BuiltinType::Integer), Value::Integer(n)) => n.to_string(),
+            (ValueTypeKind::Builtin(BuiltinType::Boolean), Value::Bool(v)) => v.to_string(),
             _ => return Err(EvaluationError::OperandType),
         };
         args.insert(name, text);

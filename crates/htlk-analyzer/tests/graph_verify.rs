@@ -6,10 +6,9 @@ use htlk_analyzer::{
 use htlk_cbor::Limits;
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
-    BinaryOperator, Edge, EdgeDestination as D, EdgeSource as S, Expression,
+    BinaryOperator, BuiltinType as P, Edge, EdgeDestination as D, EdgeSource as S, Expression,
     ExpressionContext as C, ExpressionKind as E, Node, NodeFields, Operation, Port, PortTable,
-    PrimitiveType as P, ScalarLiteral as L, Scope, ScopeContext as Role, ScopeFields,
-    ValueReference, ValueType,
+    ScalarLiteral as L, Scope, ScopeContext as Role, ScopeFields, ValueReference, ValueType,
 };
 fn ports(entries: &[(&str, P, bool)]) -> PortTable {
     PortTable::new(
@@ -18,7 +17,7 @@ fn ports(entries: &[(&str, P, bool)]) -> PortTable {
             .map(|(name, ty, required)| {
                 (
                     name.parse().unwrap(),
-                    Port::new(ValueType::primitive(*ty), *required),
+                    Port::new(ValueType::builtin(*ty), *required),
                 )
             })
             .collect(),
@@ -359,7 +358,7 @@ fn generated_guard_graphs_agree_with_an_independent_cycle_oracle() {
             fields.nodes.push(node(&name, None, guard));
             outputs.push((
                 name.parse().unwrap(),
-                Port::new(ValueType::primitive(P::Boolean), true),
+                Port::new(ValueType::builtin(P::Boolean), true),
             ));
             fields
                 .edges
@@ -439,7 +438,7 @@ fn derived_plan_limits_count_projection_types_not_only_result_types() {
     let mut ty = ValueType::new(
         htlk_executable::ValueTypeKind::Record(vec![(
             "flag".into(),
-            Port::new(ValueType::primitive(P::Boolean), true),
+            Port::new(ValueType::builtin(P::Boolean), true),
         )]),
         htlk_executable::TypeContext::Value,
         &limits,

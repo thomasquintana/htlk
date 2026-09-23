@@ -4,11 +4,11 @@ use htlk_cbor::{LimitKind, Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
-    DocumentFields, EngineIdentity, EvaluatorLimits, ExecutableEnvelope, ExecutionLimits,
-    ExecutionProfile, Expression, ExpressionContext, ExpressionKind, FunctionId, FunctionSignature,
-    JsonDocument, Library, McpBinding, McpBindingKind, McpTransport, Node, NodeFields, Operation,
-    PolicyDocument, PolicyFields, Port, PortTable, PrimitiveType, PromptTemplate, RetryPolicy,
-    ScalarLiteral, Scope, ScopeContext as C, ScopeFields, ServerIdentity, ValueType,
+    BuiltinType, DocumentFields, EngineIdentity, EvaluatorLimits, ExecutableEnvelope,
+    ExecutionLimits, ExecutionProfile, Expression, ExpressionContext, ExpressionKind, FunctionId,
+    FunctionSignature, JsonDocument, Library, McpBinding, McpBindingKind, McpTransport, Node,
+    NodeFields, Operation, PolicyDocument, PolicyFields, Port, PortTable, PromptTemplate,
+    RetryPolicy, ScalarLiteral, Scope, ScopeContext as C, ScopeFields, ServerIdentity, ValueType,
 };
 
 fn d(n: u8) -> Digest {
@@ -76,7 +76,7 @@ fn ports(name: &str, l: &Limits) -> PortTable {
     PortTable::new(
         vec![(
             name.parse().unwrap(),
-            Port::new(ValueType::primitive(PrimitiveType::String), true),
+            Port::new(ValueType::builtin(BuiltinType::String), true),
         )],
         l,
     )
@@ -267,7 +267,7 @@ fn expressions_reach_templates_and_complete_library_manifests() {
     let sig = FunctionSignature::new(
         vec![],
         vec![],
-        Port::new(ValueType::primitive(PrimitiveType::String), true),
+        Port::new(ValueType::builtin(BuiltinType::String), true),
         &l,
     )
     .unwrap();
@@ -678,13 +678,13 @@ fn select_binding(f: &mut DocumentFields, binding: McpBinding, l: &Limits) {
         n.inputs = schema_ports("arguments", *input_schema, l);
         n.outputs = schema_ports("value", *output_schema, l);
     } else if matches!(binding.kind(), McpBindingKind::Resource { .. }) {
-        n.outputs = primitive_ports("value", PrimitiveType::ResourceSnapshot, l);
+        n.outputs = builtin_ports("value", BuiltinType::McpResourceResult, l);
     } else if matches!(binding.kind(), McpBindingKind::Prompt { .. }) {
         n.inputs = prompt_ports(&[], l);
-        n.outputs = primitive_ports("value", PrimitiveType::McpPromptResult, l);
+        n.outputs = builtin_ports("value", BuiltinType::McpPromptResult, l);
     } else if matches!(binding.kind(), McpBindingKind::Template { .. }) {
         n.inputs = prompt_ports(&[], l);
-        n.outputs = primitive_ports("value", PrimitiveType::ResourceSnapshot, l);
+        n.outputs = builtin_ports("value", BuiltinType::McpResourceResult, l);
     } else {
         n.outputs = ports("value", l);
     }
@@ -1010,7 +1010,7 @@ fn schema_root_checks_cover_unused_functions_in_reached_manifests() {
     let used = FunctionSignature::new(
         vec![],
         vec![],
-        Port::new(ValueType::primitive(PrimitiveType::String), true),
+        Port::new(ValueType::builtin(BuiltinType::String), true),
         &l,
     )
     .unwrap();
@@ -1047,11 +1047,11 @@ fn schema_root_checks_cover_unused_functions_in_reached_manifests() {
     expect_integrity_failure(f, Error::UnreachedSchemaType, &l);
 }
 
-fn primitive_ports(name: &str, ty: PrimitiveType, l: &Limits) -> PortTable {
+fn builtin_ports(name: &str, ty: BuiltinType, l: &Limits) -> PortTable {
     PortTable::new(
         vec![(
             name.parse().unwrap(),
-            Port::new(ValueType::primitive(ty), true),
+            Port::new(ValueType::builtin(ty), true),
         )],
         l,
     )
@@ -1063,7 +1063,7 @@ fn prompt_ports(fields: &[(&str, bool)], l: &Limits) -> PortTable {
         .map(|(n, r)| {
             (
                 n.to_string(),
-                Port::new(ValueType::primitive(PrimitiveType::String), *r),
+                Port::new(ValueType::builtin(BuiltinType::String), *r),
             )
         })
         .collect();
@@ -1129,7 +1129,7 @@ fn prompts_match_exact_external_argument_names_and_presence() {
     let mut bad = f;
     set_prompt_inputs(
         &mut bad,
-        primitive_ports("arguments", PrimitiveType::Json, &l),
+        builtin_ports("arguments", BuiltinType::Json, &l),
         &l,
     );
     expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
@@ -1204,7 +1204,7 @@ fn fixed_resource_and_prompt_outputs_have_exact_protocol_types() {
             let mut bad = f.clone();
             set_prompt_inputs(
                 &mut bad,
-                primitive_ports("arguments", PrimitiveType::Json, &l),
+                builtin_ports("arguments", BuiltinType::Json, &l),
                 &l,
             );
             expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
@@ -1277,7 +1277,7 @@ fn resource_templates_require_exact_distinct_variables_with_level_four_syntax() 
     let mut bad = f.clone();
     set_prompt_inputs(
         &mut bad,
-        primitive_ports("arguments", PrimitiveType::Json, &l),
+        builtin_ports("arguments", BuiltinType::Json, &l),
         &l,
     );
     expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);

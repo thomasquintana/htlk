@@ -4,10 +4,10 @@ use htlk_cbor::{LimitKind, Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::{Digest, RecordKind, record_digest};
 use htlk_executable::{
-    CORE_VERSION, EngineIdentity as Engine, ExecutionProfile as Profile,
+    BuiltinType as P, CORE_VERSION, EngineIdentity as Engine, ExecutionProfile as Profile,
     FunctionSignature as Signature, Library, MCP_PROTOCOL_VERSION, McpBinding as Binding,
     McpBindingKind as Kind, McpTransport as Transport, MetadataError as Error, Port,
-    PrimitiveType as P, TypeContext as C, ValueType as T, ValueTypeKind as K,
+    TypeContext as C, ValueType as T, ValueTypeKind as K,
 };
 use std::error::Error as _;
 
@@ -15,7 +15,7 @@ fn d(n: u8) -> Digest {
     Digest::from_bytes([n; 32])
 }
 fn port(p: P) -> Port {
-    Port::new(T::primitive(p), true)
+    Port::new(T::builtin(p), true)
 }
 fn engine() -> Engine {
     Engine::new("x".into(), "v".into(), "d".into(), d(0), &Limits::default()).unwrap()
