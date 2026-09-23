@@ -65,6 +65,45 @@ fn invalid_names_report_precise_spelling_errors() {
 }
 
 #[test]
+fn error_display_explains_each_failure() {
+    use ParseIdentifierError::*;
+
+    for (error, expected) in [
+        (Empty, "Identifier must not be empty."),
+        (
+            InvalidStart,
+            "Identifier must start with a lowercase ASCII letter.",
+        ),
+        (
+            InvalidCharacter { offset: 7 },
+            "Invalid identifier character at byte 7; only lowercase ASCII letters, digits, and underscores are allowed.",
+        ),
+        (
+            InvalidSeparator { offset: 2 },
+            "Invalid underscore at byte 2; identifier underscores cannot be consecutive or appear at the end.",
+        ),
+        (
+            AllocationFailed,
+            "Could not allocate memory to store the identifier.",
+        ),
+    ] {
+        assert_eq!(error.to_string(), expected, "{error:?}");
+    }
+}
+
+#[test]
+fn repeated_and_trailing_underscores_share_an_explanatory_message() {
+    for text in ["a__b", "ab_"] {
+        let error = text.parse::<Identifier>().unwrap_err();
+        assert_eq!(error, ParseIdentifierError::InvalidSeparator { offset: 2 });
+        assert_eq!(
+            error.to_string(),
+            "Invalid underscore at byte 2; identifier underscores cannot be consecutive or appear at the end."
+        );
+    }
+}
+
+#[test]
 fn keyword_and_reserved_root_rules_are_contextual() {
     // CDDL's lexical rule does not prohibit these. Source/node/declaration
     // validators will apply reserved-root restrictions in their own contexts.

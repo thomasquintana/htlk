@@ -145,17 +145,25 @@ pub enum ParseIdentifierError {
 impl fmt::Display for ParseIdentifierError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Empty => f.write_str("identifier must not be empty"),
+            Self::Empty => f.write_str("Identifier must not be empty."),
             Self::InvalidStart => {
-                f.write_str("identifier must start with an ASCII lowercase letter")
+                f.write_str("Identifier must start with a lowercase ASCII letter.")
             }
             Self::InvalidCharacter { offset } => {
-                write!(f, "invalid identifier character at byte {offset}")
+                write!(
+                    f,
+                    "Invalid identifier character at byte {offset}; only lowercase ASCII letters, digits, and underscores are allowed."
+                )
             }
             Self::InvalidSeparator { offset } => {
-                write!(f, "invalid identifier underscore at byte {offset}")
+                write!(
+                    f,
+                    "Invalid underscore at byte {offset}; identifier underscores cannot be consecutive or appear at the end."
+                )
             }
-            Self::AllocationFailed => f.write_str("identifier allocation failed"),
+            Self::AllocationFailed => {
+                f.write_str("Could not allocate memory to store the identifier.")
+            }
         }
     }
 }

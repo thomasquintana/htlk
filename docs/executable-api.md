@@ -150,6 +150,9 @@ characters, invalid underscore placement, and allocation failure. Character and
 separator errors carry zero-based byte offsets. Checks proceed left-to-right,
 then reject a trailing underscore. Errors contain no submitted name. Callers
 apply source/codec size ceilings; the lexical rule has no separate length cap.
+Display messages explain the violated naming rule or allocation failure for
+human-facing diagnostics. Consumers should match error variants rather than
+parse Display text.
 
 Identifier validity is not node/declaration validity. Reserved roots such as
 `inputs` and contextual keywords such as `graph` are lexically valid; consumers

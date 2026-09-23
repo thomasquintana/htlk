@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Identifier errors now explain naming rules and allocation failure in clear
+  prose while preserving structured variants, byte offsets, and input privacy.
 - CBOR errors now provide human-facing prose, specific canonicality explanations,
   and distinct byte/depth limit messages while preserving structured categories,
   offsets, and category-and-offset equality without exposing input contents.
