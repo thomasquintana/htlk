@@ -79,7 +79,6 @@ fn call(name: &str, arguments: Vec<Expression>) -> Expression {
             },
             arguments,
         },
-        C::Eval,
         &Limits::default(),
     )
     .unwrap()
@@ -147,7 +146,6 @@ fn invalid_arguments_precede_dispatch_and_results_are_checked_afterward() {
             source: source.clone(),
             path: vec![],
         },
-        C::Eval,
         &codec,
     )
     .unwrap();
@@ -259,7 +257,6 @@ fn optional_values_and_instantiated_callback_signatures_reach_native_code() {
             source: source.clone(),
             path: vec![],
         },
-        C::Eval,
         &codec,
     )
     .unwrap();
@@ -268,7 +265,6 @@ fn optional_values_and_instantiated_callback_signatures_reach_native_code() {
             library: id(),
             name: "identity".parse().unwrap(),
         },
-        C::Eval,
         &codec,
     )
     .unwrap();
@@ -315,7 +311,6 @@ fn generic_boundaries_are_fresh_and_sorted_by_call_site() {
                 vec![Expression::literal(ScalarLiteral::String("text".into()))],
             ),
         ]),
-        C::Eval,
         &Limits::default(),
     )
     .unwrap();
@@ -425,7 +420,6 @@ fn callback_fixture() -> (ExpressionTypeEnvironment, Expression) {
             library: id(),
             name: "callback".parse().unwrap(),
         },
-        C::Eval,
         &Limits::default(),
     )
     .unwrap();
@@ -787,7 +781,6 @@ fn higher_fixture() -> (ExpressionTypeEnvironment, Expression) {
                     library: id(),
                     name: name.parse().unwrap(),
                 },
-                C::Eval,
                 &limits,
             )
             .unwrap()

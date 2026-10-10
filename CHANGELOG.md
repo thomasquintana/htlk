@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Remove the unused `ExpressionContext` argument from `Expression::new`,
+  `to_value`, `from_value`, `encode`, and `decode` (an intentional Rust API break).
+  Construction normalizes representation and canonical ingress validates it;
+  contextual legality remains an analyzer responsibility at actual use sites.
+  Expression/template diagnostics now explain schema, canonicality, semantic,
+  and resource failures in user-facing prose while preserving error categories
+  and source chains. Regenerate the native fixture's source-derived implementation
+  identities and envelope fingerprint; unchanged expression data retains its
+  canonical bytes and content digests.
+
 - Allow native float prompt-template parameters alongside strings, integers, and
   booleans, with strict float argument checking and deterministic JCS/ECMAScript
   shortest round-trip rendering across the full finite binary64 range. Rendering

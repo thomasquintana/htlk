@@ -303,10 +303,10 @@ frame.bind(ValueReference::Input("answer".parse()?), vec![],
     Ok(EvaluationValue::Present(Value::Null)), &codec)?;
 let input = Expression::new(ExpressionKind::Ref {
     source: ValueReference::Input("answer".parse()?), path: vec![],
-}, ExpressionContext::Preconditions, &codec)?;
+}, &codec)?;
 let condition = Expression::new(ExpressionKind::Call {
     function: FunctionId::Core(CoreFunction::Present), arguments: vec![input],
-}, ExpressionContext::Preconditions, &codec)?;
+}, &codec)?;
 assert_eq!(evaluate_condition(&condition, ExpressionContext::Preconditions,
     &frame, &codec, &policy)?.value, ConditionValue::Ready(true));
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -358,7 +358,7 @@ let mut environment = ExpressionTypeEnvironment::default();
 environment.references.insert(source.clone(),
     Port::new(ValueType::builtin(BuiltinType::Boolean), true));
 let expression = Expression::new(ExpressionKind::Ref { source, path: vec![] },
-    ExpressionContext::Preconditions, &limits)?;
+    &limits)?;
 let analysis = check_condition(&expression, ExpressionContext::Preconditions,
     &environment, &limits)?;
 assert_eq!(analysis.result().value_type(), &ValueType::builtin(BuiltinType::Boolean));
@@ -480,24 +480,23 @@ application values.
 
 ```rust
 use htlk_executable::cbor::Limits;
-use htlk_executable::{BinaryOperator, CoreFunction, Expression, ExpressionContext,
+use htlk_executable::{BinaryOperator, CoreFunction, Expression,
     ExpressionKind, FunctionId, ScalarLiteral, ValueReference};
 
 let limits = Limits::default();
-let context = ExpressionContext::Preconditions;
 let question = Expression::new(ExpressionKind::Ref {
     source: ValueReference::Input("question".parse()?), path: vec![],
-}, context, &limits)?;
+}, &limits)?;
 let length = Expression::new(ExpressionKind::Call {
     function: FunctionId::Core(CoreFunction::Length), arguments: vec![question],
-}, context, &limits)?;
+}, &limits)?;
 let condition = Expression::new(ExpressionKind::Binary {
     operator: BinaryOperator::Gt,
     left: Box::new(length),
     right: Box::new(Expression::literal(ScalarLiteral::Integer(0))),
-}, context, &limits)?;
-let bytes = condition.encode(context, &limits)?;
-assert_eq!(Expression::decode(&bytes, context, &limits)?, condition);
+}, &limits)?;
+let bytes = condition.encode(&limits)?;
+assert_eq!(Expression::decode(&bytes, &limits)?, condition);
 # Ok::<(), htlk_executable::ExpressionError>(())
 ```
 
@@ -554,6 +553,15 @@ sorts record-expression fields by decoded UTF-8 keys, and normalizes unique rege
 flags to ims order. Empty get paths, duplicate fields, and unknown/repeated regex
 flags fail. `from_value` and `decode` require these canonical forms already.
 
+The representation-only signatures are `Expression::new(kind, limits)`,
+`expression.to_value(limits)`, `Expression::from_value(value, limits)`,
+`expression.encode(limits)`, and `Expression::decode(bytes, limits)`.
+Construction normalizes a representable expression; canonical ingress checks
+representation without repairing it. Neither operation resolves names, infers
+types, evaluates expressions, or establishes contextual legality. The analyzer
+checks expressions at their actual use sites; analyzer and runtime APIs retain
+the `ExpressionContext` parameters needed for these checks.
+
 Record-expression fields are an ordered array of pairs, not a CBOR map: their
 evaluation order is UTF-8 key order. Render arguments are a wire map, with model
 iteration exposed in UTF-8 name order independently of encoded map-key ordering.
@@ -596,7 +604,7 @@ slot charges the actual emitted bytes through the normal output/work limits.
 
 ```rust
 use htlk_executable::cbor::Limits;
-use htlk_executable::{Expression, ExpressionContext, ExpressionKind, Port,
+use htlk_executable::{Expression, ExpressionKind, Port,
     BuiltinType, PromptTemplate, ScalarLiteral, TemplatePart, ValueType};
 
 let limits = Limits::default();
@@ -610,7 +618,7 @@ assert_eq!(template.digest(&limits)?.to_string(),
 let render = Expression::new(ExpressionKind::Render {
     template: template.digest(&limits)?,
     arguments: vec![("name".parse()?, Expression::literal(ScalarLiteral::String("Ada".into())))],
-}, ExpressionContext::Eval, &limits)?;
+}, &limits)?;
 assert!(matches!(render.kind(), ExpressionKind::Render { .. }));
 # Ok::<(), htlk_executable::ExpressionError>(())
 ```
@@ -632,9 +640,15 @@ fit collection/string ceilings. Traversal and normalization temporaries are
 bounded by validated input, with fallible large reservations; the counters are
 not exact process-heap measurements or runtime evaluator fuel.
 
-`ExpressionError` covers both expressions and templates, preserving codec,
-identifier, digest, and type causes. It reports static schema/context descriptions
-rather than retaining submitted data. Codec failures preserve byte offsets; later
+`ExpressionError` covers representation/conversion failures for both expressions
+and templates, plus selected semantic failures returned by analyzer checks:
+`ForbiddenReference` describes contextual permission, and
+`TemplateParameterMismatch` describes declaration/slot coverage. It preserves
+codec, identifier, digest, and type source chains. Limit failures can be direct
+`LimitExceeded` conversion errors, wrapped `Codec` errors, or nested through a
+template parameter's `TypeError`. Display explains schema/canonicality rules and
+configured byte/depth maxima without submitted names, patterns, or values.
+Codec failures preserve byte offsets; later
 graph/source consumers can attach their own locations to higher-level failures.
 Expression storage is privately boxed and recursive dispatch delegates branch
 temporaries to small helpers. Subprocess tests on 512 KiB and 2 MiB stacks cover
@@ -758,7 +772,7 @@ not apply authored defaults to incomplete records.
 ```rust
 use htlk_executable::cbor::Limits;
 use htlk_executable::{Edge, EdgeDestination, EdgeSource, Expression,
-    ExpressionContext, ExpressionKind, Node, NodeFields, Operation, Port,
+    ExpressionKind, Node, NodeFields, Operation, Port,
     PortTable, BuiltinType, Scope, ScopeContext, ScopeFields, ValueReference,
     ValueType};
 
@@ -767,7 +781,7 @@ let string_port = Port::new(ValueType::builtin(BuiltinType::String), true);
 let inputs = PortTable::new(vec![("question".parse()?, string_port.clone())], &limits)?;
 let expression = Expression::new(ExpressionKind::Ref {
     source: ValueReference::Input("question".parse()?), path: vec![],
-}, ExpressionContext::Eval, &limits)?;
+}, &limits)?;
 let mut fields = NodeFields::new("echo".parse()?, Operation::Eval(expression));
 fields.inputs = inputs.clone();
 fields.outputs = PortTable::new(vec![("value".parse()?, string_port.clone())], &limits)?;

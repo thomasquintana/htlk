@@ -2,9 +2,7 @@
 
 use htlk_cbor::{Limits, Value};
 use htlk_executable::cbor as htlk_cbor;
-use htlk_executable::{
-    Expression as E, ExpressionContext as C, ExpressionError as Error, ExpressionKind as K,
-};
+use htlk_executable::{Expression as E, ExpressionError as Error, ExpressionKind as K};
 
 fn not_bytes(depth: usize) -> Vec<u8> {
     let mut bytes = b"\x82\x63not".repeat(depth);
@@ -26,14 +24,14 @@ fn exercise() {
     for n in [0, 63, 64, 126, 127] {
         eprintln!("expression depth {n}: decode");
         let bytes = not_bytes(n);
-        let e = E::decode(&bytes, C::Eval, &limits).unwrap();
+        let e = E::decode(&bytes, &limits).unwrap();
         eprintln!("expression depth {n}: clone/debug");
         assert_eq!(e.clone(), e);
         assert!(!format!("{e:?}").is_empty());
         eprintln!("expression depth {n}: encode");
-        assert_eq!(e.encode(C::Eval, &limits).unwrap(), bytes);
+        assert_eq!(e.encode(&limits).unwrap(), bytes);
         eprintln!("expression depth {n}: normalize");
-        assert_eq!(E::new(e.kind().clone(), C::Eval, &limits).unwrap(), e);
+        assert_eq!(E::new(e.kind().clone(), &limits).unwrap(), e);
     }
     eprintln!("over-depth and cleanup");
     let leaf = Value::Array(vec![Value::Text("literal".into()), Value::Bool(true)]);
@@ -55,20 +53,20 @@ fn exercise() {
     for value in [binary, call] {
         eprintln!("deep binary/call: decode and encode");
         let bytes = htlk_cbor::encode(&value, &limits).unwrap();
-        let expr = E::decode(&bytes, C::Eval, &limits).unwrap();
+        let expr = E::decode(&bytes, &limits).unwrap();
         eprintln!("deep binary/call: encode");
-        assert_eq!(expr.encode(C::Eval, &limits).unwrap(), bytes);
+        assert_eq!(expr.encode(&limits).unwrap(), bytes);
         eprintln!("deep binary/call: normalize");
-        assert_eq!(E::new(expr.kind().clone(), C::Eval, &limits).unwrap(), expr);
+        assert_eq!(E::new(expr.kind().clone(), &limits).unwrap(), expr);
     }
     assert!(matches!(
-        E::decode(&not_bytes(128), C::Eval, &limits),
+        E::decode(&not_bytes(128), &limits),
         Err(Error::Codec(_))
     ));
-    let deepest = E::decode(&not_bytes(127), C::Eval, &limits).unwrap();
+    let deepest = E::decode(&not_bytes(127), &limits).unwrap();
     eprintln!("over-depth constructor");
     assert!(matches!(
-        E::new(K::Not(Box::new(deepest)), C::Eval, &limits),
+        E::new(K::Not(Box::new(deepest)), &limits),
         Err(Error::LimitExceeded { .. })
     ));
     // Each active binary parser retains a completed deep left subtree before
@@ -85,14 +83,14 @@ fn exercise() {
     let bytes = htlk_cbor::encode(&value, &limits).unwrap();
     eprintln!("partial-tree decode");
     assert_eq!(
-        E::decode(&bytes, C::Eval, &limits).unwrap_err(),
+        E::decode(&bytes, &limits).unwrap_err(),
         Error::UnknownConstructor
     );
     eprintln!("trailing-data cleanup");
     let mut trailing = not_bytes(127);
     trailing.push(0);
     assert!(matches!(
-        E::decode(&trailing, C::Eval, &limits),
+        E::decode(&trailing, &limits),
         Err(Error::Codec(_))
     ));
 }

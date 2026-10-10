@@ -5,9 +5,9 @@ use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     BuiltinType as P, CanonicalDocument, DocumentFields, Edge, EdgeDestination as D,
     EdgeSource as S, EvaluatorLimits, ExecutableEnvelope, ExecutionLimits, ExecutionProfile,
-    Expression, ExpressionContext as C, ExpressionKind as E, Node, NodeFields, Operation,
-    PolicyDocument, PolicyFields, Port, PortTable, ScalarLiteral as L, Scope, ScopeContext as Role,
-    ScopeFields, ValueReference, ValueType, digest::Digest,
+    Expression, ExpressionKind as E, Node, NodeFields, Operation, PolicyDocument, PolicyFields,
+    Port, PortTable, ScalarLiteral as L, Scope, ScopeContext as Role, ScopeFields, ValueReference,
+    ValueType, digest::Digest,
 };
 use htlk_runtime::{
     EvaluationError, EvaluationFrame, EvaluationValue, ExecutableVerificationError as Error,
@@ -70,7 +70,6 @@ fn scope() -> Scope {
                     source: ValueReference::Input("input".parse().unwrap()),
                     path: vec![],
                 },
-                C::Eval,
                 &limits,
             )
             .unwrap(),
@@ -400,7 +399,6 @@ fn waits_and_loop_boundaries_are_admitted_and_until_uses_the_body_context() {
             source: ValueReference::Next("state".parse().unwrap()),
             path: vec![],
         },
-        C::LoopUntil,
         &limits,
     )
     .unwrap();
@@ -683,7 +681,7 @@ fn composed_verification_and_execution_on_controlled_stacks() {
                 let profile = registry.link_policy(&policy).unwrap();
                 let mut encoded = b"\x82\x63not".repeat(100);
                 encoded.extend_from_slice(b"\x82\x67literal\xf5");
-                let expression = Expression::decode(&encoded, C::Eval, &limits).unwrap();
+                let expression = Expression::decode(&encoded, &limits).unwrap();
                 let mut n =
                     NodeFields::new("compute".parse().unwrap(), Operation::Eval(expression));
                 n.outputs = ports(&["value"]);

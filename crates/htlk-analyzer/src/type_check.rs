@@ -327,7 +327,7 @@ fn analyze_expression(
     limits: &Limits,
     diagnostic: Option<&mut Option<Vec<usize>>>,
 ) -> Result<ExpressionAnalysis, ExpressionTypeError> {
-    expression.to_value(context, limits)?;
+    expression.to_value(limits)?;
     validate_environment(environment, limits)?;
     if let Some(port) = expected {
         port.to_value(TypeContext::Value, limits)?;

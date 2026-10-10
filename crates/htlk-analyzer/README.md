@@ -21,7 +21,7 @@ let limits = Limits::default();
 let source = ValueReference::Input("allowed".parse()?);
 let expression = Expression::new(ExpressionKind::Ref {
     source: source.clone(), path: vec![],
-}, ExpressionContext::Preconditions, &limits)?;
+}, &limits)?;
 let mut declarations = ExpressionTypeEnvironment::default();
 declarations.references.insert(source,
     Port::new(ValueType::builtin(BuiltinType::Boolean), true));

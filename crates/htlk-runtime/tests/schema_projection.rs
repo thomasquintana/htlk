@@ -173,7 +173,6 @@ fn checked_expression_pins_schemas_and_preserves_nested_optional_results() {
                 PathStep::Field("optional".into()),
             ],
         },
-        C::Eval,
         &limits,
     )
     .unwrap();
@@ -342,7 +341,6 @@ fn known_schema_families_reject_disjoint_boundaries_without_numeric_coercion() {
             source: source.clone(),
             path: vec![PathStep::Field("flag".into())],
         },
-        C::Eval,
         &limits,
     )
     .unwrap();
@@ -370,7 +368,6 @@ fn known_schema_families_reject_disjoint_boundaries_without_numeric_coercion() {
             source,
             path: vec![PathStep::Field("number".into())],
         },
-        C::Eval,
         &limits,
     )
     .unwrap();
@@ -459,7 +456,6 @@ fn schema_context_survives_record_materialization_without_reinvoking_native_func
             },
             arguments: vec![],
         },
-        C::Eval,
         &limits,
     )
     .unwrap();
@@ -468,12 +464,10 @@ fn schema_context_survives_record_materialization_without_reinvoking_native_func
             value: Box::new(call),
             path: vec![PathStep::Field("child".into())],
         },
-        C::Eval,
         &limits,
     )
     .unwrap();
-    let record =
-        Expression::new(E::Record(vec![("wrapped".into(), part)]), C::Eval, &limits).unwrap();
+    let record = Expression::new(E::Record(vec![("wrapped".into(), part)]), &limits).unwrap();
     let expression = Expression::new(
         E::Get {
             value: Box::new(record),
@@ -482,7 +476,6 @@ fn schema_context_survives_record_materialization_without_reinvoking_native_func
                 PathStep::Field("optional".into()),
             ],
         },
-        C::Eval,
         &limits,
     )
     .unwrap();

@@ -183,7 +183,6 @@ impl EvaluationFrame {
                 source: reference,
                 path,
             },
-            ExpressionContext::LoopUntil,
             limits,
         )?;
         let E::Ref { source, path } = expr.kind() else {

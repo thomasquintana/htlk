@@ -4,13 +4,12 @@ use htlk_cbor::{FiniteFloat, LimitKind, Limits, Map, Value};
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
-    BinaryOperator as B, CoreFunction as F, Expression as E, ExpressionContext as C,
-    ExpressionError as Error, ExpressionKind as K, FunctionId, PathStep as P, ScalarLiteral as S,
-    ValueReference as R,
+    BinaryOperator as B, CoreFunction as F, Expression as E, ExpressionError as Error,
+    ExpressionKind as K, FunctionId, PathStep as P, ScalarLiteral as S, ValueReference as R,
 };
 
 fn make(kind: K) -> E {
-    E::new(kind, C::LoopUntil, &Limits::default()).unwrap()
+    E::new(kind, &Limits::default()).unwrap()
 }
 fn literal(n: i64) -> E {
     E::literal(S::Integer(n))
@@ -22,17 +21,17 @@ fn array(v: Vec<Value>) -> Value {
     Value::Array(v)
 }
 fn wire(e: &E) -> Value {
-    e.to_value(C::LoopUntil, &Limits::default()).unwrap()
+    e.to_value(&Limits::default()).unwrap()
 }
 fn read(v: &Value) -> Result<E, Error> {
-    E::from_value(v, C::LoopUntil, &Limits::default())
+    E::from_value(v, &Limits::default())
 }
-fn round_trip(e: &E, context: C) {
+fn round_trip(e: &E) {
     let limits = Limits::default();
-    let bytes = e.encode(context, &limits).unwrap();
-    assert_eq!(E::decode(&bytes, context, &limits).unwrap(), *e);
+    let bytes = e.encode(&limits).unwrap();
+    assert_eq!(E::decode(&bytes, &limits).unwrap(), *e);
     assert_eq!(
-        E::from_value(&e.to_value(context, &limits).unwrap(), context, &limits).unwrap(),
+        E::from_value(&e.to_value(&limits).unwrap(), &limits).unwrap(),
         *e
     );
 }
@@ -51,29 +50,26 @@ fn scalar_literals_have_exact_native_encodings() {
         ),
     ] {
         let e = E::literal(value);
-        assert_eq!(e.encode(C::Eval, &Limits::default()).unwrap(), expected);
-        round_trip(&e, C::Eval);
+        assert_eq!(e.encode(&Limits::default()).unwrap(), expected);
+        round_trip(&e);
     }
     for value in [i64::MIN, i64::MAX] {
-        round_trip(&literal(value), C::Eval);
+        round_trip(&literal(value));
     }
     for value in [0.0, -0.0, 100000.0, 1.1, f64::from_bits(1), f64::MAX] {
         let e = E::literal(S::Float(FiniteFloat::new(value).unwrap()));
-        round_trip(&e, C::Eval);
-        let bytes = e.encode(C::Eval, &Limits::default()).unwrap();
+        round_trip(&e);
+        let bytes = e.encode(&Limits::default()).unwrap();
         let limits = Limits {
             max_document_bytes: bytes.len(),
             ..Limits::default()
         };
-        assert!(e.encode(C::Eval, &limits).is_ok());
+        assert!(e.encode(&limits).is_ok());
         assert!(matches!(
-            e.to_value(
-                C::Eval,
-                &Limits {
-                    max_document_bytes: bytes.len() - 1,
-                    ..limits
-                }
-            ),
+            e.to_value(&Limits {
+                max_document_bytes: bytes.len() - 1,
+                ..limits
+            }),
             Err(Error::LimitExceeded {
                 limit: LimitKind::DocumentBytes,
                 ..
@@ -91,7 +87,7 @@ fn references_and_get_paths_normalize_without_evaluation() {
         path: vec![],
     });
     assert_eq!(
-        reference.encode(C::Eval, &Limits::default()).unwrap(),
+        reference.encode(&Limits::default()).unwrap(),
         b"\x83\x63ref\x82\x65input\x68question\x80"
     );
     let selected = make(K::Get {
@@ -113,14 +109,14 @@ fn references_and_get_paths_normalize_without_evaluation() {
             P::Field("".into())
         ]
     );
-    round_trip(&selected, C::Eval);
+    round_trip(&selected);
     let error = make(K::Error("worker".parse().unwrap()));
     let get = make(K::Get {
         value: Box::new(error),
         path: vec![P::Field("code".into())],
     });
     assert_eq!(
-        get.encode(C::LoopUntil, &Limits::default()).unwrap(),
+        get.encode(&Limits::default()).unwrap(),
         b"\x83\x63get\x82\x65error\x66worker\x81\x64code"
     );
     let nested = make(K::Get {
@@ -144,7 +140,6 @@ fn references_and_get_paths_normalize_without_evaluation() {
                 value: Box::new(literal(1)),
                 path: vec![]
             },
-            C::Eval,
             &Limits::default()
         )
         .is_err()
@@ -183,14 +178,13 @@ fn records_sort_utf8_but_operands_and_lists_keep_order() {
     assert_eq!(
         E::new(
             K::Record(vec![("x".into(), literal(1)), ("x".into(), literal(2))]),
-            C::Eval,
             &Limits::default()
         )
         .unwrap_err(),
         Error::DuplicateField
     );
     let list = make(K::List(vec![literal(2), literal(1)]));
-    round_trip(&list, C::Eval);
+    round_trip(&list);
     let K::List(items) = list.kind() else {
         panic!()
     };
@@ -201,7 +195,7 @@ fn records_sort_utf8_but_operands_and_lists_keep_order() {
             left: Box::new(literal(1)),
             right: Box::new(literal(2)),
         });
-        round_trip(&expression, C::Eval);
+        round_trip(&expression);
         assert_eq!(
             wire(&expression),
             array(vec![
@@ -248,22 +242,18 @@ fn exact_function_and_template_identities_are_preserved() {
         },
         arguments: vec![literal(2), function],
     });
-    round_trip(&call, C::Eval);
+    round_trip(&call);
     for function in [F::Length, F::Present] {
-        round_trip(
-            &make(K::Call {
-                function: FunctionId::Core(function),
-                arguments: vec![literal(1)],
-            }),
-            C::Eval,
-        );
+        round_trip(&make(K::Call {
+            function: FunctionId::Core(function),
+            arguments: vec![literal(1)],
+        }));
         assert!(
             E::new(
                 K::Call {
                     function: FunctionId::Core(function),
                     arguments: vec![]
                 },
-                C::Eval,
                 &Limits::default()
             )
             .is_err()
@@ -285,7 +275,7 @@ fn exact_function_and_template_identities_are_preserved() {
     };
     assert_eq!(*template, digest);
     assert_eq!(arguments[0].0.as_str(), "aa");
-    round_trip(&render, C::Eval);
+    round_trip(&render);
     let invalid = array(vec![
         text("call"),
         array(vec![text("core"), text("status")]),
@@ -307,7 +297,7 @@ fn regex_flags_normalize_only_for_authored_shapes() {
             flags: "ims".into()
         }
     );
-    round_trip(&e, C::Eval);
+    round_trip(&e);
     assert!(matches!(
         read(&array(vec![text("regex"), text("x"), text("mi")])),
         Err(Error::NonCanonical(_))
@@ -319,7 +309,6 @@ fn regex_flags_normalize_only_for_authored_shapes() {
                     pattern: "x".into(),
                     flags: flags.into()
                 },
-                C::Eval,
                 &Limits::default()
             )
             .unwrap_err(),
@@ -333,7 +322,6 @@ fn regex_flags_normalize_only_for_authored_shapes() {
                 pattern: "(".into(),
                 flags: "".into()
             },
-            C::Eval,
             &Limits::default()
         )
         .is_ok()
@@ -379,7 +367,6 @@ fn malformed_shapes_paths_and_identifiers_fail() {
                 source: R::Input("x".parse().unwrap()),
                 path: vec![P::Index(u64::MAX)]
             },
-            C::Eval,
             &Limits::default()
         )
         .is_err()
@@ -400,7 +387,7 @@ fn malformed_shapes_paths_and_identifiers_fail() {
         source: R::Input("x".parse().unwrap()),
         path: vec![P::Index(i64::MAX as u64)],
     });
-    round_trip(&e, C::Eval);
+    round_trip(&e);
 }
 
 #[test]
@@ -410,7 +397,7 @@ fn conversion_and_ingress_respect_all_applicable_limits() {
         max_document_bytes: 12,
         max_depth: 1,
     };
-    let bytes = e.encode(C::Eval, &exact).unwrap();
+    let bytes = e.encode(&exact).unwrap();
     assert_eq!(bytes.len(), 12);
     type Case = (LimitKind, usize, fn(&mut Limits));
     let cases: [Case; 2] = [
@@ -421,16 +408,13 @@ fn conversion_and_ingress_respect_all_applicable_limits() {
         let mut limits = exact.clone();
         adjust(&mut limits);
         assert_eq!(
-            e.to_value(C::Eval, &limits).unwrap_err(),
+            e.to_value(&limits).unwrap_err(),
             Error::LimitExceeded { limit, maximum }
         );
-        assert!(matches!(
-            E::decode(&bytes, C::Eval, &limits),
-            Err(Error::Codec(_))
-        ));
+        assert!(matches!(E::decode(&bytes, &limits), Err(Error::Codec(_))));
     }
     for end in 0..bytes.len() {
-        let Error::Codec(error) = E::decode(&bytes[..end], C::Eval, &exact).unwrap_err() else {
+        let Error::Codec(error) = E::decode(&bytes[..end], &exact).unwrap_err() else {
             panic!()
         };
         assert_eq!(error.offset(), Some(end));
@@ -438,17 +422,14 @@ fn conversion_and_ingress_respect_all_applicable_limits() {
     let mut trailing = bytes;
     trailing.push(0);
     assert!(matches!(
-        E::decode(&trailing, C::Eval, &Limits::default()),
+        E::decode(&trailing, &Limits::default()),
         Err(Error::Codec(_))
     ));
     let invalid = Limits {
         max_depth: 129,
         ..Limits::default()
     };
-    assert!(matches!(
-        e.to_value(C::Eval, &invalid),
-        Err(Error::Codec(_))
-    ));
+    assert!(matches!(e.to_value(&invalid), Err(Error::Codec(_))));
 }
 
 #[test]
@@ -457,7 +438,7 @@ fn normalized_paths_must_fit_the_final_byte_limit() {
         source: R::Input("x".parse().unwrap()),
         path: vec![P::Index(0), P::Index(1), P::Index(2)],
     });
-    let maximum = r.encode(C::Eval, &Limits::default()).unwrap().len();
+    let maximum = r.encode(&Limits::default()).unwrap().len();
     let limits = Limits {
         max_document_bytes: maximum,
         ..Limits::default()
@@ -468,7 +449,6 @@ fn normalized_paths_must_fit_the_final_byte_limit() {
                 value: Box::new(r),
                 path: vec![P::Index(3)]
             },
-            C::Eval,
             &limits
         )
         .unwrap_err(),

@@ -4,14 +4,14 @@ use htlk_cbor::Limits;
 use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     BuiltinType as P, Edge, EdgeDestination as D, EdgeSource as S, Expression as E,
-    ExpressionContext as EC, GraphRecordError as Error, Node, NodeFields, Operation, Port,
-    PortTable, ScalarLiteral, Scope, ScopeContext as C, ScopeFields, ValueType,
+    GraphRecordError as Error, Node, NodeFields, Operation, Port, PortTable, ScalarLiteral, Scope,
+    ScopeContext as C, ScopeFields, ValueType,
 };
 
 fn fields(depth: usize, limits: &Limits) -> ScopeFields {
     let mut bytes = b"\x82\x63not".repeat(depth);
     bytes.extend_from_slice(b"\x82\x67literal\xf5");
-    let expr = E::decode(&bytes, EC::Guard { loop_body: false }, limits).unwrap();
+    let expr = E::decode(&bytes, limits).unwrap();
     let ports = |name: &str| {
         PortTable::new(
             vec![(

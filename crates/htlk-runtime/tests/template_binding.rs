@@ -41,7 +41,6 @@ fn malformed_templates_fail_before_registration_or_rendering() {
             template: digest,
             arguments: vec![],
         },
-        ExpressionContext::Eval,
         &limits,
     )
     .unwrap();

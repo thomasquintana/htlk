@@ -55,7 +55,7 @@ fn outcome_metadata_accepts_its_exact_encoded_byte_budget() {
     assert_eq!(frame.outcome(&node), Some(&outcome));
 }
 fn expression(kind: K) -> E {
-    E::new(kind, Context::LoopUntil, &Limits::default()).unwrap()
+    E::new(kind, &Limits::default()).unwrap()
 }
 fn input(name: &str) -> E {
     expression(K::Ref {
@@ -577,7 +577,7 @@ fn exercise_depth() {
     };
     let mut bytes = b"\x82\x63not".repeat(126);
     bytes.extend_from_slice(b"\x82\x67literal\xf5");
-    let expr = E::decode(&bytes, Context::Eval, &codec).unwrap();
+    let expr = E::decode(&bytes, &codec).unwrap();
     assert_eq!(
         evaluate(&expr, Context::Eval, &Frame::default(), &codec, &policy())
             .unwrap()

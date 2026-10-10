@@ -40,21 +40,15 @@ fn node(name: &str, input: Option<bool>, guard: Expression) -> Node {
 fn truth() -> Expression {
     Expression::literal(L::Boolean(true))
 }
-fn succeeded(name: &str, context: C) -> Expression {
+fn succeeded(name: &str, _context: C) -> Expression {
     Expression::new(
         E::Binary {
             operator: BinaryOperator::Eq,
             left: Box::new(
-                Expression::new(
-                    E::Status(name.parse().unwrap()),
-                    context,
-                    &Limits::default(),
-                )
-                .unwrap(),
+                Expression::new(E::Status(name.parse().unwrap()), &Limits::default()).unwrap(),
             ),
             right: Box::new(Expression::literal(L::String("succeeded".into()))),
         },
-        context,
         &Limits::default(),
     )
     .unwrap()
@@ -146,7 +140,6 @@ fn hidden_cycles_include_skipped_boolean_branches_and_optional_inputs() {
             left: Box::new(Expression::literal(L::Boolean(false))),
             right: Box::new(succeeded("b", context)),
         },
-        context,
         &Limits::default(),
     )
     .unwrap();
@@ -209,7 +202,6 @@ fn coverage_and_conditional_uniqueness_are_separate() {
             source: ValueReference::Input("a".parse().unwrap()),
             path: vec![],
         },
-        C::Guard { loop_body: false },
         &Limits::default(),
     )
     .unwrap();
@@ -292,7 +284,6 @@ fn edge_types_and_expression_names_are_checked_in_their_own_contexts() {
                 source: ValueReference::Input("missing".parse().unwrap()),
                 path: vec![],
             },
-            C::Eval,
             &Limits::default(),
         )
         .unwrap(),
@@ -349,7 +340,6 @@ fn generated_guard_graphs_agree_with_an_independent_cycle_oracle() {
                             left: Box::new(guard),
                             right: Box::new(succeeded(&format!("n{source}"), context)),
                         },
-                        context,
                         &limits,
                     )
                     .unwrap();
@@ -384,7 +374,6 @@ fn generated_guard_graphs_agree_with_an_independent_cycle_oracle() {
 
 #[test]
 fn expression_failures_report_canonical_subtrees_without_literal_contents() {
-    let context = C::Guard { loop_body: false };
     let limits = Limits::default();
     let mut f = chain();
     let bad = Expression::new(
@@ -397,13 +386,11 @@ fn expression_failures_report_canonical_subtrees_without_literal_contents() {
                         source: ValueReference::Input("missing".parse().unwrap()),
                         path: vec![],
                     },
-                    context,
                     &limits,
                 )
                 .unwrap(),
             ),
         },
-        context,
         &limits,
     )
     .unwrap();
@@ -424,7 +411,6 @@ fn expression_failures_report_canonical_subtrees_without_literal_contents() {
             left: Box::new(truth()),
             right: Box::new(Expression::literal(L::Integer(1))),
         },
-        context,
         &limits,
     )
     .unwrap();
@@ -459,7 +445,6 @@ fn derived_plan_limits_count_projection_types_not_only_result_types() {
             source: ValueReference::Input("payload".parse().unwrap()),
             path,
         },
-        C::Guard { loop_body: false },
         &limits,
     )
     .unwrap();

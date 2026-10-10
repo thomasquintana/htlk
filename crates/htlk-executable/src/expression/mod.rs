@@ -225,6 +225,10 @@ pub enum ExpressionKind {
 
 /// Immutable canonical expression metadata with bounded normalization.
 ///
+/// Construction normalizes a representable expression; canonical ingress checks
+/// representation without repairing it. Neither establishes contextual legality:
+/// the analyzer checks expressions at their actual use sites.
+///
 /// This does not evaluate, resolve names, infer types, compile regex engines,
 /// or validate callback placement/signatures. Those require the surrounding
 /// graph and exact linked profile. Function references remain explicit AST nodes,
@@ -249,14 +253,10 @@ impl Expression {
     /// # Errors
     /// Returns representation, normalization, or resource failures. Contextual
     /// reference legality is checked by the analyzer, not this constructor.
-    pub fn new(
-        kind: ExpressionKind,
-        context: ExpressionContext,
-        limits: &Limits,
-    ) -> Result<Self, ExpressionError> {
-        let value = wire::expression_value(&kind, context, limits)?;
-        let result = wire::parse_expression(&value, context, limits, true)?;
-        result.to_value(context, limits)?;
+    pub fn new(kind: ExpressionKind, limits: &Limits) -> Result<Self, ExpressionError> {
+        let value = wire::expression_value(&kind, limits)?;
+        let result = wire::parse_expression(&value, limits, true)?;
+        result.to_value(limits)?;
         Ok(result)
     }
     /// Borrows the immutable normalized shape.
@@ -267,47 +267,31 @@ impl Expression {
     ///
     /// # Errors
     /// Returns representation, resource, or allocation failures.
-    pub fn to_value(
-        &self,
-        context: ExpressionContext,
-        limits: &Limits,
-    ) -> Result<Value, ExpressionError> {
-        wire::expression_value(&self.kind, context, limits)
+    pub fn to_value(&self, limits: &Limits) -> Result<Value, ExpressionError> {
+        wire::expression_value(&self.kind, limits)
     }
     /// Validates canonical expression data without repairing its structure.
     ///
     /// # Errors
     /// Returns codec, record-shape, or canonicality failures.
-    pub fn from_value(
-        value: &Value,
-        context: ExpressionContext,
-        limits: &Limits,
-    ) -> Result<Self, ExpressionError> {
+    pub fn from_value(value: &Value, limits: &Limits) -> Result<Self, ExpressionError> {
         htlk_cbor::encode(value, limits)?;
-        wire::parse_expression(value, context, limits, false)
+        wire::parse_expression(value, limits, false)
     }
     /// Encodes one canonical expression.
     ///
     /// # Errors
     /// Returns representation, resource, or allocation failures.
-    pub fn encode(
-        &self,
-        context: ExpressionContext,
-        limits: &Limits,
-    ) -> Result<Vec<u8>, ExpressionError> {
-        Ok(htlk_cbor::encode(&self.to_value(context, limits)?, limits)?)
+    pub fn encode(&self, limits: &Limits) -> Result<Vec<u8>, ExpressionError> {
+        Ok(htlk_cbor::encode(&self.to_value(limits)?, limits)?)
     }
     /// Decodes exactly one canonical expression. Owning-context semantics are
     /// validated separately by the analyzer.
     ///
     /// # Errors
     /// Returns codec, record-shape, or canonicality failures.
-    pub fn decode(
-        bytes: &[u8],
-        context: ExpressionContext,
-        limits: &Limits,
-    ) -> Result<Self, ExpressionError> {
+    pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Self, ExpressionError> {
         let value = htlk_cbor::decode(bytes, limits)?;
-        wire::parse_expression(&value, context, limits, false)
+        wire::parse_expression(&value, limits, false)
     }
 }

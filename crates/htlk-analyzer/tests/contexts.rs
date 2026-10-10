@@ -5,7 +5,7 @@ use ValueReference as R;
 use htlk_analyzer::*;
 use htlk_executable::{cbor::Limits, digest::Digest, *};
 fn make(kind: K) -> Expression {
-    Expression::new(kind, C::LoopUntil, &Limits::default()).unwrap()
+    Expression::new(kind, &Limits::default()).unwrap()
 }
 fn truth() -> Expression {
     Expression::literal(ScalarLiteral::Boolean(true))
@@ -87,9 +87,9 @@ fn context_matrix_is_enforced_through_nested_expressions() {
             source,
             path: vec![],
         })]));
-        let encoded = nested.encode(C::LoopUntil, &l).unwrap();
+        let encoded = nested.encode(&l).unwrap();
         for (context, expected) in contexts.into_iter().zip(row) {
-            let decoded = Expression::decode(&encoded, context, &l).unwrap();
+            let decoded = Expression::decode(&encoded, &l).unwrap();
             let result = check_expression_diagnostic(&decoded, context, &env, None, None, &l);
             assert_eq!(result.is_ok(), expected);
             if let Err(error) = result {
@@ -116,6 +116,60 @@ fn context_matrix_is_enforced_through_nested_expressions() {
                 expected
             );
         }
+    }
+}
+#[test]
+fn semantic_diagnostics_explain_permissions_and_slot_coverage_without_names() {
+    use std::error::Error as _;
+    let limits = Limits::default();
+    let expression = make(K::List(vec![make(K::Ref {
+        source: R::Next("secret_next".parse().unwrap()),
+        path: vec![],
+    })]));
+    let bytes = expression.encode(&limits).unwrap();
+    let expression = Expression::decode(&bytes, &limits).unwrap();
+    let error = check_expression_context(&expression, C::Eval, &limits).unwrap_err();
+    assert_eq!(error.expression_path, [0]);
+    let ExpressionTypeError::Expression(cause) = &error.error else {
+        panic!()
+    };
+    assert_eq!(
+        cause.to_string(),
+        "Proposed next-value references are not permitted at this expression use site."
+    );
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<ExpressionError>()
+    );
+    assert!(!format!("{error} {error:?}").contains("secret_next"));
+    assert!(check_expression_context(&expression, C::LoopUntil, &limits).is_ok());
+
+    for (parameters, parts) in [
+        (
+            vec![],
+            vec![TemplatePart::Slot("secret_slot".parse().unwrap())],
+        ),
+        (
+            vec![(
+                "secret_parameter".parse().unwrap(),
+                Port::new(ValueType::builtin(BuiltinType::Float), true),
+            )],
+            vec![],
+        ),
+    ] {
+        let template = PromptTemplate::new(parameters, parts, &limits).unwrap();
+        let template = PromptTemplate::decode(&template.encode(&limits).unwrap(), &limits).unwrap();
+        let error = check_prompt_template(&template, &limits).unwrap_err();
+        assert_eq!(error, ExpressionError::TemplateParameterMismatch);
+        assert_eq!(
+            error.to_string(),
+            "Template parameter declarations must exactly cover the distinct substitution slots."
+        );
+        assert!(!format!("{error} {error:?}").contains("secret"));
     }
 }
 #[test]

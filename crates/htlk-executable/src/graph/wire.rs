@@ -232,13 +232,8 @@ impl<'a> Builder<'a> {
         self.accounting.value(&value, depth)?;
         Ok(value)
     }
-    fn expression(
-        &mut self,
-        e: &Expression,
-        c: ExpressionContext,
-        depth: usize,
-    ) -> Result<Value, GraphRecordError> {
-        self.child(e.to_value(c, self.limits)?, depth)
+    fn expression(&mut self, e: &Expression, depth: usize) -> Result<Value, GraphRecordError> {
+        self.child(e.to_value(self.limits)?, depth)
     }
     fn ports(
         &mut self,
@@ -319,7 +314,7 @@ impl<'a> Builder<'a> {
         let target_key = self.string("destination", d + 1)?;
         let target = self.destination(&edge.destination, c, d + 1)?;
         let guard_key = self.string("guard", d + 1)?;
-        let guard = self.expression(&edge.guard, c.guard(), d + 1)?;
+        let guard = self.expression(&edge.guard, d + 1)?;
         Ok(Value::Map(Map::try_from_entries([
             (id_key, id),
             (source_key, source),
@@ -331,10 +326,7 @@ impl<'a> Builder<'a> {
         match op {
             Operation::Eval(expr) => {
                 let mut v = self.tag("eval", 2, d)?;
-                push(
-                    &mut v,
-                    self.expression(expr, ExpressionContext::Eval, d + 1)?,
-                )?;
+                push(&mut v, self.expression(expr, d + 1)?)?;
                 Ok(Value::Array(v))
             }
             Operation::Mcp { binding, retry } => {
@@ -382,10 +374,7 @@ impl<'a> Builder<'a> {
             push(&mut entries, (key, self.text(input.as_str(), d + 2)?))?;
         }
         push(&mut v, Value::Map(Map::try_from_entries(entries)?))?;
-        push(
-            &mut v,
-            self.expression(until, ExpressionContext::LoopUntil, d + 1)?,
-        )?;
+        push(&mut v, self.expression(until, d + 1)?)?;
         self.accounting.integer(n, d + 1)?;
         push(&mut v, Value::Integer(n))?;
         Ok(Value::Array(v))
@@ -393,7 +382,7 @@ impl<'a> Builder<'a> {
     fn node(
         &mut self,
         f: &NodeFields,
-        c: ScopeContext,
+        _c: ScopeContext,
         d: usize,
     ) -> Result<Value, GraphRecordError> {
         validate_node(f)?;
@@ -405,21 +394,13 @@ impl<'a> Builder<'a> {
             let key = self.string(key, d + 1)?;
             push(&mut pairs, (key, self.ports(&table.entries, d + 1)?))?;
         }
-        for (key, expr, context) in [
-            ("guard", &f.guard, c.guard()),
-            (
-                "preconditions",
-                &f.preconditions,
-                ExpressionContext::Preconditions,
-            ),
-            (
-                "postconditions",
-                &f.postconditions,
-                f.operation.post_context(),
-            ),
+        for (key, expr) in [
+            ("guard", &f.guard),
+            ("preconditions", &f.preconditions),
+            ("postconditions", &f.postconditions),
         ] {
             let key = self.string(key, d + 1)?;
-            push(&mut pairs, (key, self.expression(expr, context, d + 1)?))?;
+            push(&mut pairs, (key, self.expression(expr, d + 1)?))?;
         }
         let key = self.string("limits", d + 1)?;
         push(
@@ -455,20 +436,12 @@ impl<'a> Builder<'a> {
             push(&mut edges, self.edge(edge, c, 2)?)?;
         }
         push(&mut pairs, (key, Value::Array(edges)))?;
-        for (key, expr, context) in [
-            (
-                "preconditions",
-                &f.preconditions,
-                ExpressionContext::Preconditions,
-            ),
-            (
-                "postconditions",
-                &f.postconditions,
-                ExpressionContext::ScopePostconditions,
-            ),
+        for (key, expr) in [
+            ("preconditions", &f.preconditions),
+            ("postconditions", &f.postconditions),
         ] {
             let key = self.string(key, 1)?;
-            push(&mut pairs, (key, self.expression(expr, context, 1)?))?;
+            push(&mut pairs, (key, self.expression(expr, 1)?))?;
         }
         let key = self.string("limits", 1)?;
         push(
@@ -557,7 +530,7 @@ pub(super) fn parse_edge(v: &Value, c: ScopeContext, l: &Limits) -> Result<Edge,
         id: id(field(m, "id"))?,
         source: parse_source(field(m, "source"), c)?,
         destination: parse_destination(field(m, "destination"), c)?,
-        guard: Expression::from_value(field(m, "guard"), c.guard(), l)?,
+        guard: Expression::from_value(field(m, "guard"), l)?,
     })
 }
 pub(super) fn parse_operation(v: &Value, l: &Limits) -> Result<Operation, GraphRecordError> {
@@ -574,11 +547,7 @@ pub(super) fn parse_operation(v: &Value, l: &Limits) -> Result<Operation, GraphR
     };
     arity(v, n)?;
     match tag {
-        "eval" => Ok(Operation::Eval(Expression::from_value(
-            &v[1],
-            ExpressionContext::Eval,
-            l,
-        )?)),
+        "eval" => Ok(Operation::Eval(Expression::from_value(&v[1], l)?)),
         "mcp" => Ok(Operation::Mcp {
             binding: digest(&v[1])?,
             retry: RetryPolicy::from_value(&v[2], l)?,
@@ -601,14 +570,18 @@ pub(super) fn parse_operation(v: &Value, l: &Limits) -> Result<Operation, GraphR
             Ok(Operation::Loop {
                 body,
                 initializers,
-                until: Expression::from_value(&v[3], ExpressionContext::LoopUntil, l)?,
+                until: Expression::from_value(&v[3], l)?,
                 max_iterations: read_bound(&v[4], "max_iterations")?,
             })
         }
         _ => unreachable!("tag checked above"),
     }
 }
-pub(super) fn parse_node(v: &Value, c: ScopeContext, l: &Limits) -> Result<Node, GraphRecordError> {
+pub(super) fn parse_node(
+    v: &Value,
+    _c: ScopeContext,
+    l: &Limits,
+) -> Result<Node, GraphRecordError> {
     let m = closed(
         v,
         "node",
@@ -628,17 +601,9 @@ pub(super) fn parse_node(v: &Value, c: ScopeContext, l: &Limits) -> Result<Node,
         id: id(field(m, "id"))?,
         inputs: parse_ports(field(m, "inputs"), l)?,
         outputs: parse_ports(field(m, "outputs"), l)?,
-        guard: Expression::from_value(field(m, "guard"), c.guard(), l)?,
-        preconditions: Expression::from_value(
-            field(m, "preconditions"),
-            ExpressionContext::Preconditions,
-            l,
-        )?,
-        postconditions: Expression::from_value(
-            field(m, "postconditions"),
-            operation.post_context(),
-            l,
-        )?,
+        guard: Expression::from_value(field(m, "guard"), l)?,
+        preconditions: Expression::from_value(field(m, "preconditions"), l)?,
+        postconditions: Expression::from_value(field(m, "postconditions"), l)?,
         limits: ExecutionLimits::from_value(field(m, "limits"), l)?,
         operation,
     };
@@ -687,16 +652,8 @@ pub(super) fn parse_scope(
         carried: parse_ports(field(m, "carried"), l)?,
         nodes,
         edges,
-        preconditions: Expression::from_value(
-            field(m, "preconditions"),
-            ExpressionContext::Preconditions,
-            l,
-        )?,
-        postconditions: Expression::from_value(
-            field(m, "postconditions"),
-            ExpressionContext::ScopePostconditions,
-            l,
-        )?,
+        preconditions: Expression::from_value(field(m, "preconditions"), l)?,
+        postconditions: Expression::from_value(field(m, "postconditions"), l)?,
         limits: ExecutionLimits::from_value(field(m, "limits"), l)?,
     };
     Ok(Scope {

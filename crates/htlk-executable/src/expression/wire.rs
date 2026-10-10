@@ -8,8 +8,18 @@ use crate::digest::ParseDigestError;
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};
 use crate::{BuiltinType, ParseIdentifierError, Port, TypeContext, TypeError, ValueTypeKind};
 
-/// Expression/template record validation and bounded-conversion failure.
-/// Only static schema descriptions are retained, not untrusted input contents.
+/// Expression/template representation and conversion failures, plus selected
+/// semantic failures returned by analyzer checks.
+///
+/// Construction normalizes representation and canonical ingress validates it;
+/// neither establishes contextual legality. The analyzer checks reference
+/// permissions and template declaration/slot coverage at their actual use sites,
+/// returning [`Self::ForbiddenReference`] or [`Self::TemplateParameterMismatch`].
+/// Limit failures can be direct conversion errors ([`Self::LimitExceeded`]),
+/// wrapped codec errors ([`Self::Codec`]), or nested through a template parameter's
+/// [`TypeError`] ([`Self::Type`]). Wrapped errors retain their source chains and
+/// codec offsets. Validation retains only static schema descriptions, never
+/// submitted document contents, names, regex patterns, or literal values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExpressionError {
@@ -83,31 +93,90 @@ impl From<EncodingLimitError> for ExpressionError {
 impl fmt::Display for ExpressionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Codec(e) => write!(f, "expression record: {e}"),
-            Self::Identifier(e) => write!(f, "expression identifier: {e}"),
-            Self::Digest(e) => write!(f, "expression digest: {e}"),
-            Self::Type(e) => write!(f, "template parameter: {e}"),
-            Self::InvalidShape(site) => write!(f, "invalid expression/template shape: {site}"),
-            Self::UnknownConstructor => f.write_str("unknown expression constructor"),
-            Self::UnknownFunction => f.write_str("unknown function identity"),
-            Self::InvalidIndex => f.write_str("path index must be in 0..=i64::MAX"),
-            Self::InvalidRegexFlags => f.write_str("regex flags must be unique members of ims"),
-            Self::DuplicateField => f.write_str("duplicate expression/template name"),
-            Self::NonCanonical(rule) => write!(f, "noncanonical expression/template: {rule}"),
-            Self::ForbiddenReference(kind) => {
-                write!(f, "reference is forbidden in this context: {kind}")
-            }
+            Self::Codec(e) => write!(f, "Could not process the expression or template CBOR representation: {e}"),
+            Self::Identifier(e) => write!(f, "Could not process an expression or template identifier: {e}"),
+            Self::Digest(e) => write!(f, "An expression digest is invalid: {e}."),
+            Self::Type(e) => write!(f, "Could not process a template parameter's port or type: {e}"),
+            Self::InvalidShape(site) => f.write_str(shape_message(site)),
+            Self::UnknownConstructor => f.write_str("The expression constructor is not recognized."),
+            Self::UnknownFunction => f.write_str("The function identity form or core function is not recognized."),
+            Self::InvalidIndex => f.write_str("A projection index must be an integer from 0 through 9223372036854775807."),
+            Self::InvalidRegexFlags => f.write_str("Regex flags may contain i, m, and s, each at most once."),
+            Self::DuplicateField => f.write_str("Expression record fields, render arguments, and template parameters must have unique names."),
+            Self::NonCanonical(rule) => f.write_str(match *rule {
+                "regex flag order" => "Regex flags must appear in i, m, s order.",
+                "get on reference" => "A projection of a named reference must be folded into the reference's path.",
+                "nested get" => "Nested projections must be combined into a single projection path.",
+                "record field UTF-8 order" => "Record fields must be sorted by the UTF-8 bytes of their decoded names.",
+                "template literal segments" => "Template text segments must be nonempty, and adjacent text segments must be joined.",
+                _ => "The expression or template representation is not in canonical form.",
+            }),
+            Self::ForbiddenReference(kind) => f.write_str(match *kind {
+                "input" => "Input references are not permitted at this expression use site.",
+                "output" => "Node output references are not permitted at this expression use site.",
+                "scope_output" => "Proposed output references are not permitted at this expression use site.",
+                "carried" => "Loop-carried value references are not permitted at this expression use site.",
+                "next" => "Proposed next-value references are not permitted at this expression use site.",
+                "node outcome" => "Node outcome inspection is not permitted at this expression use site.",
+                _ => "This reference category is not permitted at this expression use site.",
+            }),
             Self::InvalidTemplateParameter => {
-                f.write_str("template parameters must be string, integer, float, or Boolean")
+                f.write_str("Template parameters must have type string, integer, float, or boolean.")
             }
             Self::TemplateParameterMismatch => {
-                f.write_str("template parameters must exactly cover distinct slots")
+                f.write_str("Template parameter declarations must exactly cover the distinct substitution slots.")
             }
-            Self::LimitExceeded { limit, maximum } => {
-                write!(f, "expression limit exceeded: {limit:?} ({maximum})")
-            }
-            Self::AllocationFailed => f.write_str("expression allocation failed"),
+            Self::LimitExceeded { limit: LimitKind::DocumentBytes, maximum } => write!(f, "The expression or template representation exceeds the configured maximum of {maximum} bytes."),
+            Self::LimitExceeded { limit: LimitKind::Depth, maximum } => write!(f, "The expression or template representation exceeds the configured maximum nesting depth of {maximum}."),
+            Self::AllocationFailed => f.write_str("Memory could not be allocated for the expression or template representation."),
         }
+    }
+}
+fn shape_message(site: &str) -> &'static str {
+    match site {
+        "identifier" => "An expression or template identifier must be text.",
+        "digest" => "An expression digest must be text.",
+        "constructor arity" => {
+            "The tagged array or record field pair has an incorrect number of elements."
+        }
+        "core function arity" => "The core function requires exactly one argument.",
+        "nonempty get path" => "A projection must select at least one field or index.",
+        "scalar literal" => {
+            "A scalar literal must be text, an integer, a float, a boolean, null, or bytes."
+        }
+        "path" => "A projection path must be an array.",
+        "path step" => "A projection path step must be a text field name or an integer index.",
+        "value reference" => "A value reference must be a nonempty tagged array.",
+        "reference tag" => {
+            "A value reference tag must be one of input, output, scope_output, carried, or next."
+        }
+        "function id" => "A function identity must be an array.",
+        "function tag" => "A function identity tag must be text.",
+        "core function" => "A core function name must be text.",
+        "expression" => "An expression must be an array.",
+        "expression tag" => "An expression must begin with a text constructor tag.",
+        "regex pattern" => "A regex pattern must be text.",
+        "regex flags" => "Regex flags must be text.",
+        "expression list" => "Expression elements or arguments must be an array.",
+        "record expression fields" => {
+            "Record expression fields must be an array of name-expression pairs."
+        }
+        "record expression pair" => {
+            "A record expression field must be an array containing its name and expression."
+        }
+        "record key" => "A record expression field name must be text.",
+        "call arguments" => "Function call arguments must be an array.",
+        "render arguments" => "Template render arguments must be a map of names to expressions.",
+        "template record" => "A template record must be a map.",
+        "template fields" => {
+            "A template record must contain exactly the parameters and parts fields."
+        }
+        "template parameters" => "Template parameters must be a map of names to port declarations.",
+        "template parts" => "Template parts must be an array.",
+        "template part" => {
+            "A template part must be text or a two-element slot array containing the slot tag and a parameter name."
+        }
+        _ => "The expression or template representation has an invalid shape.",
     }
 }
 impl std::error::Error for ExpressionError {
@@ -194,10 +263,7 @@ pub(super) struct Builder<'a> {
     pub(super) accounting: RecordAccounting<'a>,
 }
 impl<'a> Builder<'a> {
-    pub(super) fn new(
-        _context: ExpressionContext,
-        limits: &'a Limits,
-    ) -> Result<Self, ExpressionError> {
+    pub(super) fn new(limits: &'a Limits) -> Result<Self, ExpressionError> {
         Ok(Self {
             accounting: RecordAccounting::new(limits)?,
         })
@@ -510,10 +576,9 @@ impl<'a> Builder<'a> {
 
 pub(super) fn expression_value(
     kind: &ExpressionKind,
-    context: ExpressionContext,
     limits: &Limits,
 ) -> Result<Value, ExpressionError> {
-    Builder::new(context, limits)?.expr(kind, 0)
+    Builder::new(limits)?.expr(kind, 0)
 }
 
 fn parse_scalar(v: &Value) -> Result<ScalarLiteral, ExpressionError> {
@@ -548,10 +613,7 @@ fn parse_path(v: &Value) -> Result<Vec<PathStep>, ExpressionError> {
     }
     Ok(path)
 }
-fn parse_reference(
-    v: &Value,
-    _context: ExpressionContext,
-) -> Result<ValueReference, ExpressionError> {
+fn parse_reference(v: &Value) -> Result<ValueReference, ExpressionError> {
     let v = array(v, "value reference")?;
     let tag = text(
         v.first()
@@ -600,7 +662,6 @@ fn parse_function(v: &Value) -> Result<FunctionId, ExpressionError> {
 
 pub(super) fn parse_expression(
     value: &Value,
-    context: ExpressionContext,
     limits: &Limits,
     normalize: bool,
 ) -> Result<Expression, ExpressionError> {
@@ -619,18 +680,17 @@ pub(super) fn parse_expression(
     arity(v, n)?;
     match tag {
         "literal" | "regex" | "ref" | "function_ref" | "status" | "error" => {
-            parse_leaf(tag, v, context, normalize)
+            parse_leaf(tag, v, normalize)
         }
-        "get" => parse_get(v, context, limits, normalize),
-        "list" => parse_list(&v[1], context, limits, normalize),
-        "record" => parse_record(&v[1], context, limits, normalize),
-        "call" => parse_call(v, context, limits, normalize),
-        "render" => parse_render(v, context, limits, normalize),
-        "not" => parse_not(&v[1], context, limits, normalize),
+        "get" => parse_get(v, limits, normalize),
+        "list" => parse_list(&v[1], limits, normalize),
+        "record" => parse_record(&v[1], limits, normalize),
+        "call" => parse_call(v, limits, normalize),
+        "render" => parse_render(v, limits, normalize),
+        "not" => parse_not(&v[1], limits, normalize),
         _ => parse_binary(
             BinaryOperator::parse(tag).expect("operator checked above"),
             v,
-            context,
             limits,
             normalize,
         ),
@@ -644,36 +704,21 @@ fn wrap(kind: ExpressionKind) -> Expression {
 }
 
 #[inline(never)]
-fn parse_not(
-    v: &Value,
-    c: ExpressionContext,
-    l: &Limits,
-    n: bool,
-) -> Result<Expression, ExpressionError> {
+fn parse_not(v: &Value, l: &Limits, n: bool) -> Result<Expression, ExpressionError> {
     Ok(wrap(ExpressionKind::Not(Box::new(parse_expression(
-        v, c, l, n,
+        v, l, n,
     )?))))
 }
 
 #[inline(never)]
-fn parse_list(
-    v: &Value,
-    c: ExpressionContext,
-    l: &Limits,
-    n: bool,
-) -> Result<Expression, ExpressionError> {
-    Ok(wrap(ExpressionKind::List(parse_expressions(v, c, l, n)?)))
+fn parse_list(v: &Value, l: &Limits, n: bool) -> Result<Expression, ExpressionError> {
+    Ok(wrap(ExpressionKind::List(parse_expressions(v, l, n)?)))
 }
 
 // Leaf parsing has no expression recursion. Keep its larger temporary values
 // out of every recursive dispatch frame.
 #[inline(never)]
-fn parse_leaf(
-    tag: &str,
-    v: &[Value],
-    context: ExpressionContext,
-    normalize: bool,
-) -> Result<Expression, ExpressionError> {
+fn parse_leaf(tag: &str, v: &[Value], normalize: bool) -> Result<Expression, ExpressionError> {
     use ExpressionKind as K;
     Ok(wrap(match tag {
         "literal" => K::Literal(parse_scalar(&v[1])?),
@@ -682,7 +727,7 @@ fn parse_leaf(
             flags: regex_flags(text(&v[2], "regex flags")?, normalize)?,
         },
         "ref" => K::Ref {
-            source: parse_reference(&v[1], context)?,
+            source: parse_reference(&v[1])?,
             path: parse_path(&v[2])?,
         },
         "function_ref" => K::FunctionRef {
@@ -700,26 +745,16 @@ fn parse_leaf(
     }))
 }
 #[inline(never)]
-fn parse_expressions(
-    v: &Value,
-    c: ExpressionContext,
-    l: &Limits,
-    n: bool,
-) -> Result<Vec<Expression>, ExpressionError> {
+fn parse_expressions(v: &Value, l: &Limits, n: bool) -> Result<Vec<Expression>, ExpressionError> {
     let mut result = Vec::new();
     for v in array(v, "expression list")? {
-        push(&mut result, parse_expression(v, c, l, n)?)?;
+        push(&mut result, parse_expression(v, l, n)?)?;
     }
     Ok(result)
 }
 #[inline(never)]
-fn parse_get(
-    v: &[Value],
-    c: ExpressionContext,
-    l: &Limits,
-    n: bool,
-) -> Result<Expression, ExpressionError> {
-    let base = parse_expression(&v[1], c, l, n)?;
+fn parse_get(v: &[Value], l: &Limits, n: bool) -> Result<Expression, ExpressionError> {
+    let base = parse_expression(&v[1], l, n)?;
     let mut path = parse_path(&v[2])?;
     if path.is_empty() {
         return Err(ExpressionError::InvalidShape("nonempty get path"));
@@ -761,12 +796,7 @@ fn parse_get(
     Ok(wrap(kind))
 }
 #[inline(never)]
-fn parse_record(
-    v: &Value,
-    c: ExpressionContext,
-    l: &Limits,
-    n: bool,
-) -> Result<Expression, ExpressionError> {
+fn parse_record(v: &Value, l: &Limits, n: bool) -> Result<Expression, ExpressionError> {
     let mut fields = Vec::new();
     for v in array(v, "record expression fields")? {
         let pair = array(v, "record expression pair")?;
@@ -775,7 +805,7 @@ fn parse_record(
             &mut fields,
             (
                 owned(text(&pair[0], "record key")?)?,
-                parse_expression(&pair[1], c, l, n)?,
+                parse_expression(&pair[1], l, n)?,
             ),
         )?;
     }
@@ -793,28 +823,18 @@ fn parse_record(
     Ok(wrap(ExpressionKind::Record(fields)))
 }
 #[inline(never)]
-fn parse_call(
-    v: &[Value],
-    c: ExpressionContext,
-    l: &Limits,
-    n: bool,
-) -> Result<Expression, ExpressionError> {
+fn parse_call(v: &[Value], l: &Limits, n: bool) -> Result<Expression, ExpressionError> {
     let function = parse_function(&v[1])?;
     if matches!(function, FunctionId::Core(_)) && array(&v[2], "call arguments")?.len() != 1 {
         return Err(ExpressionError::InvalidShape("core function arity"));
     }
     Ok(wrap(ExpressionKind::Call {
         function,
-        arguments: parse_expressions(&v[2], c, l, n)?,
+        arguments: parse_expressions(&v[2], l, n)?,
     }))
 }
 #[inline(never)]
-fn parse_render(
-    v: &[Value],
-    c: ExpressionContext,
-    l: &Limits,
-    n: bool,
-) -> Result<Expression, ExpressionError> {
+fn parse_render(v: &[Value], l: &Limits, n: bool) -> Result<Expression, ExpressionError> {
     let template = digest(&v[1])?;
     let Value::Map(map) = &v[2] else {
         return Err(ExpressionError::InvalidShape("render arguments"));
@@ -823,10 +843,7 @@ fn parse_render(
     for (key, value) in map.iter() {
         push(
             &mut arguments,
-            (
-                key.parse::<Identifier>()?,
-                parse_expression(value, c, l, n)?,
-            ),
+            (key.parse::<Identifier>()?, parse_expression(value, l, n)?),
         )?;
     }
     // Wire map order is the codec's order; evaluation order is decoded UTF-8.
@@ -840,14 +857,13 @@ fn parse_render(
 fn parse_binary(
     op: BinaryOperator,
     v: &[Value],
-    c: ExpressionContext,
     l: &Limits,
     n: bool,
 ) -> Result<Expression, ExpressionError> {
     Ok(wrap(ExpressionKind::Binary {
         operator: op,
-        left: Box::new(parse_expression(&v[1], c, l, n)?),
-        right: Box::new(parse_expression(&v[2], c, l, n)?),
+        left: Box::new(parse_expression(&v[1], l, n)?),
+        right: Box::new(parse_expression(&v[2], l, n)?),
     }))
 }
 

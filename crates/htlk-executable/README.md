@@ -78,16 +78,28 @@ Internal JSON string processing still uses `serde_json`; Serde remains a backend
 implementation detail rather than a public model capability.
 
 ```rust
-use htlk_executable::{Expression, ScalarLiteral, ExpressionContext, JsonDocument, cbor::Limits};
+use htlk_executable::{Expression, ScalarLiteral, JsonDocument, cbor::Limits};
 
 let expression = Expression::literal(ScalarLiteral::Integer(42));
-let value = expression.to_value(ExpressionContext::Eval, &Limits::default())?;
+let value = expression.to_value(&Limits::default())?;
 let json = JsonDocument::from_value(&value, &Limits::default())?;
 assert_eq!(json.as_bytes(), br#"["literal",42]"#);
-let bytes = expression.encode(ExpressionContext::Eval, &Limits::default())?;
-assert_eq!(Expression::decode(&bytes, ExpressionContext::Eval, &Limits::default())?, expression);
+let bytes = expression.encode(&Limits::default())?;
+assert_eq!(Expression::decode(&bytes, &Limits::default())?, expression);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+Expression construction normalizes representable syntax. Canonical ingress checks
+representation without repairing it. These APIs take limits, not an expression
+context: they do not resolve names, infer types, evaluate expressions, or establish
+contextual legality. The analyzer receives `ExpressionContext` at actual use sites
+to check permissions, names, types, and callback placement.
+
+`ExpressionError` includes representation/conversion failures and selected semantic
+failures from analyzer checks (forbidden references and template declaration/slot
+coverage). Its prose explains schema and canonicality rules without submitted data;
+wrapped errors preserve source chains and codec offsets. Limits can fail directly,
+through wrapped codec errors, or through a template parameter's `TypeError`.
 
 ## Digests and envelopes
 

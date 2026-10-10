@@ -28,7 +28,7 @@ fn var(name: &str) -> T {
     ty(TK::Var(name.parse().unwrap()))
 }
 fn expr(k: K) -> E {
-    E::new(k, C::LoopUntil, &Limits::default()).unwrap()
+    E::new(k, &Limits::default()).unwrap()
 }
 fn input(name: &str) -> E {
     expr(K::Ref {
@@ -555,7 +555,7 @@ fn derived_type_work_is_bounded_and_analysis_is_deterministic() {
         max_document_bytes: 2000,
         ..l
     };
-    assert!(e.to_value(C::Eval, &tight).is_ok());
+    assert!(e.to_value(&tight).is_ok());
     assert!(matches!(
         check_expression(&e, C::Eval, &env, None, &tight),
         Err(Error::InferenceLimit)
@@ -744,14 +744,14 @@ fn depth_exercise() {
     };
     let mut bytes = b"\x82\x63not".repeat(126);
     bytes.extend_from_slice(b"\x82\x67literal\xf5");
-    let expr = E::decode(&bytes, C::Eval, &l).unwrap();
+    let expr = E::decode(&bytes, &l).unwrap();
     let checked = check_condition(&expr, C::Eval, &Env::default(), &l).unwrap();
     assert_eq!(checked.result(), &port(P::Boolean));
     assert_eq!(checked.nodes().len(), 127);
     assert_eq!(checked.clone(), checked);
     let mut bytes = b"\x83\x63and\x82\x67literal\xf5".repeat(126);
     bytes.extend_from_slice(b"\x82\x67literal\xf5");
-    let expr = E::decode(&bytes, C::Eval, &l).unwrap();
+    let expr = E::decode(&bytes, &l).unwrap();
     assert_eq!(
         check_condition(&expr, C::Eval, &Env::default(), &l)
             .unwrap()

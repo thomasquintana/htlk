@@ -629,7 +629,6 @@ pub fn verify_scope_graph(
                 source: temporary,
                 path: Vec::new(),
             },
-            C::Eval,
             limits,
         )
         .map_err(expression_error)?;
@@ -889,10 +888,7 @@ pub(crate) fn verify_linked_graphs(
             )
             .map_err(wrap)?;
         let until_key = until
-            .map(|e| {
-                e.encode(C::LoopUntil, limits)
-                    .map(|v| crate::digest::hash_bytes(&v))
-            })
+            .map(|e| e.encode(limits).map(|v| crate::digest::hash_bytes(&v)))
             .transpose()
             .map_err(|e| wrap(expression_error(e)))?;
         let key = (scope, until_key);

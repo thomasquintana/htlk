@@ -234,7 +234,7 @@ fn depth_exercise() {
     let mut f = base(&l);
     let mut bytes = b"\x82\x63not".repeat(124);
     bytes.extend_from_slice(b"\x82\x67literal\xf5");
-    let pre = Expression::decode(&bytes, ExpressionContext::Preconditions, &l).unwrap();
+    let pre = Expression::decode(&bytes, &l).unwrap();
     f.scopes.remove(&f.root_scope);
     let scope = Scope::new(
         ScopeFields {

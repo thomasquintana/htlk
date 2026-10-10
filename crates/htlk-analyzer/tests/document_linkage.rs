@@ -5,10 +5,10 @@ use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::Digest;
 use htlk_executable::{
     BuiltinType, DocumentFields, EngineIdentity, EvaluatorLimits, ExecutableEnvelope,
-    ExecutionLimits, ExecutionProfile, Expression, ExpressionContext, ExpressionKind, FunctionId,
-    FunctionSignature, JsonDocument, Library, McpBinding, McpBindingKind, McpTransport, Node,
-    NodeFields, Operation, PolicyDocument, PolicyFields, Port, PortTable, PromptTemplate,
-    RetryPolicy, ScalarLiteral, Scope, ScopeContext as C, ScopeFields, ServerIdentity, ValueType,
+    ExecutionLimits, ExecutionProfile, Expression, ExpressionKind, FunctionId, FunctionSignature,
+    JsonDocument, Library, McpBinding, McpBindingKind, McpTransport, Node, NodeFields, Operation,
+    PolicyDocument, PolicyFields, Port, PortTable, PromptTemplate, RetryPolicy, ScalarLiteral,
+    Scope, ScopeContext as C, ScopeFields, ServerIdentity, ValueType,
 };
 
 fn d(n: u8) -> Digest {
@@ -89,7 +89,7 @@ fn root(f: &mut DocumentFields, fields: ScopeFields, l: &Limits) {
     f.scopes.insert(f.root_scope, scope);
 }
 fn eval(f: &mut DocumentFields, kind: ExpressionKind, l: &Limits) {
-    let e = Expression::new(kind, ExpressionContext::Eval, l).unwrap();
+    let e = Expression::new(kind, l).unwrap();
     let mut n = NodeFields::new("worker".parse().unwrap(), Operation::Eval(e));
     n.outputs = ports("value", l);
     root(
@@ -1035,7 +1035,6 @@ fn schema_root_checks_cover_unused_functions_in_reached_manifests() {
             },
             arguments: vec![],
         },
-        ExpressionContext::Eval,
         &l,
     )
     .unwrap();

@@ -5,9 +5,9 @@ use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::digest::{Digest, RecordKind, record_digest};
 use htlk_executable::{
     BuiltinType as P, Edge, EdgeDestination as D, EdgeSource as S, ExecutionLimits,
-    Expression as E, ExpressionContext as EC, ExpressionKind as EK, GraphRecordError as Error,
-    Node, NodeFields, Operation as O, Port, PortTable, RetryPolicy, ScalarLiteral as L, Scope,
-    ScopeContext as C, ScopeFields, ValueReference, ValueType,
+    Expression as E, ExpressionKind as EK, GraphRecordError as Error, Node, NodeFields,
+    Operation as O, Port, PortTable, RetryPolicy, ScalarLiteral as L, Scope, ScopeContext as C,
+    ScopeFields, ValueReference, ValueType,
 };
 use std::error::Error as _;
 
@@ -316,12 +316,7 @@ fn primitive_layouts_reserved_names_and_context_free_representation() {
     ));
     f.inputs = table(&["request"], P::Json);
     assert!(Node::new(f, C::Ordinary, &l).is_ok());
-    let status = E::new(
-        EK::Status("worker".parse().unwrap()),
-        EC::ScopePostconditions,
-        &l,
-    )
-    .unwrap();
+    let status = E::new(EK::Status("worker".parse().unwrap()), &l).unwrap();
     let mut f = base.fields().clone();
     f.preconditions = status.clone();
     assert!(Node::new(f, C::Ordinary, &l).is_ok());
@@ -362,12 +357,7 @@ fn loop_contexts_do_not_become_serialized_role_labels() {
     bad.limits = ExecutionLimits::new().with_timeout_ms(1).unwrap();
     assert!(Scope::new(bad, C::LoopBody, &l).is_ok());
     let mut bad = fields;
-    bad.postconditions = E::new(
-        EK::Not(Box::new(E::literal(L::Boolean(false)))),
-        EC::ScopePostconditions,
-        &l,
-    )
-    .unwrap();
+    bad.postconditions = E::new(EK::Not(Box::new(E::literal(L::Boolean(false)))), &l).unwrap();
     assert!(Scope::new(bad, C::LoopBody, &l).is_ok());
     let mut f = node("worker").fields().clone();
     f.guard = E::new(
@@ -375,7 +365,6 @@ fn loop_contexts_do_not_become_serialized_role_labels() {
             source: ValueReference::Carried("x".parse().unwrap()),
             path: vec![],
         },
-        EC::Guard { loop_body: true },
         &l,
     )
     .unwrap();

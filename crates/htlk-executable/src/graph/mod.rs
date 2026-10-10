@@ -4,9 +4,7 @@ mod wire;
 
 use crate::cbor as htlk_cbor;
 use crate::digest::{Digest, RecordKind, record_digest};
-use crate::{
-    ExecutionLimits, Expression, ExpressionContext, Identifier, Port, RetryPolicy, ScalarLiteral,
-};
+use crate::{ExecutionLimits, Expression, Identifier, Port, RetryPolicy, ScalarLiteral};
 use htlk_cbor::{Limits, Value};
 
 pub use wire::GraphRecordError;
@@ -18,13 +16,6 @@ pub enum ScopeContext {
     Ordinary,
     /// Loop iteration body: carried/next permitted, local contracts true and limits empty.
     LoopBody,
-}
-impl ScopeContext {
-    fn guard(self) -> ExpressionContext {
-        ExpressionContext::Guard {
-            loop_body: self == Self::LoopBody,
-        }
-    }
 }
 
 /// Immutable identifier-keyed ordinary-value port declarations.
@@ -265,13 +256,6 @@ impl Operation {
     /// Returns schema, bound, identity, or codec failures.
     pub fn decode(bytes: &[u8], l: &Limits) -> Result<Self, GraphRecordError> {
         wire::parse_operation(&htlk_cbor::decode(bytes, l)?, l)
-    }
-    fn post_context(&self) -> ExpressionContext {
-        match self {
-            Self::Scope(_) => ExpressionContext::WrapperPostconditions,
-            Self::Loop { .. } => ExpressionContext::LoopPostconditions,
-            _ => ExpressionContext::PrimitivePostconditions,
-        }
     }
 }
 

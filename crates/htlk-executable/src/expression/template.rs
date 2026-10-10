@@ -1,7 +1,7 @@
 use crate::cbor as htlk_cbor;
 use htlk_cbor::{LimitKind, Limits, Map, Value};
 
-use super::{ExpressionContext, ExpressionError, wire};
+use super::{ExpressionError, wire};
 use crate::digest::{Digest, RecordKind, record_digest};
 use crate::{Identifier, Port};
 
@@ -58,7 +58,7 @@ impl PromptTemplate {
     /// # Errors
     /// Returns invalid parameter-type, limit, or allocation failures.
     pub fn to_value(&self, limits: &Limits) -> Result<Value, ExpressionError> {
-        let mut b = wire::Builder::new(ExpressionContext::Eval, limits)?;
+        let mut b = wire::Builder::new(limits)?;
         b.accounting.collection(2, 0)?;
         let parameters_key = b.string("parameters", 1)?;
         b.accounting.collection(self.parameters.len(), 1)?;

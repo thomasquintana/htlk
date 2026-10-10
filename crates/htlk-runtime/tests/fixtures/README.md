@@ -40,3 +40,11 @@ identities because that file contributes to both hashes. These four profile
 identities change the envelope fingerprint. The empty graph has no templates;
 its root scope, policy, and graph contents retain their original identities.
 Existing non-float template bytes and digests are covered by unchanged goldens.
+
+The expression API and diagnostic cleanup refreshes this fixture through the same
+generator. Model/analyzer source edits affect core, schema-validator, and
+URI-template identities; removing the unused construction context in `evaluate.rs`
+also changes the regex identity because that adapter source contributes to its
+hash. These four source-based identity changes alter the envelope fingerprint,
+not the expression wire format. The root scope, policy, and graph contents remain
+unchanged, as do the existing expression/template exact-byte and digest goldens.

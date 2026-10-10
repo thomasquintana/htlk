@@ -13,7 +13,7 @@ pub fn check_expression_context(
     limits: &cbor::Limits,
 ) -> Result<(), crate::ExpressionDiagnostic> {
     expression
-        .to_value(context, limits)
+        .to_value(limits)
         .map_err(|e| crate::ExpressionDiagnostic {
             expression_path: vec![],
             error: e.into(),

@@ -162,7 +162,6 @@ fn checked_execution_enforces_dynamic_operands_and_keeps_laziness() {
             source: source.clone(),
             path: vec![],
         },
-        C::Eval,
         &codec,
     )
     .unwrap();
@@ -178,7 +177,7 @@ fn checked_execution_enforces_dynamic_operands_and_keeps_laziness() {
             &codec,
         )
         .unwrap();
-    let expression = Expression::new(E::Not(Box::new(reference.clone())), C::Eval, &codec).unwrap();
+    let expression = Expression::new(E::Not(Box::new(reference.clone())), &codec).unwrap();
     let checked = CheckedExpression::new(&expression, C::Eval, &env, None, &codec).unwrap();
     assert_eq!(
         checked.evaluate(&frame, None, &policy()),
@@ -190,7 +189,6 @@ fn checked_execution_enforces_dynamic_operands_and_keeps_laziness() {
             left: Box::new(Expression::literal(ScalarLiteral::Boolean(false))),
             right: Box::new(expression),
         },
-        C::Eval,
         &codec,
     )
     .unwrap();
@@ -261,7 +259,6 @@ fn checked_reference_projection_can_read_large_roots_for_small_outputs() {
             source: source.clone(),
             path: vec![PathStep::Field("value".into())],
         },
-        C::Eval,
         &codec,
     )
     .unwrap();
@@ -321,8 +318,7 @@ fn runtime_type_depth_on_controlled_stacks() {
                 use htlk_executable::{Expression, ExpressionContext};
                 let mut bytes = b"\x82\x63not".repeat(126);
                 bytes.extend_from_slice(b"\x82\x67literal\xf5");
-                let expression =
-                    Expression::decode(&bytes, ExpressionContext::Eval, &codec).unwrap();
+                let expression = Expression::decode(&bytes, &codec).unwrap();
                 let env = ExpressionTypeEnvironment::default();
                 let checked = CheckedExpression::new(
                     &expression,
@@ -391,7 +387,6 @@ fn optional_parent_presence_does_not_require_the_final_optional_member() {
                 PathStep::Field("child".into()),
             ],
         },
-        C::Eval,
         &codec,
     )
     .unwrap();
@@ -426,7 +421,6 @@ fn declared_json_result_rejects_non_json_extra_fields_on_structural_error_values
             source: source.clone(),
             path: vec![],
         },
-        C::Eval,
         &limits,
     )
     .unwrap();
