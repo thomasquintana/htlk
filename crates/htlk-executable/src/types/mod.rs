@@ -44,7 +44,6 @@ pub enum BuiltinType {
     /// A pattern/flags record validated by the pinned regex engine.
     Regex,
     /// Returned MCP resource contents plus provenance and request information.
-    /// The canonical wire name is `ResourceSnapshot`.
     McpResourceResult,
     /// Returned MCP prompt messages and metadata.
     McpPromptResult,
@@ -54,10 +53,6 @@ pub enum BuiltinType {
 
 impl BuiltinType {
     /// Returns the exact canonical wire spelling, without source aliases.
-    ///
-    /// Rust names and wire names are separate: [`Self::McpResourceResult`] uses
-    /// `ResourceSnapshot`, while [`Self::McpPromptResult`] uses `McpPromptResult`.
-    /// `McpResourceResult` is not an accepted wire spelling or parsing alias.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::String => "string",
@@ -68,13 +63,13 @@ impl BuiltinType {
             Self::Bytes => "bytes",
             Self::Json => "json",
             Self::Regex => "regex",
-            Self::McpResourceResult => "ResourceSnapshot",
+            Self::McpResourceResult => "McpResourceResult",
             Self::McpPromptResult => "McpPromptResult",
             Self::Error => "Error",
         }
     }
 
-    // Accept only the canonical wire spellings from as_str, not Rust variant names.
+    // Accept only the canonical wire spellings from as_str.
     fn parse(text: &str) -> Result<Self, TypeError> {
         match text {
             "string" => Ok(Self::String),
@@ -85,7 +80,7 @@ impl BuiltinType {
             "bytes" => Ok(Self::Bytes),
             "json" => Ok(Self::Json),
             "regex" => Ok(Self::Regex),
-            "ResourceSnapshot" => Ok(Self::McpResourceResult),
+            "McpResourceResult" => Ok(Self::McpResourceResult),
             "McpPromptResult" => Ok(Self::McpPromptResult),
             "Error" => Ok(Self::Error),
             _ => Err(TypeError::UnknownPrimitive),

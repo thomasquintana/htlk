@@ -160,8 +160,8 @@ Every primitive operation produces one output named `value`. A composite node ha
 |---|---|---|
 | `eval(T, expr)` | Optional `inputs` table in node options, default empty | `value` with declaration T |
 | `call(mcp.tool(server, name))` | Derived `arguments` object constrained by input schema | Validated structured object |
-| `read(mcp.resource(server, uri))` | Empty | `ResourceSnapshot` |
-| `read(mcp.template(server, template))` | Derived `arguments` record of required string variables | `ResourceSnapshot` |
+| `read(mcp.resource(server, uri))` | Empty | `McpResourceResult` |
+| `read(mcp.template(server, template))` | Derived `arguments` record of required string variables | `McpResourceResult` |
 | `fetch(mcp.prompt(server, name))` | Derived `arguments` record of string prompt parameters | `McpPromptResult` |
 | `use(task_name)` | Referenced task's inputs | Referenced task's outputs |
 | `wait(T)` | One `request: json` | `value: T` |
@@ -355,7 +355,7 @@ value_type = primitive_type | qualified_type
            | "record", port_table ;
 primitive_type = "string" | "text" | "integer" | "float" | "boolean"
                | "null" | "bytes" | "json" | "regex"
-               | "ResourceSnapshot" | "McpPromptResult" | "Error" ;
+               | "McpResourceResult" | "McpPromptResult" | "Error" ;
 port_type = value_type | "optional", "(", value_type, ")" ;
 port_table = "{", [ field, { ",", field }, [ "," ] ], "}" ;
 field = record_key, "=", port_type ;

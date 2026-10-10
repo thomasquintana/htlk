@@ -242,10 +242,10 @@ Prompt fetches have one `arguments` record with requiredness from the prompt des
 
 A resource's **MIME type** is its advertised media label, such as `text/plain`. It does not by itself prove a particular application data shape. In the record notation below, `?` marks an optional field, `bytes` means raw data, and the `kind` field distinguishes text from binary content. This distinguishing field is called a **tag**; it is not a special CBOR tag.
 
-Resource contents normalize into `ResourceSnapshot` without guessing a domain type:
+Resource contents normalize into `McpResourceResult` without guessing a domain type:
 
 ```text
-ResourceSnapshot = {
+McpResourceResult = {
     server_identity: Digest,
     requested_uri: string,
     descriptor_digest: Digest,
@@ -500,7 +500,7 @@ Defaults MUST supply positive `timeout_ms`, `attempt_timeout_ms`, and `max_concu
 
 `maximum_scope_depth` counts the root as one and each nested task or loop-body scope as one additional level; repeated iterations do not add nesting. `maximum_expanded_nodes` bounds the total possible invocation occurrences in a fresh run, not the number of distinct stored definitions. Count each node occurrence once, multiply loop-body counts by `max_iterations`, include all guarded branches, and count reused task bodies at each use site. Compute these bounds on the content-addressed definition DAG using checked or saturating arithmetic; do not materialize every occurrence to check the limit. The same checks apply to a composed root, so repeated live wrapping cannot bypass structural limits. Counts within configured bounds do not reserve all runtime storage in advance.
 
-Expression records are type-checked from their context and operation result annotation. In 0.1, a serialized `schema` type digest must identify a reached tool input/output schema root, whose base is fixed by section 3. It cannot name an arbitrary subschema extracted without its resolution context. Field projection and validation plans retain their schema locations internally; they do not introduce context-free subschema type records. Signature-only `var` and `function` type constructors are rejected elsewhere. `ResourceSnapshot` and `McpPromptResult` primitive names have the fixed meanings in section 3.2.
+Expression records are type-checked from their context and operation result annotation. In 0.1, a serialized `schema` type digest must identify a reached tool input/output schema root, whose base is fixed by section 3. It cannot name an arbitrary subschema extracted without its resolution context. Field projection and validation plans retain their schema locations internally; they do not introduce context-free subschema type records. Signature-only `var` and `function` type constructors are rejected elsewhere. `McpResourceResult` and `McpPromptResult` primitive names have the fixed meanings in section 3.2.
 
 ## 8. Binary graph joins
 

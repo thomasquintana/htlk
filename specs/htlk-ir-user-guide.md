@@ -727,7 +727,7 @@ task context.copy_brief {
         }) {
             inputs = {
                 destination = string,
-                snapshot = ResourceSnapshot,
+                snapshot = McpResourceResult,
             }
             preconditions = length(inputs.snapshot.contents) == 1
                 and inputs.snapshot.contents[0].kind == "text"

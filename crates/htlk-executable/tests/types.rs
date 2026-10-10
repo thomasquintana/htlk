@@ -51,7 +51,7 @@ fn builtin_names_and_simple_golden_bytes() {
         (P::Bytes, "bytes"),
         (P::Json, "json"),
         (P::Regex, "regex"),
-        (P::McpResourceResult, "ResourceSnapshot"),
+        (P::McpResourceResult, "McpResourceResult"),
         (P::McpPromptResult, "McpPromptResult"),
         (P::Error, "Error"),
     ] {
@@ -87,25 +87,28 @@ fn builtin_names_and_simple_golden_bytes() {
 }
 
 #[test]
-fn mcp_result_rust_names_preserve_canonical_wire_bytes() {
+fn mcp_result_canonical_wire_names_and_legacy_rejection() {
     let limits = Limits::default();
     for (builtin, bytes) in [
-        (P::McpResourceResult, b"\x70ResourceSnapshot".as_slice()),
+        (P::McpResourceResult, b"\x71McpResourceResult".as_slice()),
         (P::McpPromptResult, b"\x6fMcpPromptResult".as_slice()),
     ] {
         for context in [C::Value, C::Signature] {
             let ty = T::builtin(builtin);
+            let value = text(builtin.as_str());
+            assert_eq!(ty.to_value(context, &limits).unwrap(), value);
+            assert_eq!(T::from_value(&value, context, &limits).unwrap(), ty);
             assert_eq!(ty.encode(context, &limits).unwrap(), bytes);
             assert_eq!(T::decode(bytes, context, &limits).unwrap(), ty);
         }
     }
     for context in [C::Value, C::Signature] {
         assert_eq!(
-            T::from_value(&text("McpResourceResult"), context, &limits),
+            T::from_value(&text("ResourceSnapshot"), context, &limits),
             Err(TypeError::UnknownPrimitive)
         );
         assert_eq!(
-            T::decode(b"\x71McpResourceResult", context, &limits),
+            T::decode(b"\x70ResourceSnapshot", context, &limits),
             Err(TypeError::UnknownPrimitive)
         );
     }

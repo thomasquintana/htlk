@@ -20,3 +20,10 @@ or regenerate fixtures automatically as part of tests.
 Source identities include package-owned model and analyzer contributions as well
 as runtime adapters. The independent checker maintains explicit source lists and
 hash framing for each contribution, including the pinned MCP schema snapshot.
+
+The canonical `McpResourceResult` naming change regenerates `native-empty.hex`
+solely because of source-derived implementation identities: this empty graph
+contains no MCP result type. The model contribution changes the schema-validator
+and URI-template identities; the core identity also includes the updated runtime
+documentation source. Those three profile digests change the envelope fingerprint.
+The root scope, policy, regex identity, and all other fixture data remain unchanged.

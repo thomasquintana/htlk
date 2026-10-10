@@ -95,7 +95,7 @@ value_type = primitive
            / ["function", [* port], port]
 primitive = "string" / "integer" / "float" / "boolean" / "null"
           / "bytes" / "json" / "regex"
-          / "ResourceSnapshot" / "McpPromptResult" / "Error"
+          / "McpResourceResult" / "McpPromptResult" / "Error"
 ; var/function are restricted to library signatures by semantic validation.
 
 scope = {

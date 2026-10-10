@@ -172,10 +172,10 @@ types. Source aliases (including `text`) must be resolved by the compiler before
 reaching this canonical model.
 
 `BuiltinType::McpResourceResult` describes returned resource contents plus
-provenance/request information; its canonical wire spelling remains
-`"ResourceSnapshot"`. `BuiltinType::McpPromptResult` describes returned prompt
+provenance/request information, with canonical wire spelling
+`"McpResourceResult"`. `BuiltinType::McpPromptResult` describes returned prompt
 messages and metadata, with canonical wire spelling `"McpPromptResult"`.
-`"McpResourceResult"` is not accepted as a wire spelling or alias. These remain
+These remain
 distinct named built-in types, not ordinary record aliases. `builtin_record_type`
 exposes their expanded shapes and field presence requirements; MCP operation
 boundaries still require the appropriate named result type.

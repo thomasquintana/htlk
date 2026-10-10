@@ -12,8 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rename the executable built-in type API to `BuiltinType`,
   `ValueTypeKind::Builtin`, and `ValueType::builtin`, including the structured
   `BuiltinType::McpResourceResult` alongside `BuiltinType::McpPromptResult`.
-  Canonical wire names remain `ResourceSnapshot` and `McpPromptResult`, with
-  unchanged type semantics and canonical encoding for existing documents.
+  Canonical wire names are now `McpResourceResult` and `McpPromptResult`.
+  Renaming `ResourceSnapshot` to `McpResourceResult` intentionally breaks wire
+  compatibility: the old spelling is rejected without an alias or migration.
+  Type structure and semantics, and the `McpPromptResult` encoding, are unchanged.
   Source-derived native implementation identities change with the Rust sources.
 
 ### Fixed

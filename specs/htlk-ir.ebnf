@@ -15,7 +15,7 @@ value_type = primitive_type | qualified_type
            | "record", port_table ;
 primitive_type = "string" | "text" | "integer" | "float" | "boolean"
                | "null" | "bytes" | "json" | "regex"
-               | "ResourceSnapshot" | "McpPromptResult" | "Error" ;
+               | "McpResourceResult" | "McpPromptResult" | "Error" ;
 port_type = value_type | "optional", "(", value_type, ")" ;
 port_table = "{", [ field, { ",", field }, [ "," ] ], "}" ;
 field = record_key, "=", port_type ;

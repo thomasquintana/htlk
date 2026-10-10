@@ -77,7 +77,7 @@ fn base64_data(data: &str, limits: &Limits) -> Result<(), McpValidationError> {
     }
 }
 /// Checks a normalized McpResourceResult against its frozen binding and URI.
-/// This built-in type retains the canonical wire name `ResourceSnapshot`.
+/// This built-in type has the canonical wire name `McpResourceResult`.
 ///
 /// # Errors
 /// Returns invalid shape/content, identity mismatch or resource failures.

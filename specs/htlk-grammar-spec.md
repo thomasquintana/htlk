@@ -231,7 +231,7 @@ Some storage terms are needed to state type limits precisely. A **byte** is eigh
 | `record { ... }` | Structural record; declared fields are checked and extra fields are permitted. |
 | `union(A, B)` | Value satisfying at least one member. |
 | `enum("a", "b")` | One of the listed strings. |
-| `ResourceSnapshot` | Ordered normalized MCP resource content with provenance. |
+| `McpResourceResult` | Ordered normalized MCP resource content with provenance. |
 | `McpPromptResult` | Validated MCP prompt result data. |
 
 A **URI**, or Uniform Resource Identifier, names material such as a resource; it is not necessarily an address that can be opened on the web. A **timestamp** represents a time. A **snapshot** is the contents accepted from one read, not a continually updating view. **Provenance** records where a value came from. An **artifact** is an accepted value plus separate provenance and access information.
@@ -319,8 +319,8 @@ The three protocol operations share one runtime request/validation mechanism:
 | Source operation | Inputs | Outputs |
 |---|---|---|
 | `call(mcp.tool("server", "tool"))` | `arguments`: complete object constrained by input schema | `value`: complete structured object constrained by output schema |
-| `read(mcp.resource("server", "uri"))` | None | `value: ResourceSnapshot` |
-| `read(mcp.template("server", "template"))` | `arguments`: object of string template variables | `value: ResourceSnapshot` |
+| `read(mcp.resource("server", "uri"))` | None | `value: McpResourceResult` |
+| `read(mcp.template("server", "template"))` | `arguments`: object of string template variables | `value: McpResourceResult` |
 | `fetch(mcp.prompt("server", "prompt"))` | `arguments`: object of required/optional string parameters | `value: McpPromptResult` |
 
 One full argument object prevents protocol-owned property names from colliding with HTLK ports. Even a tool with no arguments receives an explicit empty object, normally from `eval(json, {})`. Catalog schemas validate required and forbidden properties. Whole results preserve undeclared-but-permitted properties.
@@ -343,7 +343,7 @@ task context.copy_to_sandbox {
         }) {
             inputs = {
                 destination = string,
-                snapshot = ResourceSnapshot,
+                snapshot = McpResourceResult,
             }
             preconditions = length(inputs.snapshot.contents) == 1
                 and inputs.snapshot.contents[0].kind == "text"
@@ -371,7 +371,7 @@ flowchart LR
 
 A resource's **MIME type** is an advertised media label, such as `text/plain`; it does not prove an application's data shape. **Decoding** translates stored or transmitted data into usable values. **Authorization** checks whether the authenticated caller is allowed to read or transfer them.
 
-Resources have no redundant top-level declaration. Their content may be text or bytes and may contain multiple returned URIs. `ResourceSnapshot` preserves that ordered set; it does not infer one homogeneous type from MIME or require every returned URI to equal the requested URI. Access policy checks every returned entry. Text-to-JSON parsing and decoding are explicit pure library calls.
+Resources have no redundant top-level declaration. Their content may be text or bytes and may contain multiple returned URIs. `McpResourceResult` preserves that ordered set; it does not infer one homogeneous type from MIME or require every returned URI to equal the requested URI. Access policy checks every returned entry. Text-to-JSON parsing and decoding are explicit pure library calls.
 
 Resource writes use MCP tools. Resource notifications start new runs through host trigger configuration. A same-run notification response must address an explicit open wait. A normal read never subscribes or changes an accepted snapshot. See the selected [MCP resources protocol](https://modelcontextprotocol.io/specification/2025-11-25/server/resources).
 
