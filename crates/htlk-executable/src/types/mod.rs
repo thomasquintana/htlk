@@ -83,7 +83,7 @@ impl BuiltinType {
             "McpResourceResult" => Ok(Self::McpResourceResult),
             "McpPromptResult" => Ok(Self::McpPromptResult),
             "Error" => Ok(Self::Error),
-            _ => Err(TypeError::UnknownPrimitive),
+            _ => Err(TypeError::UnknownBuiltin),
         }
     }
 }
@@ -161,8 +161,9 @@ impl ValueType {
     ) -> Result<Self, TypeError> {
         let value = wire::type_value(&kind, context, limits)?;
         let result = wire::parse_type(&value, context, limits, true)?;
-        // Flattening can increase the size of an individual union array even
-        // though the total representation shrinks. Check the normalized result.
+        // Defensively validate the normalized result. Current normalization does
+        // not increase total encoded bytes or depth, the only codec limits;
+        // there is no separate per-array member limit.
         result.to_value(context, limits)?;
         Ok(result)
     }

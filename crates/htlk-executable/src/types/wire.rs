@@ -12,6 +12,10 @@ use crate::{Identifier, ParseIdentifierError};
 ///
 /// Descriptions and field names in errors are fixed schema terms, not submitted
 /// values. Codec, identifier, and digest failures remain available as sources.
+/// Display provides user-facing explanations; classify errors by their variants.
+/// Consumers classifying all resource-limit failures must handle both
+/// [`Self::LimitExceeded`] during conversion and [`Self::Codec`] wrapping
+/// [`htlk_cbor::ErrorKind::LimitExceeded`] during codec operations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TypeError {
@@ -20,7 +24,7 @@ pub enum TypeError {
     /// A record/array/scalar has the wrong shape at the named schema site.
     InvalidShape(&'static str),
     /// Text is not a supported canonical built-in type name (aliases are not accepted).
-    UnknownPrimitive,
+    UnknownBuiltin,
     /// A tagged type array uses an unknown constructor.
     UnknownConstructor,
     /// A port contains an undeclared metadata field.
@@ -70,25 +74,49 @@ impl From<EncodingLimitError> for TypeError {
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Codec(error) => write!(f, "type record: {error}"),
-            Self::InvalidShape(site) => write!(f, "invalid type record shape: {site}"),
-            Self::UnknownPrimitive => f.write_str("unknown canonical built-in type"),
-            Self::UnknownConstructor => f.write_str("unknown canonical type constructor"),
-            Self::UnknownPortField => f.write_str("unknown port field"),
-            Self::MissingPortField(field) => write!(f, "missing port field: {field}"),
-            Self::UnionCardinality => f.write_str("union requires at least two distinct members"),
-            Self::EmptyEnum => f.write_str("enum requires at least one member"),
-            Self::DuplicateEnumMember => f.write_str("duplicate enum member"),
-            Self::NonCanonical(rule) => write!(f, "noncanonical type record: {rule}"),
-            Self::SignatureOnly(kind) => {
-                write!(f, "type constructor requires signature context: {kind}")
-            }
-            Self::Identifier(error) => write!(f, "type variable: {error}"),
-            Self::Digest(error) => write!(f, "schema type: {error}"),
-            Self::LimitExceeded { limit, maximum } => {
-                write!(f, "type conversion limit exceeded: {limit:?} ({maximum})")
-            }
-            Self::AllocationFailed => f.write_str("type record allocation failed"),
+            Self::Codec(error) => write!(f, "Could not process the type or port representation: {error}"),
+            Self::InvalidShape(site) => f.write_str(match *site {
+                "type" => "A type must be a built-in type name or a tagged constructor array.",
+                "type constructor" => "A type constructor array must begin with a text constructor name.",
+                "constructor arity" => "The type constructor has an incorrect number of arguments.",
+                "port record" => "A port must be a map containing type and required fields.",
+                "required boolean" => "The port's required field must be a boolean.",
+                "record fields" => "Record fields must be a map from field names to port declarations.",
+                "enum members" => "Enum members must be an array of strings.",
+                "enum member" => "Each enum member must be a string.",
+                "union members" => "Union members must be an array of type descriptions.",
+                "schema digest" => "A schema type must contain a digest encoded as text.",
+                "type variable" => "A type variable must contain an identifier encoded as text.",
+                "function parameters" => "Function parameters must be an array of port declarations.",
+                _ => "The type or port representation has an invalid shape.",
+            }),
+            Self::UnknownBuiltin => f.write_str("The type name is not a supported canonical built-in type name."),
+            Self::UnknownConstructor => f.write_str("The type constructor is not supported."),
+            Self::UnknownPortField => f.write_str("A port may contain only type and required fields."),
+            Self::MissingPortField(field) => f.write_str(match *field {
+                "type" => "The port is missing its type field.",
+                "required" => "The port is missing its required field.",
+                _ => "The port is missing a required metadata field.",
+            }),
+            Self::UnionCardinality => f.write_str("A union must contain at least two distinct types after normalization."),
+            Self::EmptyEnum => f.write_str("An enum must contain at least one string member."),
+            Self::DuplicateEnumMember => f.write_str("An enum must not contain duplicate string members."),
+            Self::NonCanonical(rule) => f.write_str(match *rule {
+                "enum UTF-8 ordering" => "Enum members must be sorted by their UTF-8 bytes.",
+                "nested union" => "A canonical union must be flattened rather than contain another union directly.",
+                "union encoded-byte ordering/uniqueness" => "Union members must be distinct and sorted by their canonical encoded bytes.",
+                _ => "The type representation does not follow the required canonical form.",
+            }),
+            Self::SignatureOnly(kind) => f.write_str(match *kind {
+                "var" => "Type variables are only permitted in signature declarations.",
+                "function" => "Function types are only permitted in signature declarations.",
+                _ => "This type constructor is only permitted in signature declarations.",
+            }),
+            Self::Identifier(error) => write!(f, "Could not process the type variable's identifier: {error}"),
+            Self::Digest(error) => write!(f, "The schema type has an invalid digest: {error}"),
+            Self::LimitExceeded { limit: LimitKind::DocumentBytes, maximum } => write!(f, "The type representation exceeds the configured maximum of {maximum} bytes."),
+            Self::LimitExceeded { limit: LimitKind::Depth, maximum } => write!(f, "The type representation exceeds the configured maximum depth of {maximum}."),
+            Self::AllocationFailed => f.write_str("Could not allocate memory to construct or normalize the type or port representation."),
         }
     }
 }

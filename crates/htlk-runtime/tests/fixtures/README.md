@@ -27,3 +27,8 @@ contains no MCP result type. The model contribution changes the schema-validator
 and URI-template identities; the core identity also includes the updated runtime
 documentation source. Those three profile digests change the envelope fingerprint.
 The root scope, policy, regex identity, and all other fixture data remain unchanged.
+
+The type-error diagnostic and `UnknownBuiltin` cleanup also refreshes this fixture
+through the generation command above. The model source contribution changes the
+core, schema-validator, and URI-template implementation identities and therefore
+the envelope fingerprint, without changing type encodings or graph contents.

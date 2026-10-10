@@ -107,7 +107,7 @@ fn exercise() {
     let bytes = htlk_cbor::encode(&value, &limits).unwrap();
     assert_eq!(
         T::decode(&bytes, C::Value, &limits).unwrap_err(),
-        TypeError::UnknownPrimitive
+        TypeError::UnknownBuiltin
     );
     drop(value);
 }

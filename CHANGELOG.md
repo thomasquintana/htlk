@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Rename the type error category to `TypeError::UnknownBuiltin` to align with
+  `BuiltinType`, without a compatibility alias or changes to rejected inputs.
 - Rename the executable built-in type API to `BuiltinType`,
   `ValueTypeKind::Builtin`, and `ValueType::builtin`, including the structured
   `BuiltinType::McpResourceResult` alongside `BuiltinType::McpPromptResult`.
@@ -20,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Type errors now explain schema shapes, canonicality, signature restrictions,
+  and byte/depth ceilings in user-facing prose without exposing submitted data.
+  Resource-limit classification is documented for both conversion and codec errors.
+  Correct the nested-union budget test and comment: it does not establish that
+  the defensive final normalized-result check is reached.
+  Refresh the native fixture's source-derived implementation identities and
+  envelope fingerprint through the established generator.
 - Record accounting limit errors now distinguish encoded-byte and depth ceilings
   in clear prose while preserving structured fields and input privacy.
 - Identifier errors now explain naming rules and allocation failure in clear

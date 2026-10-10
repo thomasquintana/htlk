@@ -41,6 +41,259 @@ fn check_type(ty: &T, context: C) {
 }
 
 #[test]
+fn type_error_display_explains_categories_and_public_fallbacks() {
+    for (error, expected) in [
+        (
+            TypeError::UnknownBuiltin,
+            "The type name is not a supported canonical built-in type name.",
+        ),
+        (
+            TypeError::UnknownConstructor,
+            "The type constructor is not supported.",
+        ),
+        (
+            TypeError::UnknownPortField,
+            "A port may contain only type and required fields.",
+        ),
+        (
+            TypeError::MissingPortField("type"),
+            "The port is missing its type field.",
+        ),
+        (
+            TypeError::MissingPortField("required"),
+            "The port is missing its required field.",
+        ),
+        (
+            TypeError::UnionCardinality,
+            "A union must contain at least two distinct types after normalization.",
+        ),
+        (
+            TypeError::EmptyEnum,
+            "An enum must contain at least one string member.",
+        ),
+        (
+            TypeError::DuplicateEnumMember,
+            "An enum must not contain duplicate string members.",
+        ),
+        (
+            TypeError::NonCanonical("enum UTF-8 ordering"),
+            "Enum members must be sorted by their UTF-8 bytes.",
+        ),
+        (
+            TypeError::NonCanonical("nested union"),
+            "A canonical union must be flattened rather than contain another union directly.",
+        ),
+        (
+            TypeError::NonCanonical("union encoded-byte ordering/uniqueness"),
+            "Union members must be distinct and sorted by their canonical encoded bytes.",
+        ),
+        (
+            TypeError::SignatureOnly("var"),
+            "Type variables are only permitted in signature declarations.",
+        ),
+        (
+            TypeError::SignatureOnly("function"),
+            "Function types are only permitted in signature declarations.",
+        ),
+        (
+            TypeError::LimitExceeded {
+                limit: LimitKind::DocumentBytes,
+                maximum: 1024,
+            },
+            "The type representation exceeds the configured maximum of 1024 bytes.",
+        ),
+        (
+            TypeError::LimitExceeded {
+                limit: LimitKind::Depth,
+                maximum: 64,
+            },
+            "The type representation exceeds the configured maximum depth of 64.",
+        ),
+        (
+            TypeError::AllocationFailed,
+            "Could not allocate memory to construct or normalize the type or port representation.",
+        ),
+        (
+            TypeError::InvalidShape("consumer-defined"),
+            "The type or port representation has an invalid shape.",
+        ),
+        (
+            TypeError::NonCanonical("consumer-defined"),
+            "The type representation does not follow the required canonical form.",
+        ),
+        (
+            TypeError::SignatureOnly("consumer-defined"),
+            "This type constructor is only permitted in signature declarations.",
+        ),
+        (
+            TypeError::MissingPortField("consumer-defined"),
+            "The port is missing a required metadata field.",
+        ),
+    ] {
+        assert_eq!(error.to_string(), expected, "{error:?}");
+        assert!(error.source().is_none());
+    }
+}
+
+#[test]
+fn schema_shape_explanations_are_attached_at_public_ingress() {
+    let limits = Limits::default();
+    for (value, site, expected) in [
+        (
+            Value::Null,
+            "type",
+            "A type must be a built-in type name or a tagged constructor array.",
+        ),
+        (
+            Value::Array(vec![]),
+            "type constructor",
+            "A type constructor array must begin with a text constructor name.",
+        ),
+        (
+            Value::Array(vec![Value::Null]),
+            "type constructor",
+            "A type constructor array must begin with a text constructor name.",
+        ),
+        (
+            Value::Array(vec![text("list")]),
+            "constructor arity",
+            "The type constructor has an incorrect number of arguments.",
+        ),
+        (
+            tagged("record", Value::Null),
+            "record fields",
+            "Record fields must be a map from field names to port declarations.",
+        ),
+        (
+            tagged("enum", Value::Null),
+            "enum members",
+            "Enum members must be an array of strings.",
+        ),
+        (
+            tagged("enum", Value::Array(vec![Value::Null])),
+            "enum member",
+            "Each enum member must be a string.",
+        ),
+        (
+            tagged("union", Value::Null),
+            "union members",
+            "Union members must be an array of type descriptions.",
+        ),
+        (
+            tagged("schema", Value::Null),
+            "schema digest",
+            "A schema type must contain a digest encoded as text.",
+        ),
+        (
+            tagged("var", Value::Null),
+            "type variable",
+            "A type variable must contain an identifier encoded as text.",
+        ),
+        (
+            Value::Array(vec![
+                text("function"),
+                Value::Null,
+                port_value(text("null"), true),
+            ]),
+            "function parameters",
+            "Function parameters must be an array of port declarations.",
+        ),
+    ] {
+        let bytes = htlk_cbor::encode(&value, &limits).unwrap();
+        for error in [
+            T::from_value(&value, C::Signature, &limits).unwrap_err(),
+            T::decode(&bytes, C::Signature, &limits).unwrap_err(),
+        ] {
+            assert_eq!(error, TypeError::InvalidShape(site));
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+    for (value, site, expected) in [
+        (
+            Value::Null,
+            "port record",
+            "A port must be a map containing type and required fields.",
+        ),
+        (
+            Value::Map(
+                Map::try_from_entries([
+                    ("type".into(), text("null")),
+                    ("required".into(), Value::Null),
+                ])
+                .unwrap(),
+            ),
+            "required boolean",
+            "The port's required field must be a boolean.",
+        ),
+    ] {
+        let bytes = htlk_cbor::encode(&value, &limits).unwrap();
+        for error in [
+            Port::from_value(&value, C::Value, &limits).unwrap_err(),
+            Port::decode(&bytes, C::Value, &limits).unwrap_err(),
+        ] {
+            assert_eq!(error, TypeError::InvalidShape(site));
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+}
+
+#[test]
+fn wrapped_errors_keep_context_sources_and_private_contents() {
+    let limits = Limits::default();
+    let identifier = Identifier::try_from("Private-input").unwrap_err();
+    let digest = "private-input".parse::<Digest>().unwrap_err();
+    let codec = htlk_cbor::decode(&[0x81], &limits).unwrap_err();
+    for (error, expected, expected_display) in [
+        (
+            T::from_value(&tagged("var", text("Private-input")), C::Signature, &limits)
+                .unwrap_err(),
+            TypeError::Identifier(identifier),
+            format!("Could not process the type variable's identifier: {identifier}"),
+        ),
+        (
+            T::from_value(&tagged("schema", text("private-input")), C::Value, &limits).unwrap_err(),
+            TypeError::Digest(digest),
+            format!("The schema type has an invalid digest: {digest}"),
+        ),
+        (
+            T::decode(&[0x81], C::Value, &limits).unwrap_err(),
+            TypeError::Codec(codec.clone()),
+            format!("Could not process the type or port representation: {codec}"),
+        ),
+    ] {
+        assert_eq!(error, expected);
+        assert_eq!(error.to_string(), expected_display);
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            expected.source().unwrap().to_string()
+        );
+        assert!(!error.to_string().contains(".."));
+        assert!(!error.to_string().contains("private-input"));
+        assert!(!error.to_string().contains("Private-input"));
+    }
+    for error in [
+        T::from_value(&text("private-input"), C::Value, &limits).unwrap_err(),
+        T::from_value(&tagged("private-input", Value::Null), C::Value, &limits).unwrap_err(),
+        Port::from_value(
+            &Value::Map(Map::try_from_entries([("private-input".into(), Value::Null)]).unwrap()),
+            C::Value,
+            &limits,
+        )
+        .unwrap_err(),
+        T::new(K::Enum(vec!["private-input".into(); 2]), C::Value, &limits).unwrap_err(),
+    ] {
+        assert!(!error.to_string().contains("private-input"));
+        assert!(!format!("{error:?}").contains("private-input"));
+    }
+    let error = T::new(K::Var("t".parse().unwrap()), C::Value, &limits).unwrap_err();
+    assert_eq!(error, TypeError::SignatureOnly("var"));
+    assert_eq!(
+        error.to_string(),
+        "Type variables are only permitted in signature declarations."
+    );
+}
+
+#[test]
 fn builtin_names_and_simple_golden_bytes() {
     for (p, name) in [
         (P::String, "string"),
@@ -105,11 +358,11 @@ fn mcp_result_canonical_wire_names_and_legacy_rejection() {
     for context in [C::Value, C::Signature] {
         assert_eq!(
             T::from_value(&text("ResourceSnapshot"), context, &limits),
-            Err(TypeError::UnknownPrimitive)
+            Err(TypeError::UnknownBuiltin)
         );
         assert_eq!(
             T::decode(b"\x70ResourceSnapshot", context, &limits),
-            Err(TypeError::UnknownPrimitive)
+            Err(TypeError::UnknownBuiltin)
         );
     }
 }
@@ -232,7 +485,7 @@ fn canonical_ingress_never_repairs_types() {
     for alias in ["text", "Customer", "STRING", "unknown"] {
         assert_eq!(
             T::from_value(&text(alias), C::Value, &limits).unwrap_err(),
-            TypeError::UnknownPrimitive
+            TypeError::UnknownBuiltin
         );
     }
     let bad = tagged("union", Value::Array(vec![text("string")]));
@@ -508,7 +761,7 @@ fn conversion_and_ingress_honor_wire_limits() {
 }
 
 #[test]
-fn flattened_union_must_fit_its_final_byte_limit() {
+fn nested_union_construction_rejects_budget_below_normalized_size() {
     let a = make(K::Union(vec![builtin(P::String), builtin(P::Boolean)]));
     let b = make(K::Union(vec![builtin(P::Null), builtin(P::Integer)]));
     let flattened = make(K::Union(vec![a.clone(), b.clone()]));
@@ -521,6 +774,21 @@ fn flattened_union_must_fit_its_final_byte_limit() {
         max_document_bytes: maximum,
         ..Limits::default()
     };
+    // The authored representation is larger still: conversion rejects it before
+    // normalization. This does not exercise the final normalized-result check.
+    let authored = tagged(
+        "union",
+        Value::Array(vec![
+            a.to_value(C::Value, &Limits::default()).unwrap(),
+            b.to_value(C::Value, &Limits::default()).unwrap(),
+        ]),
+    );
+    assert!(
+        htlk_cbor::encode(&authored, &Limits::default())
+            .unwrap()
+            .len()
+            > maximum + 1
+    );
     assert!(matches!(
         T::new(K::Union(vec![a, b]), C::Value, &tight),
         Err(TypeError::LimitExceeded {
