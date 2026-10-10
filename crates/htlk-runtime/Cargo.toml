@@ -24,6 +24,7 @@ iri-string.workspace = true
 regex.workspace = true
 regex-automata.workspace = true
 regex-syntax.workspace = true
+ryu-js.workspace = true
 sha2.workspace = true
 rmcp.workspace = true
 sqlite-vec.workspace = true

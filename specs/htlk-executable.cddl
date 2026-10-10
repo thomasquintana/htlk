@@ -176,7 +176,7 @@ function_id = ["core", "length" / "present"]
 binary_operator = "and" / "or" / "eq" / "ne" / "lt" / "le" / "gt" / "ge"
 
 prompt_template = {
-  parameters: ports,
+  parameters: { * identifier => { type: "string" / "integer" / "float" / "boolean", required: bool } },
   parts: [* (tstr / ["slot", identifier])]
 }
 library = {

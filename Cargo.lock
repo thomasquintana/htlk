@@ -886,6 +886,7 @@ dependencies = [
  "regex-automata",
  "regex-syntax",
  "rmcp",
+ "ryu-js",
  "sha2",
  "sqlite-vec",
  "tokio-rusqlite",

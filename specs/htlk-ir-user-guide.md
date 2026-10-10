@@ -221,7 +221,13 @@ The source is intentionally explicit. When a request is wrong, you can inspect t
 - `render` performs one substitution pass. Inserted text is not reparsed as another template.
 - Graph node declaration order does not establish execution order. Dependencies do.
 
-Literal braces in a template are written as `{{` and `}}`. Complex records, collections, and floats need explicit formatting before insertion; template rendering does not choose a serialization for you.
+Literal braces in a template are written as `{{` and `}}`. Parameters may be strings, integers, floats, or booleans. Native floats use deterministic JCS/ECMAScript shortest round-trip text: `0.75` becomes `0.75`, `1.0` becomes `1`, and `1e-7` becomes `1e-7`. Float parameters still require float arguments. For example:
+
+```htlk
+prompt score(value = float) = "Score: {value}"
+```
+
+Fixed precision, percentages, padding, and other presentation formats need explicit string formatting. Complex records and collections also need explicit formatting before insertion; absent values cannot be inserted.
 
 ## 4. Define the external tool contracts before wiring calls
 

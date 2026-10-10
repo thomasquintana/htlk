@@ -37,7 +37,7 @@ pub enum ExpressionError {
     NonCanonical(&'static str),
     /// A reference/outcome category is forbidden at this expression location.
     ForbiddenReference(&'static str),
-    /// Template parameter type is not string, integer, or Boolean.
+    /// Template parameter type is not string, integer, float, or Boolean.
     InvalidTemplateParameter,
     /// Parameter names do not exactly cover distinct template slots.
     TemplateParameterMismatch,
@@ -98,7 +98,7 @@ impl fmt::Display for ExpressionError {
                 write!(f, "reference is forbidden in this context: {kind}")
             }
             Self::InvalidTemplateParameter => {
-                f.write_str("template parameters must be string, integer, or Boolean")
+                f.write_str("template parameters must be string, integer, float, or Boolean")
             }
             Self::TemplateParameterMismatch => {
                 f.write_str("template parameters must exactly cover distinct slots")
@@ -489,7 +489,10 @@ impl<'a> Builder<'a> {
     pub(super) fn parameter(&mut self, port: &Port, d: usize) -> Result<Value, ExpressionError> {
         let p = match port.value_type().kind() {
             ValueTypeKind::Builtin(
-                p @ (BuiltinType::String | BuiltinType::Integer | BuiltinType::Boolean),
+                p @ (BuiltinType::String
+                | BuiltinType::Integer
+                | BuiltinType::Float
+                | BuiltinType::Boolean),
             ) => p,
             _ => return Err(ExpressionError::InvalidTemplateParameter),
         };
@@ -852,7 +855,9 @@ pub(super) fn parse_parameter(v: &Value, limits: &Limits) -> Result<Port, Expres
     let port = Port::from_value(v, TypeContext::Value, limits)?;
     if !matches!(
         port.value_type().kind(),
-        ValueTypeKind::Builtin(BuiltinType::String | BuiltinType::Integer | BuiltinType::Boolean)
+        ValueTypeKind::Builtin(
+            BuiltinType::String | BuiltinType::Integer | BuiltinType::Float | BuiltinType::Boolean
+        )
     ) {
         return Err(ExpressionError::InvalidTemplateParameter);
     }

@@ -351,6 +351,112 @@ fn outcomes_and_prompt_rendering_are_native_and_ordered() {
 }
 
 struct Functions(Frame);
+
+#[test]
+fn float_templates_use_ecmascript_text_with_checked_execution_and_exact_budgets() {
+    use htlk_analyzer::ExpressionTypeEnvironment;
+    use htlk_runtime::CheckedExpression;
+    let codec = Limits::default();
+    let template = PromptTemplate::new(
+        vec![(
+            "x".parse().unwrap(),
+            Port::new(ValueType::builtin(P::Float), false),
+        )],
+        vec![
+            TemplatePart::Text("{x}=".into()),
+            TemplatePart::Slot("x".parse().unwrap()),
+            TemplatePart::Text(" / ".into()),
+            TemplatePart::Slot("x".parse().unwrap()),
+        ],
+        &codec,
+    )
+    .unwrap();
+    let mut frame = Frame::default();
+    let id = frame.insert_template(template.clone(), &codec).unwrap();
+    let render = expression(K::Render {
+        template: id,
+        arguments: vec![("x".parse().unwrap(), input("x"))],
+    });
+    let mut env = ExpressionTypeEnvironment::default();
+    env.templates.insert(id, template);
+    env.references.insert(
+        R::Input("x".parse().unwrap()),
+        Port::new(ValueType::builtin(P::Float), true),
+    );
+    let checked = CheckedExpression::new(&render, Context::Eval, &env, None, &codec).unwrap();
+    for (number, text) in [
+        (0.75, "0.75"),
+        (1.0, "1"),
+        (0.0, "0"),
+        (-0.0, "0"),
+        (-12.5, "-12.5"),
+        (12.5, "12.5"),
+        (1e-7, "1e-7"),
+        (1e-6, "0.000001"),
+        (1e-5, "0.00001"),
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
+        (1e22, "1e+22"),
+        (f64::from_bits(1), "5e-324"),
+        (f64::MAX, "1.7976931348623157e+308"),
+        (9007199254740992.0, "9007199254740992"),
+    ] {
+        bind(
+            &mut frame,
+            "x",
+            Ok(V::Present(Value::Float(FiniteFloat::new(number).unwrap()))),
+        );
+        let expected = V::Present(Value::Text(format!("{{x}}={text} / {text}")));
+        let result = checked.evaluate(&frame, None, &policy()).unwrap();
+        assert_eq!(result.value, expected);
+        assert_eq!(run(&render, &frame).unwrap(), expected);
+        let V::Present(value) = &expected else {
+            unreachable!()
+        };
+        let size = htlk_cbor::encode(value, &codec).unwrap().len() as u64;
+        let mut exact = policy();
+        exact.max_output_bytes = size;
+        exact.max_steps = result.usage.steps;
+        assert_eq!(checked.evaluate(&frame, None, &exact).unwrap(), result);
+        exact.max_output_bytes -= 1;
+        assert!(matches!(
+            checked.evaluate(&frame, None, &exact),
+            Err(Err::Limit("output bytes"))
+        ));
+        exact.max_output_bytes = size;
+        exact.max_steps -= 1;
+        assert!(matches!(
+            checked.evaluate(&frame, None, &exact),
+            Err(Err::Limit(_))
+        ));
+    }
+    for value in [
+        Value::Integer(1),
+        Value::Text("1".into()),
+        Value::Bool(true),
+        Value::Null,
+    ] {
+        bind(&mut frame, "x", Ok(V::Present(value)));
+        assert_eq!(run(&render, &frame), Err(Err::OperandType));
+        assert_eq!(
+            checked.evaluate(&frame, None, &policy()),
+            Err(Err::OperandType)
+        );
+    }
+    bind(&mut frame, "x", Ok(V::Pending));
+    assert_eq!(run(&render, &frame).unwrap(), V::Pending);
+    assert_eq!(
+        checked.evaluate(&frame, None, &policy()).unwrap().value,
+        V::Pending
+    );
+    bind(&mut frame, "x", Ok(V::Absent));
+    assert_eq!(run(&render, &frame), Err(Err::AbsentOperand));
+    assert_eq!(
+        checked.evaluate(&frame, None, &policy()),
+        Err(Err::AbsentOperand)
+    );
+}
+
 impl EvaluationContext for Functions {
     fn resolve(&self, r: &R, p: &[PathStep], m: &mut EvaluationMeter<'_>) -> Result<V, Err> {
         self.0.resolve(r, p, m)

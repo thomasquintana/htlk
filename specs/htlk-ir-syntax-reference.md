@@ -254,7 +254,9 @@ A **reference** names something declared elsewhere. A **static reference** is re
 
 Arguments are positional; record arguments provide explicit named structures where needed. Static function/template references use `&qualified_name`. Sibling node handles use `@node` and are accepted only by `status` and `error`. These handles cannot be emitted as artifacts, serialized as application values, or passed to MCP.
 
-Explicit prompt parameters must exactly equal the distinct placeholder names and must have type string, integer, or boolean after alias normalization. The short form infers string parameters. Template references are legal only as the first operand of `render`, whose second operand must be a record literal of argument expressions; library function references are legal only where a linked function signature accepts them. Render argument expressions evaluate in decoded key UTF-8 order, independently of map storage order.
+Explicit prompt parameters must exactly equal the distinct placeholder names and must have type string, integer, float, or boolean after alias normalization. Unions and other built-in or complex types are not supported. The short form infers string parameters. Template references are legal only as the first operand of `render`, whose second operand must be a record literal of argument expressions; library function references are legal only where a linked function signature accepts them. Render argument expressions evaluate in decoded key UTF-8 order, independently of map storage order.
+
+Floats render using the JCS/ECMAScript shortest round-trip convention specified in the [grammar specification](htlk-grammar-spec.md#44-dynamic-prompts): `1.0` becomes `1`, zero becomes `0`, and `1e-7` becomes `1e-7`. This does not coerce float argument types or apply JSON numeric-admission restrictions. Absent arguments remain invalid; presentation-specific formatting requires an explicit string.
 
 | Expression location | Allowed roots |
 |---|---|

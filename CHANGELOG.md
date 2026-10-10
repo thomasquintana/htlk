@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Allow native float prompt-template parameters alongside strings, integers, and
+  booleans, with strict float argument checking and deterministic JCS/ECMAScript
+  shortest round-trip rendering across the full finite binary64 range. Rendering
+  bypasses JSON-specific numeric admission and retains output/work limits.
+  Source-derived native implementation identities and the generated empty-graph
+  fixture fingerprint change; existing non-float template bytes/digests do not.
+
 - Rename the type error category to `TypeError::UnknownBuiltin` to align with
   `BuiltinType`, without a compatibility alias or changes to rejected inputs.
 - Rename the executable built-in type API to `BuiltinType`,

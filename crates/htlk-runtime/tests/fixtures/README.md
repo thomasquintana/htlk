@@ -32,3 +32,11 @@ The type-error diagnostic and `UnknownBuiltin` cleanup also refreshes this fixtu
 through the generation command above. The model source contribution changes the
 core, schema-validator, and URI-template implementation identities and therefore
 the envelope fingerprint, without changing type encodings or graph contents.
+
+Native float prompt parameters refresh this fixture through the same generator.
+The changed model sources affect core, schema-validator, and URI-template
+identities; the render adapter in `evaluate.rs` also affects core and regex
+identities because that file contributes to both hashes. These four profile
+identities change the envelope fingerprint. The empty graph has no templates;
+its root scope, policy, and graph contents retain their original identities.
+Existing non-float template bytes and digests are covered by unchanged goldens.

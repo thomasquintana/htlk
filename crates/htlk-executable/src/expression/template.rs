@@ -16,10 +16,12 @@ pub enum TemplatePart {
 
 /// Immutable canonical prompt-template metadata, not an LLM invocation.
 ///
-/// Parameters are exposed in UTF-8 name order and have string, integer or Boolean
+/// Parameters are exposed in UTF-8 name order and have string, integer, float or Boolean
 /// types. The analyzer checks exact declaration/slot name coverage. Rendering and
 /// use-site argument compatibility require analyzer/runtime integration; this
 /// type does not execute or substitute text.
+/// Floats render as shortest round-trip JCS/ECMAScript numbers; their text need
+/// not retain a decimal marker, but argument checking preserves float identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PromptTemplate {
     parameters: Vec<(Identifier, Port)>,

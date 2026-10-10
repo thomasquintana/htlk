@@ -306,6 +306,8 @@ Expression children preserve evaluation order. Record-expression entries are rep
 
 Prompt templates normalize to alternating literal strings and named slot records: empty literal segments are removed and adjacent literal segments are joined. Repeated slots remain in order. Render argument records are exact parameter-to-expression maps evaluated in parameter-name UTF-8 order. Retry error-code lists are unique sorted UTF-8 strings; delay vectors preserve attempt order. Union types are flattened, normalized, deduplicated, and encoded in byte order; redundant singleton unions and nested union nodes are not canonical.
 
+Prompt parameter records retain presence metadata and admit only direct string, integer, float, and boolean types. Render arguments must be present and match their parameter types without numeric coercion. Float rendering follows the JCS/ECMAScript shortest round-trip binary64 convention defined in the grammar specification, independently of JSON document numeric admission. In particular, integral floats can render without a decimal marker, normalized zero renders as `0`, and the full finite binary64 range is supported. Repeated substitutions each account for their actual emitted text; substitution remains single-pass and bounded.
+
 ### 4.2 Built-in library registry
 
 A library **manifest** names the library and the exact version/implementation requested. A function **signature** describes its argument and result types. A **generic** signature uses a type placeholder, such as T in a function that works on lists of several different item types. A **higher-order** function accepts another function as an argument; HTLK allows only statically named functions for that purpose, not author-supplied function bodies.

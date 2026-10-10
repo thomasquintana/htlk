@@ -10,6 +10,38 @@ use htlk_executable::{
 fn parameter(p: P) -> Port {
     Port::new(ValueType::builtin(p), true)
 }
+
+#[test]
+fn float_parameters_round_trip_with_presence_and_normalization() {
+    let limits = Limits::default();
+    for required in [false, true] {
+        let template = T::new(
+            vec![(
+                "x".parse().unwrap(),
+                Port::new(ValueType::builtin(P::Float), required),
+            )],
+            vec![
+                Part::Text("".into()),
+                Part::Text("x".into()),
+                Part::Text("=".into()),
+                Part::Slot("x".parse().unwrap()),
+            ],
+            &limits,
+        )
+        .unwrap();
+        assert_eq!(template.parameters()[0].1.required(), required);
+        assert_eq!(template.parts()[0], Part::Text("x=".into()));
+        let value = template.to_value(&limits).unwrap();
+        let bytes = template.encode(&limits).unwrap();
+        assert_eq!(T::from_value(&value, &limits).unwrap(), template);
+        let decoded = T::decode(&bytes, &limits).unwrap();
+        assert_eq!(decoded, template);
+        assert_eq!(
+            decoded.digest(&limits).unwrap(),
+            template.digest(&limits).unwrap()
+        );
+    }
+}
 fn value(parameters: Value, parts: Vec<Value>) -> Value {
     Value::Map(
         Map::try_from_entries([
@@ -115,7 +147,15 @@ fn parameters_keep_supported_types_and_unresolved_names() {
         )
         .is_ok()
     );
-    for p in [P::Float, P::Bytes, P::Json, P::Regex, P::Null] {
+    for p in [
+        P::Bytes,
+        P::Json,
+        P::Regex,
+        P::Null,
+        P::Error,
+        P::McpResourceResult,
+        P::McpPromptResult,
+    ] {
         assert_eq!(
             T::new(
                 vec![("x".parse().unwrap(), parameter(p))],
@@ -123,6 +163,54 @@ fn parameters_keep_supported_types_and_unresolved_names() {
                 &Limits::default()
             )
             .unwrap_err(),
+            Error::InvalidTemplateParameter
+        );
+        let parameters = Value::Map(
+            Map::try_from_entries([(
+                "x".into(),
+                parameter(p)
+                    .to_value(TypeContext::Value, &Limits::default())
+                    .unwrap(),
+            )])
+            .unwrap(),
+        );
+        assert_eq!(
+            T::from_value(&value(parameters, vec![]), &Limits::default()).unwrap_err(),
+            Error::InvalidTemplateParameter
+        );
+    }
+    use htlk_executable::{TypeContext, ValueTypeKind};
+    for kind in [
+        ValueTypeKind::Union(vec![
+            ValueType::builtin(P::Float),
+            ValueType::builtin(P::String),
+        ]),
+        ValueTypeKind::Record(vec![]),
+        ValueTypeKind::List(Box::new(ValueType::builtin(P::Float))),
+    ] {
+        let port = Port::new(
+            ValueType::new(kind, TypeContext::Value, &Limits::default()).unwrap(),
+            true,
+        );
+        assert_eq!(
+            T::new(
+                vec![("x".parse().unwrap(), port.clone())],
+                vec![],
+                &Limits::default()
+            )
+            .unwrap_err(),
+            Error::InvalidTemplateParameter
+        );
+        let parameters = Value::Map(
+            Map::try_from_entries([(
+                "x".into(),
+                port.to_value(TypeContext::Value, &Limits::default())
+                    .unwrap(),
+            )])
+            .unwrap(),
+        );
+        assert_eq!(
+            T::from_value(&value(parameters, vec![]), &Limits::default()).unwrap_err(),
             Error::InvalidTemplateParameter
         );
     }
@@ -239,7 +327,7 @@ fn template_ingress_checks_parameter_records_and_names() {
     let parameters = Value::Map(
         Map::try_from_entries([(
             "x".into(),
-            parameter(P::Float)
+            parameter(P::Json)
                 .to_value(htlk_executable::TypeContext::Value, &Limits::default())
                 .unwrap(),
         )])

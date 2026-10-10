@@ -577,9 +577,22 @@ applies it when admitting a frame template or rendering from a custom context.
 
 `PromptTemplate` owns parameter ports and ordered `TemplatePart::Text`/`Slot`
 parts. Names exactly cover the distinct slots; repeated slots remain in order.
-Parameter types must normalize to primitive string, integer, or Boolean. Port
+Parameter types must normalize to primitive string, integer, float, or Boolean. Port
 presence metadata is retained; render argument coverage and value compatibility
 are checked at the use site by the verifier/evaluator.
+
+Float parameters require `Value::Float`, without integer or string coercion.
+Rendering uses `ryu-js` directly for locale-independent JCS/ECMAScript shortest
+round-trip binary64 text: `0.75` → `"0.75"`, `1.0` → `"1"`, normalized zero →
+`"0"`, and `1e-7` → `"1e-7"`. Nonzero magnitudes in `[1e-6, 1e21)` use fixed
+notation; other magnitudes use lowercase `e` notation with a `+` for positive
+exponents and no exponent zero padding. All `FiniteFloat` values are supported,
+including integral floats outside JSON's safe-integer range: rendering does not
+use `JsonDocument` admission. Float type identity is retained during checking
+even when emitted text has no decimal marker. Fixed precision, percentages,
+padding, and complex-value formatting require explicit strings. Absent values
+remain invalid, including for optional parameter declarations. Each repeated
+slot charges the actual emitted bytes through the normal output/work limits.
 
 ```rust
 use htlk_executable::cbor::Limits;

@@ -563,6 +563,67 @@ fn derived_type_work_is_bounded_and_analysis_is_deterministic() {
 }
 
 #[test]
+fn float_template_arguments_preserve_type_presence_and_coverage() {
+    use htlk_executable::{PromptTemplate, TemplatePart};
+    let l = Limits::default();
+    for required in [false, true] {
+        let mut env = Env::default();
+        let template = PromptTemplate::new(
+            vec![("x".parse().unwrap(), Port::new(t(P::Float), required))],
+            vec![TemplatePart::Slot("x".parse().unwrap())],
+            &l,
+        )
+        .unwrap();
+        let id = template.digest(&l).unwrap();
+        env.templates.insert(id, template);
+        let render = |arguments| {
+            expr(K::Render {
+                template: id,
+                arguments,
+            })
+        };
+        let expression = render(vec![("x".parse().unwrap(), input("x"))]);
+        for p in [
+            P::Float,
+            P::Integer,
+            P::String,
+            P::Boolean,
+            P::Bytes,
+            P::Null,
+        ] {
+            env.references
+                .insert(R::Input("x".parse().unwrap()), port(p));
+            let result = check_expression(&expression, C::Eval, &env, None, &l);
+            if p == P::Float {
+                assert_eq!(result.unwrap().result(), &port(P::String));
+            } else {
+                assert_eq!(result.unwrap_err(), Error::TypeMismatch);
+            }
+        }
+        env.references.insert(
+            R::Input("x".parse().unwrap()),
+            Port::new(t(P::Float), false),
+        );
+        assert!(
+            check_expression(&expression, C::Eval, &env, None, &l)
+                .unwrap()
+                .runtime_checks()
+                .iter()
+                .any(|c| c.expression_path == [0] && c.kind == Check::Present)
+        );
+        for arguments in [
+            vec![],
+            vec![("wrong".parse().unwrap(), E::literal(L::Integer(1)))],
+        ] {
+            assert_eq!(
+                check_expression(&render(arguments), C::Eval, &env, None, &l).unwrap_err(),
+                Error::Arity
+            );
+        }
+    }
+}
+
+#[test]
 fn nullable_generics_collect_all_non_null_variants() {
     let l = Limits::default();
     let mut env = Env::default();

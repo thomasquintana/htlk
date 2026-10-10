@@ -919,6 +919,16 @@ fn render(
         let text = match (port.value_type().kind(), value) {
             (ValueTypeKind::Builtin(BuiltinType::String), Value::Text(s)) => s,
             (ValueTypeKind::Builtin(BuiltinType::Integer), Value::Integer(n)) => n.to_string(),
+            (ValueTypeKind::Builtin(BuiltinType::Float), Value::Float(n)) => {
+                // Fixed-size scratch; native floats do not pass through JSON admission.
+                let mut buffer = ryu_js::Buffer::new();
+                let formatted = buffer.format_finite(n.get());
+                let mut text = String::new();
+                text.try_reserve_exact(formatted.len())
+                    .map_err(allocation)?;
+                text.push_str(formatted);
+                text
+            }
             (ValueTypeKind::Builtin(BuiltinType::Boolean), Value::Bool(v)) => v.to_string(),
             _ => return Err(EvaluationError::OperandType),
         };
