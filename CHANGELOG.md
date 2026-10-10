@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Record accounting limit errors now distinguish encoded-byte and depth ceilings
+  in clear prose while preserving structured fields and input privacy.
 - Identifier errors now explain naming rules and allocation failure in clear
   prose while preserving structured variants, byte offsets, and input privacy.
 - CBOR errors now provide human-facing prose, specific canonicality explanations,
