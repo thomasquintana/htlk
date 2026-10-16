@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -37,7 +37,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -76,7 +76,7 @@ jobs:
           cargo doc --workspace --all-features --no-deps --locked
 
       - name: Upload API documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-rustdoc-${{ github.sha }}
           path: target/doc/
@@ -103,7 +103,7 @@ jobs:
           cargo package --workspace --locked --target-dir "$RUNNER_TEMP/htlk-package-$GITHUB_SHA"
 
       - name: Upload crate packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crates-${{ github.sha }}
           path: ${{ runner.temp }}/htlk-package-${{ github.sha }}/package/*.crate
@@ -119,7 +119,7 @@ jobs:
     environment: crates-io
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
