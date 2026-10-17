@@ -26,6 +26,12 @@ fingerprint checks and runtime identities, using consumer-defined preimages.
 Its `ExecutableEnvelope` API validates version-0.1 envelope fields, format,
 version, and fingerprint before later registration checks interpret the payload.
 
+The `identity` module implements Draft 0.1 run/scope/invocation/attempt/wait and
+artifact naming. Typed value content digests are separate from artifact provenance;
+hashing checks complete preimage bounds without cloning the value tree. IDs do
+not establish acceptance, authorization or external replay safety. Frozen input
+hashes and durable execution records are subsequent coordinator work.
+
 ## Admission and checked execution
 
 `verify_executable` decodes authoritative canonical envelope bytes, checks the

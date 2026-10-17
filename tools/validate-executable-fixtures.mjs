@@ -140,7 +140,7 @@ assert.equal(get(profile, 'core_digest').value, native([
   rawDigest(model), rawDigest(analyzer),
   ...sources('htlk-runtime', [
     'lib.rs', 'native_profile.rs', 'evaluate.rs', 'checked_evaluate.rs', 'runtime_type.rs',
-    'schema_projection.rs', 'native_registry.rs', 'verified.rs', 'mcp_protocol.rs', 'uri_template.rs',
+    'schema_projection.rs', 'native_registry.rs', 'verified.rs', 'identity.rs', 'mcp_protocol.rs', 'uri_template.rs',
   ]),
 ]));
 assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value,
@@ -148,4 +148,38 @@ assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value,
 assert.equal(get(get(profile, 'uri_template_engine'), 'implementation_digest').value,
   native([...sources('htlk-runtime', ['native_profile.rs', 'uri_template.rs']), rawDigest(model)]));
 assert.equal(get(get(profile, 'schema_validator'), 'implementation_digest').value, analyzer);
+// Runtime identity goldens use an independent encoder, not the Rust helpers.
+// This corpus needs only small arrays, nonnegative small counters and short text.
+const runtimeVectors = JSON.parse(readFileSync(new URL('crates/htlk-runtime/tests/fixtures/runtime-identities.json', root), 'utf8'));
+function identityCbor(value) {
+  if (Array.isArray(value)) {
+    assert(value.length < 24);
+    return Buffer.concat([Buffer.from([0x80 | value.length]), ...value.map(identityCbor)]);
+  }
+  if (typeof value === 'number') {
+    assert(Number.isInteger(value) && value >= 0 && value < 24);
+    return Buffer.from([value]);
+  }
+  assert.equal(typeof value, 'string');
+  const bytes = Buffer.from(value, 'utf8');
+  assert(bytes.length < 256);
+  return Buffer.concat([Buffer.from(bytes.length < 24 ? [0x60 | bytes.length] : [0x78, bytes.length]), bytes]);
+}
+const runtimeHash = (domain, ...args) => sha(identityCbor([`htlk.${domain}`, '0.1', ...args]));
+const runtimeRoot = runtimeHash('root_scope', 'example-run');
+const invocation = runtimeHash('invocation', runtimeRoot, 'work');
+const content = runtimeHash('value', 'string', 'hello');
+assert.deepEqual(runtimeVectors, {
+  root: runtimeRoot, invocation,
+  child: runtimeHash('child_scope', invocation),
+  iteration: runtimeHash('iteration', invocation, 0),
+  attempt: runtimeHash('attempt', invocation, 1),
+  input_wait: runtimeHash('wait', invocation, 'input', 0),
+  approval: runtimeHash('wait', invocation, 'approval', 0),
+  approval_1: runtimeHash('wait', invocation, 'approval', 1),
+  extended: runtimeHash('extended_root', 'example-run', 1),
+  effect: runtimeHash('effect', invocation), content,
+  artifact: runtimeHash('artifact', invocation, 'value', content),
+  run_input: runtimeHash('run_input', 'example-run', 0, 'seed', content),
+});
 console.log(JSON.stringify({ fixture: 'native-empty', bytes: bytes.length, payload_bytes: payload.length, fingerprint, scope: scopeDigest, independent_cbor_jcs_hash_checks: true }, null, 2));

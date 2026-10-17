@@ -16,8 +16,8 @@ the implemented `htlk-compiler`.
 ## Delivery sequence
 
 1. **In progress — Runtime foundations:** shared-owned admission and compiler/native
-   configuration integration implemented; typed runtime identities, manifests,
-   labels and stable error records pending.
+   configuration integration and typed runtime/content/artifact identities implemented;
+   manifests, labels and stable error records pending.
 2. **Pending — Durable authority:** SQLite migrations, transactional records, fencing,
    reconstructable journal, outbox, timers and idempotency receipts.
 3. **Pending — Registration and runs:** immutable exact-byte registrations, trust,

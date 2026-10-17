@@ -73,3 +73,11 @@ policy and existing canonical record goldens retain their identities.
 Shared-owned admission refreshes the core identity through `verified.rs` and the
 runtime exports. The borrowed and owned paths share exact verification logic;
 schema, regex and URI-template engine identities retain their previous values.
+
+Runtime identity support adds `identity.rs` to the explicit core source lists in
+Rust and Node. Updating `native_profile.rs` also refreshes the regex/URI-template
+source identities. `runtime-identities.json` is a separate known-answer corpus
+checked by both Rust and an independent small CBOR encoder in the Node checker.
+It covers all runtime §3/§8 domains with run `example-run`, node `work`, string
+value `hello`, output `value`, and input `seed`; counters start at their specified
+zero/one-based boundaries. These vectors do not depend on native source identity.

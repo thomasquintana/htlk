@@ -6,6 +6,7 @@ use htlk_executable::*;
 
 mod checked_evaluate;
 mod evaluate;
+pub mod identity;
 mod mcp_protocol;
 mod native_profile;
 mod native_registry;

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add typed Draft 0.1 runtime identity domains, value-content and artifact provenance
+  hashing with complete preimage limits and independently checked known-answer vectors.
 - Add shared-owned native executable admission through `verify_executable_owned`
   for actor/cache lifetimes, with compiler/native configuration, library and
   authoritative-byte interoperability checks.
