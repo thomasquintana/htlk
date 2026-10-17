@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add immutable runtime input manifests and checked checkpoints, influence label
+  sets, explicit host input variants, lifecycle/source states and stable failures.
+  Input content hashes retain declarations and protection while excluding provenance.
 - Add typed Draft 0.1 runtime identity domains, value-content and artifact provenance
   hashing with complete preimage limits and independently checked known-answer vectors.
 - Add shared-owned native executable admission through `verify_executable_owned`

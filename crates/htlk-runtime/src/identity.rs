@@ -272,6 +272,36 @@ impl ArtifactId {
     }
 }
 
+/// Hashes the complete semantic host request under the private 0.1
+/// `htlk.host_request` domain, including authenticated principal, method and target.
+/// Idempotency keys select a receipt separately; they are not semantic arguments.
+/// The caller must supply authenticated context and every operation argument.
+///
+/// # Errors
+/// Returns complete preimage byte/depth or codec configuration failures.
+pub fn host_request_digest(
+    principal: &str,
+    method: &str,
+    target: &str,
+    arguments: &Value,
+    limits: &Limits,
+) -> Result<Digest, IdentityError> {
+    let mut accounting = RecordAccounting::new(limits)?;
+    for text in [principal, method, target] {
+        accounting.text(text, 1)?;
+    }
+    hash(
+        "host_request",
+        &[
+            &Value::Text(principal.into()),
+            &Value::Text(method.into()),
+            &Value::Text(target.into()),
+            arguments,
+        ],
+        limits,
+    )
+}
+
 fn name(digest: Digest) -> Value {
     Value::Text(digest.to_string())
 }
@@ -287,7 +317,11 @@ fn counter(number: u64, positive: bool) -> Result<Value, IdentityError> {
 // All callers use fewer than 24 items. Hash one canonical array header and each
 // independently encoded child after accounting for the COMPLETE containing array.
 // This avoids cloning/allocating the complete value tree or preimage buffer.
-fn hash(domain: &str, arguments: &[&Value], limits: &Limits) -> Result<Digest, IdentityError> {
+pub(crate) fn hash(
+    domain: &str,
+    arguments: &[&Value],
+    limits: &Limits,
+) -> Result<Digest, IdentityError> {
     let domain = Value::Text(format!("htlk.{domain}"));
     let version = Value::Text("0.1".into());
     let mut accounting = RecordAccounting::new(limits)?;

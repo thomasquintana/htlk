@@ -31,6 +31,8 @@ pub fn native_profile(
         include_bytes!("native_registry.rs"),
         include_bytes!("verified.rs"),
         include_bytes!("identity.rs"),
+        include_bytes!("failure.rs"),
+        include_bytes!("records.rs"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);

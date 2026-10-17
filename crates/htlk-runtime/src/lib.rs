@@ -6,10 +6,12 @@ use htlk_executable::*;
 
 mod checked_evaluate;
 mod evaluate;
+pub mod failure;
 pub mod identity;
 mod mcp_protocol;
 mod native_profile;
 mod native_registry;
+pub mod records;
 mod runtime_type;
 mod schema_projection;
 mod uri_template;

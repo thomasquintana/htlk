@@ -29,8 +29,14 @@ version, and fingerprint before later registration checks interpret the payload.
 The `identity` module implements Draft 0.1 run/scope/invocation/attempt/wait and
 artifact naming. Typed value content digests are separate from artifact provenance;
 hashing checks complete preimage bounds without cloning the value tree. IDs do
-not establish acceptance, authorization or external replay safety. Frozen input
-hashes and durable execution records are subsequent coordinator work.
+not establish acceptance, authorization or external replay safety.
+
+`records` supplies immutable complete input manifests, canonical trusted label
+sets, explicit host input variants and lifecycle/source states. Manifest checkpoints
+are versioned and recheck frozen hashes against authoritative port declarations.
+`failure` supplies stable redacted error values and separate protected causes.
+The repository's `docs/runtime-records.md` defines private hash/checkpoint contracts.
+Transactional enforcement and artifact authorization remain coordinator work.
 
 ## Admission and checked execution
 

@@ -81,3 +81,8 @@ checked by both Rust and an independent small CBOR encoder in the Node checker.
 It covers all runtime §3/§8 domains with run `example-run`, node `work`, string
 value `hello`, output `value`, and input `seed`; counters start at their specified
 zero/one-based boundaries. These vectors do not depend on native source identity.
+
+Manifest/lifecycle and stable-failure records add `records.rs` and `failure.rs` to
+the core source coverage. Private input/request hashing is covered by `identity.rs`.
+The fixture is refreshed through the same generator; graph and policy records and
+the independent runtime identity vectors are unchanged.
