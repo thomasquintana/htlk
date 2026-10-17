@@ -1,8 +1,10 @@
 //! Actix supervision of fenced durable graph execution.
+mod approval;
 mod composite;
 mod control;
 mod host;
 mod inspection;
+mod mcp;
 pub use inspection::{GraphView, NodeView, RunView, WaitView};
 mod waits;
 pub use host::{CancelReceipt, ReplyReceipt};

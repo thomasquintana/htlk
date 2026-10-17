@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add bounded native MCP stdio/Streamable HTTP JSON/SSE, pinned discovery and all
+  operation results, durable dispatch/response checkpoints, safe retry and verified
+  deduplication contracts, ancestor call/concurrency accounting, exact-action approval
+  generations and a non-authoritative late-response inbox through migration 5.
 - Add lease-free input waits, authenticated owner-routed replies and cancellation,
   historical receipts, expiry handling and protected run/node/graph inspection.
 - Add fenced Actix run supervision, lazy immutable execution frames, durable

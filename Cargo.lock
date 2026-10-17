@@ -886,10 +886,12 @@ dependencies = [
  "regex",
  "regex-automata",
  "regex-syntax",
+ "reqwest",
  "rmcp",
  "ryu-js",
  "sha2",
  "sqlite-vec",
+ "tokio",
  "tokio-rusqlite",
 ]
 

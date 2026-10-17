@@ -14,12 +14,13 @@ use htlk_executable::{
 use std::{fmt, path::Path, time::Duration};
 use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
 const ARTIFACT_SCHEMA: &str = include_str!("store_artifacts.sql");
 const RUN_SCHEMA: &str = include_str!("store_runs.sql");
+const LATE_SCHEMA: &str = include_str!("store_late.sql");
 
 #[path = "store_execution.rs"]
 mod execution;
@@ -119,19 +120,26 @@ impl SqliteStore {
                     tx.execute_batch(REGISTRATION_SCHEMA)?;
                     tx.execute_batch(ARTIFACT_SCHEMA)?;
                     tx.execute_batch(RUN_SCHEMA)?;
+                    tx.execute_batch(LATE_SCHEMA)?;
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application == APPLICATION_ID && version == 1 {
                     tx.execute_batch(REGISTRATION_SCHEMA)?;
                     tx.execute_batch(ARTIFACT_SCHEMA)?;
                     tx.execute_batch(RUN_SCHEMA)?;
+                    tx.execute_batch(LATE_SCHEMA)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application == APPLICATION_ID && version == 2 {
                     tx.execute_batch(ARTIFACT_SCHEMA)?;
                     tx.execute_batch(RUN_SCHEMA)?;
+                    tx.execute_batch(LATE_SCHEMA)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application == APPLICATION_ID && version == 3 {
                     tx.execute_batch(RUN_SCHEMA)?;
+                    tx.execute_batch(LATE_SCHEMA)?;
+                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                } else if application == APPLICATION_ID && version == 4 {
+                    tx.execute_batch(LATE_SCHEMA)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
                     return Err(StoreError::Schema);

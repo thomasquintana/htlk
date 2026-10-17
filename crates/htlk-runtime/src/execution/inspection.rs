@@ -11,6 +11,10 @@ use htlk_executable::{CanonicalDocument, cbor::Value, digest::Digest};
 /// Host-visible typed input/approval request; evidence bytes require separate access.
 #[derive(Clone, Debug)]
 pub struct WaitView {
+    /// Exact approval request identity, if this is an approval wait.
+    pub request_digest: Option<Digest>,
+    /// Protected exact-action request metadata, after authorization.
+    pub approval_request: Option<Value>,
     /// Stable addressed request.
     pub wait_id: WaitId,
     /// Input or approval purpose.
@@ -146,6 +150,14 @@ impl Runtime {
                 },
             )?;
             waits.push(WaitView {
+                request_digest: map(&wait.payload)?.get("request_digest").and_then(|v| {
+                    if let Value::Text(s) = v {
+                        s.parse().ok()
+                    } else {
+                        None
+                    }
+                }),
+                approval_request: map(&wait.payload)?.get("approval_request").cloned(),
                 wait_id: wait.key.id.parse().map_err(|_| err())?,
                 purpose: string(&wait.payload, "purpose")?,
                 topic: string(&wait.payload, "topic")?,

@@ -49,10 +49,9 @@ their enclosing outcome. Shutdown stops local actors while preserving durable st
 takeover advances fencing after leases expire. Notification delivery is a hint;
 authoritative records drive progress.
 
-The current execution slice covers pure/task/loop graphs. Wait/MCP execution and
-their authenticated host commands are subsequent integrations, as tracked in the
-runtime roadmap. Full transport, budget and extension conformance is not implied
-by launching this slice.
+Execution also integrates [durable waits and host control](runtime-waits.md) and
+[MCP dispatch, reservations and exact-action approvals](runtime-mcp.md). The roadmap
+tracks remaining recovery, extension, retention and full conformance work.
 
 Five compiler-to-actor tests exercise pure chains/templates, scoped passthrough,
 loop checkpoints/bounds/final-next validation, late conditional writer conflict

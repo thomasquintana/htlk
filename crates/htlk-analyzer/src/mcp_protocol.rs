@@ -50,6 +50,8 @@ pub fn mcp_schema_validators() -> Result<&'static NativeSchemas, McpValidationEr
                 "ResourceTemplate",
                 "Prompt",
                 "GetPromptResult",
+                "CallToolResult",
+                "ReadResourceResult",
             ] {
                 documents.push((
                     format!("{MCP_SCHEMA_URI}:{root}"),

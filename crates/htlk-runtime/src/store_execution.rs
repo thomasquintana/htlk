@@ -1,6 +1,26 @@
 //! Bounded recovery/scheduling scans derived from authoritative records.
 use super::*;
 impl SqliteStore {
+    pub(crate) async fn save_late_response(
+        &self,
+        run: &RunId,
+        attempt: &str,
+        response: &Value,
+        labels: &crate::records::SecurityLabels,
+    ) -> Result<(), StoreError> {
+        let payload = cbor::encode(response, &self.config.limits)?;
+        let digest = htlk_executable::digest::hash_bytes(&payload).to_string();
+        let protection = cbor::encode(
+            &labels
+                .to_value(&self.config.limits)
+                .map_err(|_| StoreError::Invalid)?,
+            &self.config.limits,
+        )?;
+        let run = run.clone();
+        let attempt = attempt.to_string();
+        self.connection.call(move|db|db.execute("INSERT OR IGNORE INTO late_responses(run_id,attempt_id,content_digest,payload,protection) VALUES(?1,?2,?3,?4,?5)",params![run.as_str(),attempt,digest,payload,protection])).await.map_err(|_|StoreError::Database)?;
+        Ok(())
+    }
     pub(crate) async fn find_record(
         &self,
         family: RecordFamily,

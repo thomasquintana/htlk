@@ -32,8 +32,18 @@ pub struct CancelReceipt {
     pub status: RunStatus,
 }
 pub(crate) enum Operation {
-    Reply { wait: WaitId, value: Value },
-    Cancel { reason: String },
+    Approval {
+        wait: WaitId,
+        request: Digest,
+        allow: bool,
+    },
+    Reply {
+        wait: WaitId,
+        value: Value,
+    },
+    Cancel {
+        reason: String,
+    },
 }
 pub(crate) struct Command {
     pub run: RunId,
@@ -148,6 +158,77 @@ async fn route(runtime: &Runtime, command: Command) -> Result<Value, RuntimeErro
     address.send(command).await.map_err(|_| err())?
 }
 impl Runtime {
+    /// Resolves exact-action policy approval. Ordinary replies cannot call this
+    /// disposition path or produce a graph-visible authority Boolean.
+    ///
+    /// # Errors
+    /// Returns purpose/request/generation/deadline conflicts or approver denial.
+    pub async fn submit_approval(
+        &self,
+        context: &HostContext,
+        wait_id: WaitId,
+        request_digest: Digest,
+        allow: bool,
+        idempotency_key: &str,
+    ) -> Result<ReplyReceipt, RuntimeError> {
+        let (run, wait) = self
+            .store
+            .find_record(RecordFamily::Wait, &wait_id.to_string())
+            .await?;
+        if string(&wait.payload, "purpose")? != "approval" {
+            return Err(RuntimeError::failure(FailureCode::Policy));
+        }
+        self.policy.authorize(
+            context,
+            Authorization::Approve {
+                run_id: &run,
+                wait_id,
+                request_digest,
+            },
+        )?;
+        if string(&wait.payload, "request_digest")? != request_digest.to_string() {
+            return Err(RuntimeError::failure(FailureCode::Policy));
+        }
+        if idempotency_key.is_empty() {
+            return Err(RuntimeError::failure(FailureCode::Input));
+        }
+        let args = Value::Array(vec![
+            Value::Text(request_digest.to_string()),
+            Value::Bool(allow),
+        ]);
+        let digest = host_request_digest(
+            context.principal(),
+            "submit_approval",
+            &wait_id.to_string(),
+            &args,
+            &self.config.limits,
+        )
+        .map_err(|_| err())?;
+        let command = Command {
+            run,
+            context: context.clone(),
+            method: "submit_approval".into(),
+            target: wait_id.to_string(),
+            key: idempotency_key.into(),
+            digest,
+            operation: Operation::Approval {
+                wait: wait_id,
+                request: request_digest,
+                allow,
+            },
+        };
+        if let Some(response) = recorded(self, &command).await? {
+            return Ok(ReplyReceipt {
+                wait_id,
+                disposition: string(&response, "disposition")?,
+            });
+        }
+        let response = route(self, command).await?;
+        Ok(ReplyReceipt {
+            wait_id,
+            disposition: string(&response, "disposition")?,
+        })
+    }
     /// Submits an authenticated typed reply to an explicit input wait. Exact-action
     /// approval waits are resolved only by the separate approval API.
     ///
@@ -290,6 +371,71 @@ async fn apply(
         return Ok(response);
     }
     match &command.operation {
+        Operation::Approval {
+            wait: id,
+            request,
+            allow,
+        } => {
+            let wait = runtime
+                .store
+                .record(lease.run_id(), &key(RecordFamily::Wait, id))
+                .await?;
+            if string(&wait.payload, "purpose")? != "approval"
+                || string(&wait.payload, "request_digest")? != request.to_string()
+            {
+                return Err(RuntimeError::failure(FailureCode::Policy));
+            }
+            let decision = if *allow { "allow" } else { "deny" };
+            let response = object([("disposition", Value::Text(decision.into()))])?;
+            if string(&wait.payload, "state")? == "accepted" {
+                if string(&wait.payload, "decision")? == decision {
+                    return Ok(response);
+                }
+                return Err(RuntimeError::failure(FailureCode::IdempotencyConflict));
+            }
+            let invocation = runtime
+                .store
+                .record(
+                    lease.run_id(),
+                    &key(
+                        RecordFamily::Invocation,
+                        string(&wait.payload, "invocation_id")?,
+                    ),
+                )
+                .await?;
+            if invocation.final_record
+                || string(&invocation.payload, "approval_wait")? != id.to_string()
+            {
+                return Err(RuntimeError::failure(FailureCode::Policy));
+            }
+            let now = runtime
+                .store
+                .coordinator_time(runtime.clock.now_ms()?)
+                .await?;
+            if wait.final_record || now >= number(&wait.payload, "expires_at")? {
+                return Err(RuntimeError::failure(FailureCode::ApprovalDenied));
+            }
+            let payload = replace(
+                &wait.payload,
+                [
+                    ("state", Value::Text("accepted".into())),
+                    ("decision", Value::Text(decision.into())),
+                    ("approver", Value::Text(command.context.principal().into())),
+                ],
+            )?;
+            step::commit(
+                &runtime,
+                &lease,
+                format!("approval-disposition:{id}"),
+                vec![
+                    update(&wait, payload, true),
+                    receipt(&runtime, &command, response.clone())?,
+                ],
+                None,
+            )
+            .await?;
+            Ok(response)
+        }
         Operation::Cancel { reason } => {
             let response = object([("status", Value::Text("cancelled".into()))])?;
             let mut record = receipt(&runtime, &command, response.clone())?;

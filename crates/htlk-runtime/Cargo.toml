@@ -27,6 +27,8 @@ regex-syntax.workspace = true
 ryu-js.workspace = true
 sha2.workspace = true
 rmcp.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
 sqlite-vec.workspace = true
 tokio-rusqlite.workspace = true
 

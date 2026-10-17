@@ -898,7 +898,23 @@ async fn operate(
             super::composite::operate(runtime, lease, scope, node, record).await
         }
         Operation::Wait { .. } => super::waits::operate(runtime, lease, scope, node, record).await,
-        Operation::Mcp { .. } => Ok(false),
+        Operation::Mcp { .. } => {
+            match super::mcp::operate(runtime, lease, scope, node, record).await {
+                Ok(changed) => Ok(changed),
+                Err(error @ RuntimeError::Storage(_)) => Err(error),
+                Err(error) => {
+                    finish_failure(
+                        runtime,
+                        lease,
+                        record,
+                        error.code(),
+                        labels(&record.payload, &runtime.config.limits)?,
+                    )
+                    .await?;
+                    Ok(true)
+                }
+            }
+        }
     }
 }
 pub(super) struct OutputProposal<'a> {

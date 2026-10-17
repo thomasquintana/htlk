@@ -119,6 +119,35 @@ pub enum Authorization<'a> {
         /// Conservative result/outcome protection.
         labels: &'a SecurityLabels,
     },
+    /// Send the exact frozen compound MCP action under current transfer policy.
+    DispatchMcp {
+        /// Exact compiled selection, not an alias or tool-name hint.
+        binding: &'a htlk_executable::McpBinding,
+        /// Stable occurrence.
+        invocation: crate::identity::InvocationId,
+        /// Frozen typed input identity.
+        input_hash: Digest,
+        /// All input/guard/boundary protection.
+        labels: &'a SecurityLabels,
+        /// Expanded requested URI if applicable.
+        resource_uri: Option<&'a str>,
+    },
+    /// Authorize every returned resource URI before accepting its snapshot.
+    ReadResource {
+        /// Exact server/operation.
+        binding: &'a htlk_executable::McpBinding,
+        /// Actual returned URI.
+        uri: &'a str,
+    },
+    /// Resolve an exact-action approval using actual authenticated approver grants.
+    Approve {
+        /// Target run.
+        run_id: &'a crate::identity::RunId,
+        /// Immutable generation.
+        wait_id: crate::identity::WaitId,
+        /// Exact request identity.
+        request_digest: Digest,
+    },
 }
 /// Trusted host policy. Implementations authenticate evidence and evaluate grants;
 /// ordinary graph data cannot implement or replace this policy. Registration trust
@@ -157,6 +186,21 @@ pub trait RuntimePolicy: Send + Sync {
         _context: &HostContext,
     ) -> Result<htlk_executable::ExecutionLimits, RuntimeFailure> {
         Ok(htlk_executable::ExecutionLimits::new())
+    }
+    /// Trusted operation replay, approval and external protection facts. Defaults
+    /// permit no replay and request no approval; authorize still gates dispatch.
+    ///
+    /// # Errors
+    /// Returns a redacted current-policy failure.
+    fn mcp_policy(
+        &self,
+        _context: &HostContext,
+        _binding: &htlk_executable::McpBinding,
+    ) -> Result<crate::mcp::McpPolicy, RuntimeFailure> {
+        Ok(crate::mcp::McpPolicy {
+            policy_version: "0.1".into(),
+            ..Default::default()
+        })
     }
 }
 /// Trusted service admission/cache ceilings. Per-run execution limits are separate.
@@ -201,6 +245,7 @@ pub struct Runtime {
     pub(crate) clock: Arc<dyn CoordinatorClock>,
     cache: Mutex<BTreeMap<Digest, Arc<VerifiedExecutable<'static>>>>,
     pub(crate) execution: Mutex<Option<actix::WeakAddr<crate::execution::Supervisor>>>,
+    pub(crate) mcp: Option<Arc<dyn crate::mcp::McpAdapter>>,
 }
 impl Runtime {
     /// Constructs a service from trusted store, immutable registry and host policy.
@@ -232,6 +277,7 @@ impl Runtime {
             clock: Arc::new(SystemClock),
             cache: Mutex::new(BTreeMap::new()),
             execution: Mutex::new(None),
+            mcp: None,
         })
     }
     /// Selects an explicit trusted clock before sharing the service with actors.
@@ -244,6 +290,12 @@ impl Runtime {
     /// that an embedding transport must advertise to its callers.
     pub fn config(&self) -> &RuntimeConfig {
         &self.config
+    }
+    /// Selects a trusted bounded MCP adapter without loading code from executable
+    /// documents. Endpoints, credentials and replay policy remain host facts.
+    pub fn with_mcp(mut self, adapter: Arc<dyn crate::mcp::McpAdapter>) -> Self {
+        self.mcp = Some(adapter);
+        self
     }
     /// Independently verifies authoritative envelope bytes, authorizes registration
     /// and producer evidence, and commits the exact immutable envelope plus detached

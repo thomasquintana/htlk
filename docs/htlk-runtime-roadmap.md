@@ -23,7 +23,8 @@ the implemented `htlk-compiler`.
    atomic run creation and fenced coordinator acquisition/renewal implemented.
    Atomic revisioned/final record transitions, internal command receipts, bounded
    journal/outbox delivery and capability-free reconstruction implemented. Consumer
-   timer/reservation/host receipts pending. [Storage boundary](runtime-storage.md).
+    host receipts and dispatch reservations implemented; complete recovery/timer
+    auditing remains. [Storage boundary](runtime-storage.md).
 3. **In progress — Registration and runs:** immutable exact-byte graph registration,
    explicit producer/authorization policy, detached provenance, bounded admitted
    cache and independent reload implemented. Typed artifact proposals, immutable
@@ -40,15 +41,16 @@ the implemented `htlk-compiler`.
    [Execution](runtime-execution.md) · [Reducers](runtime-binding.md) · [Influence](runtime-influence.md).
 5. **Implemented foundation — Scopes and loops:** complete child settlement, conjunctive contracts,
    output precedence, explicit feedback and durable iteration checkpoints.
-6. **Pending — Policy and limits:** authorization, effective deadlines, reservations,
-   supported hard budgets and fenced cancellation.
+6. **In progress — Policy and limits:** lazy authorization, effective deadlines,
+   ancestor call/concurrency accounting and fenced cancellation implemented.
+   Unsupported hard external token/cost enforcement is rejected before admission.
 7. **In progress — Waits and approvals:** durable input requests, authenticated replies,
-   expiry, host receipts and fenced cancellation implemented; exact-action approval
-   generation integration pending. [Wait/control API](runtime-waits.md).
-   Remaining obligations include
-   exact-action approval generations, expiry and idempotent receipts.
-8. **Pending — Live MCP:** stdio/HTTP, descriptor drift, bounded protocol conversion,
-   durable attempts/responses and delivery-state-aware retry.
+    expiry, host receipts, cancellation and exact-action approval generations
+    implemented. Complete expiry/race audit remains.
+    [Wait/control API](runtime-waits.md) · [MCP/approvals](runtime-mcp.md).
+8. **Implemented foundation — Live MCP:** bounded stdio/HTTP JSON/SSE, exact descriptor
+   drift checks, all four operations, durable intent/responses, replay-safe retry,
+   verified deduplication contracts and non-authoritative late-response retention.
 9. **Pending — Recovery and replay:** higher-fence takeover, state reconstruction,
    ambiguous-effect reconciliation and replay without external dispatch.
 10. **Pending — Additive extension:** compiler joins, exact preserved inputs/identity,
