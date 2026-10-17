@@ -57,7 +57,9 @@ the implemented `htlk-compiler`.
      identity, either operand/renamed interfaces, repeated mounting, original budget/
      reservation adoption and atomic planning-wait closure. [Extension API](runtime-extension.md).
 11. **Pending — Operational API:** authorized inspection, source sidecars, retention,
-    backpressure, startup/shutdown and host examples.
+     backpressure, startup/shutdown and host examples.
+     [Protected retention](runtime-retention.md), immutable tombstones and bounded
+     shared-byte collection are implemented; remaining operational audit continues.
 12. **Pending — Conformance:** runtime §17 matrix, compiled worked-example execution,
     crash/race coverage and workspace/release validation.
 

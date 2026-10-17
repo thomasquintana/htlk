@@ -72,12 +72,20 @@ impl SqliteStore {
             .await
             .map_err(StoreError::from_worker)
     }
-    pub(crate) async fn artifact_bytes(&self, reference: Digest) -> Result<Vec<u8>, StoreError> {
+    pub(crate) async fn artifact_bytes(
+        &self,
+        id: ArtifactId,
+        reference: Digest,
+    ) -> Result<Vec<u8>, StoreError> {
         let limits = self.config.limits.clone();
         self.connection
             .call(move |db| -> Result<Vec<u8>, StoreError> {
+                let tx = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
+                if retention::expired(&tx, id, &limits)?.is_some() {
+                    return Err(StoreError::Expired);
+                }
                 let mut statement =
-                    db.prepare("SELECT value_bytes FROM value_blobs WHERE blob_digest=?1")?;
+                    tx.prepare("SELECT value_bytes FROM value_blobs WHERE blob_digest=?1")?;
                 let mut rows = statement.query([reference.to_string()])?;
                 let row = rows.next()?.ok_or(StoreError::Corrupt)?;
                 let bytes = row.get_ref(0)?.as_blob().map_err(|_| StoreError::Corrupt)?;

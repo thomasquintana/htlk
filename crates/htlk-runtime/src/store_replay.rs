@@ -87,7 +87,7 @@ impl ReplayState {
         }
         cbor::encode(&entry.payload, limits)?;
         match entry.event {
-            JournalEvent::TerminalReceipt => {
+            JournalEvent::TerminalReceipt | JournalEvent::ArtifactExpired => {
                 if !self.header.status.is_terminal() {
                     return Err(StoreError::Corrupt);
                 }
@@ -100,7 +100,12 @@ impl ReplayState {
                 }
                 let [write] = array::<1>(writes)?;
                 let [family, id, revision, final_record, payload] = array::<5>(write)?;
-                if string(family)? != "reply"
+                let expected_family = if entry.event == JournalEvent::TerminalReceipt {
+                    "reply"
+                } else {
+                    "tombstone"
+                };
+                if string(family)? != expected_family
                     || !matches!((revision, final_record), (Value::Null, Value::Bool(true)))
                     || entry.command_id.as_deref() != Some(string(id)?)
                 {
@@ -109,10 +114,43 @@ impl ReplayState {
                 let Value::Map(fields) = payload else {
                     return Err(StoreError::Corrupt);
                 };
-                if fields.get("principal") != Some(&Value::Text(entry.actor.clone()))
-                    || fields.get("method") != Some(&Value::Text(entry.causation.clone()))
+                if entry.event == JournalEvent::TerminalReceipt
+                    && (fields.get("principal") != Some(&Value::Text(entry.actor.clone()))
+                        || fields.get("method") != Some(&Value::Text(entry.causation.clone())))
                 {
                     return Err(StoreError::Corrupt);
+                }
+                if entry.event == JournalEvent::ArtifactExpired
+                    && (fields.get("artifact_id") != Some(id)
+                        || fields.get("expired_at_ms") != Some(&Value::Integer(entry.timestamp_ms))
+                        || fields.get("reason") != Some(&Value::Text("retention_expired".into()))
+                        || entry.causation != "expire_artifact")
+                {
+                    return Err(StoreError::Corrupt);
+                }
+                if entry.event == JournalEvent::ArtifactExpired {
+                    let source = self
+                        .records
+                        .get(&RecordKey {
+                            family: RecordFamily::Artifact,
+                            id: string(id)?.into(),
+                        })
+                        .ok_or(StoreError::Corrupt)?;
+                    let metadata =
+                        crate::artifact::ArtifactMetadata::from_value(&source.0.payload, limits)
+                            .map_err(|_| StoreError::Corrupt)?;
+                    if !source.0.final_record
+                        || metadata.artifact_id().to_string() != string(id)?
+                        || fields.get("influence_labels")
+                            != Some(
+                                &metadata
+                                    .security_labels()
+                                    .to_value(limits)
+                                    .map_err(|_| StoreError::Corrupt)?,
+                            )
+                    {
+                        return Err(StoreError::Corrupt);
+                    }
                 }
                 self.apply_body(&entry.payload, limits, false)?;
             }

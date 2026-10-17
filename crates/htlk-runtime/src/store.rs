@@ -21,6 +21,8 @@ const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
 const ARTIFACT_SCHEMA: &str = include_str!("store_artifacts.sql");
 const RUN_SCHEMA: &str = include_str!("store_runs.sql");
 const LATE_SCHEMA: &str = include_str!("store_late.sql");
+#[path = "store_retention.rs"]
+mod retention;
 
 #[path = "store_execution.rs"]
 mod execution;
@@ -466,6 +468,8 @@ fn event_value(run: &str, sequence: i64, event: &EventMeta<'_>, payload: &[u8]) 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StoreError {
+    /// An authoritative retention tombstone records deliberate expiry.
+    Expired,
     /// Backend database operation failed.
     Database,
     /// Connection worker is unavailable.
@@ -492,6 +496,7 @@ impl StoreError {
     /// remains a host API concern rather than being guessed from backend text.
     pub const fn code(self) -> FailureCode {
         match self {
+            Self::Expired => FailureCode::RetentionExpired,
             Self::Fenced => FailureCode::Fenced,
             Self::Corrupt => FailureCode::Digest,
             Self::Invalid => FailureCode::Input,
@@ -509,6 +514,7 @@ impl StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Expired => "runtime artifact retention expired",
             Self::Database => "runtime database operation failed",
             Self::Closed => "runtime database connection is closed",
             Self::Schema => "runtime database schema is incompatible",

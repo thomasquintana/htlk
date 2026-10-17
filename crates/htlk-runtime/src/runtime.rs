@@ -64,6 +64,13 @@ impl fmt::Debug for Attestation {
 /// An action requested of current deployment authorization.
 #[non_exhaustive]
 pub enum Authorization<'a> {
+    /// Expire an accepted artifact after all retention protections settle.
+    ExpireArtifact {
+        /// Immutable value/provenance and trusted protection.
+        metadata: &'a ArtifactMetadata,
+    },
+    /// Collect unreferenced physical bytes; cannot delete retained artifacts.
+    CollectGarbage,
     /// Install a registered additive graph around existing work.
     ExtendRun {
         /// Target run.
@@ -224,6 +231,9 @@ pub struct RuntimeConfig {
     pub execution_limits: htlk_executable::ExecutionLimits,
     /// Advertised host receipt lifetime in milliseconds, positive and finite.
     pub idempotency_retention_ms: u64,
+    /// Minimum artifact/history audit window after terminal completion, at least
+    /// the advertised host receipt lifetime. Expiry is explicit, never implicit.
+    pub audit_retention_ms: u64,
 }
 impl Default for RuntimeConfig {
     fn default() -> Self {
@@ -232,6 +242,7 @@ impl Default for RuntimeConfig {
             max_cached_executables: 16,
             execution_limits: htlk_executable::ExecutionLimits::new(),
             idempotency_retention_ms: 24 * 60 * 60 * 1000,
+            audit_retention_ms: 24 * 60 * 60 * 1000,
         }
     }
 }
@@ -275,6 +286,8 @@ impl Runtime {
         if config.max_cached_executables > 1024
             || config.idempotency_retention_ms == 0
             || config.idempotency_retention_ms > i64::MAX as u64
+            || config.audit_retention_ms < config.idempotency_retention_ms
+            || config.audit_retention_ms > i64::MAX as u64
         {
             return Err(RuntimeError::failure(FailureCode::Profile));
         }
@@ -416,7 +429,7 @@ impl Runtime {
         metadata.to_value(&self.config.limits)?;
         let bytes = self
             .store
-            .artifact_bytes(metadata.storage_reference())
+            .artifact_bytes(id, metadata.storage_reference())
             .await?;
         let value = metadata.verify_value(&bytes, &self.config.limits)?;
         Ok(AuthorizedValue { metadata, value })

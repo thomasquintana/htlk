@@ -323,6 +323,7 @@ impl Runtime {
             run_limits,
             scope_limits,
             requested_limits: requested,
+            audit_retention_ms: self.config.audit_retention_ms as i64,
             limits: self.config.limits.clone(),
         };
         let observed = self.clock.now_ms()?;
@@ -406,6 +407,7 @@ pub(crate) fn min_limits(layers: &[&ExecutionLimits]) -> Result<ExecutionLimits,
 }
 
 pub(crate) struct PreparedRun {
+    pub(crate) audit_retention_ms: i64,
     pub run_id: RunId,
     pub fingerprint: Digest,
     pub definition: Digest,
@@ -557,6 +559,10 @@ impl PreparedRun {
                 run_deadline.map_or(Value::Null, Value::Integer),
             ),
             ("calls_spent".into(), Value::Integer(0)),
+            (
+                "audit_retention_ms".into(),
+                Value::Integer(self.audit_retention_ms),
+            ),
             ("tokens_spent".into(), Value::Integer(0)),
             ("cost_spent".into(), Value::Integer(0)),
             ("concurrency_reserved".into(), Value::Integer(0)),

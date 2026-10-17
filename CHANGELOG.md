@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add persisted artifact audit promises, active/retained cross-run reference
+  protection, immutable journaled expiry tombstones, distinct retention errors and
+  bounded garbage collection preserving shared bytes and producer identities.
 - Add compiler-backed additive live extension with unchanged scope/attempt/input
   identities, adopted aggregate usage/reservations, stale-graph checks, historical
   installation receipts and atomic typed planning-wait closure.

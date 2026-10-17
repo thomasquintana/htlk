@@ -18,6 +18,7 @@ mod mcp_protocol;
 mod native_profile;
 mod native_registry;
 pub mod records;
+pub mod retention;
 mod run;
 mod runtime;
 mod runtime_type;

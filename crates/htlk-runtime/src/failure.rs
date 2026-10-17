@@ -48,6 +48,7 @@ macro_rules! codes {
 codes! {
     Executable => ("E_EXECUTABLE", "The executable is invalid or unsupported."),
     Digest => ("E_DIGEST", "Recorded content failed integrity verification."),
+    RetentionExpired => ("E_RETENTION_EXPIRED", "The artifact expired under deployment retention policy."),
     Profile => ("E_PROFILE", "The exact required implementation is unavailable."),
     Input => ("E_INPUT", "An input violates its declared boundary."),
     BindingConflict => ("E_BINDING_CONFLICT", "More than one candidate guard selected a binding."),

@@ -64,6 +64,8 @@ pub fn native_profile(
         include_bytes!("execution/approval.rs"),
         include_bytes!("execution/extension.rs"),
         include_bytes!("store_late.sql"),
+        include_bytes!("retention.rs"),
+        include_bytes!("store_retention.rs"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);

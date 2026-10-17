@@ -102,6 +102,8 @@ pub struct CommitReceipt {
 /// Closed version-0.1 journal transition schema selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JournalEvent {
+    /// Terminal audit-window expiry records one immutable artifact tombstone.
+    ArtifactExpired,
     /// Immutable host receipt appended after a terminal outcome, without work.
     TerminalReceipt,
     /// Initial root/inputs, contract result and authenticated host start receipt.
@@ -118,6 +120,7 @@ pub enum JournalEvent {
 impl JournalEvent {
     fn parse(value: &str) -> Result<Self, StoreError> {
         match value {
+            "artifact_expired" => Ok(Self::ArtifactExpired),
             "terminal_receipt" => Ok(Self::TerminalReceipt),
             "run_initialized" => Ok(Self::RunInitialized),
             "run_created" => Ok(Self::RunCreated),
@@ -225,6 +228,7 @@ impl SqliteStore {
                 let revision=next_revision(write.expected_revision)?;
                 tx.execute("INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,family,record_id) DO UPDATE SET revision=excluded.revision,final=excluded.final,payload=excluded.payload",params![lease.run_id.as_str(),write.key.family.as_str(),write.key.id,revision,write.final_record,payload])?;
             }
+            retention::check_references(&tx,&transition.writes,&limits)?;
             artifacts::check_output_publication(&tx,&lease.run_id,&transition.writes,&limits)?;
             let sequence=header.sequence.checked_add(1).ok_or(StoreError::Invalid)?;
             let fingerprint=transition.root.as_ref().map_or(header.fingerprint,|r|r.fingerprint);

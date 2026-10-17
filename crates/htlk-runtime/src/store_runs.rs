@@ -195,6 +195,9 @@ fn check_input_reference(
     labels: &crate::records::SecurityLabels,
     limits: &Limits,
 ) -> Result<(), StoreError> {
+    if retention::expired(tx, id, limits)?.is_some() {
+        return Err(StoreError::Expired);
+    }
     let mut statement =
         tx.prepare("SELECT payload,final FROM records WHERE family='artifact' AND record_id=?1")?;
     let mut rows = statement.query([id.to_string()])?;
@@ -249,6 +252,7 @@ mod tests {
             digest: Digest::from_bytes([7; 32]),
         };
         let prepared = PreparedRun {
+            audit_retention_ms: 1000,
             run_id: run,
             fingerprint: admitted.fingerprint(),
             definition: admitted.document().fields().root_scope,

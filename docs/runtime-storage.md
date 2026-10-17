@@ -101,6 +101,7 @@ ownership_renewed:  [owner, fence, expires_at_ms]
 records_committed:  [owner, fence, body]
 run_initialized:    [body, [principal, method, fingerprint, key, digest, expiry]]
 terminal_receipt:   body  // one final host reply; no status/root replacement
+artifact_expired:   body  // one final artifact tombstone; no status/root replacement
 
 body = [writes, terminal_status_or_null, new_root_or_null, expected_fingerprint_or_null]
 new_root = [fingerprint, scope_instance_id]
