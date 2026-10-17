@@ -102,6 +102,8 @@ pub struct CommitReceipt {
 /// Closed version-0.1 journal transition schema selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JournalEvent {
+    /// Initial root/inputs, contract result and authenticated host start receipt.
+    RunInitialized,
     /// Initial fingerprint/root; sequence one, no owner.
     RunCreated,
     /// New owner, higher fence and expiry.
@@ -114,6 +116,7 @@ pub enum JournalEvent {
 impl JournalEvent {
     fn parse(value: &str) -> Result<Self, StoreError> {
         match value {
+            "run_initialized" => Ok(Self::RunInitialized),
             "run_created" => Ok(Self::RunCreated),
             "ownership_acquired" => Ok(Self::OwnershipAcquired),
             "ownership_renewed" => Ok(Self::OwnershipRenewed),
@@ -369,7 +372,10 @@ pub(super) fn next_revision(previous: Option<i64>) -> Result<i64, StoreError> {
         _ => Err(StoreError::Invalid),
     }
 }
-fn transition_body(transition: &mut Transition, limits: &Limits) -> Result<Value, StoreError> {
+pub(super) fn transition_body(
+    transition: &mut Transition,
+    limits: &Limits,
+) -> Result<Value, StoreError> {
     transition.writes.sort_by(|a, b| a.key.cmp(&b.key));
     let mut unique = BTreeSet::new();
     let mut accounting = RecordAccounting::new(limits)?;

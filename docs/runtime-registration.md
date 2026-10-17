@@ -13,7 +13,8 @@ inspection and returns immutable admitted definitions and checked plans.
 
 `read_artifact` additionally authorizes and verifies previously accepted value
 snapshots; see [artifact publication](runtime-artifacts.md). These methods do not
-execute nodes or start runs; atomic run creation is the next implementation slice.
+execute nodes. [Run admission](runtime-runs.md) creates durable checked initial
+state; actual child scheduling is the next coordinator phase.
 
 ## Configuration and authenticated context
 

@@ -6,6 +6,7 @@ use htlk_executable::*;
 
 pub mod artifact;
 mod checked_evaluate;
+pub mod clock;
 mod evaluate;
 pub mod failure;
 pub mod identity;
@@ -13,6 +14,7 @@ mod mcp_protocol;
 mod native_profile;
 mod native_registry;
 pub mod records;
+mod run;
 mod runtime;
 mod runtime_type;
 mod schema_projection;
@@ -31,6 +33,7 @@ pub use native_profile::native_profile;
 pub use native_registry::{
     NativeCallContext, NativeFunction, NativeFunctionImpl, NativeRegistry, NativeRegistryError,
 };
+pub use run::RunStarted;
 pub use runtime::{
     Attestation, Authorization, GraphRegistration, HostContext, Runtime, RuntimeConfig,
     RuntimeError, RuntimePolicy,

@@ -10,7 +10,22 @@ pub struct ReplayState {
     header: RunHeader,
     records: BTreeMap<RecordKey, (StoredRecord, usize)>,
     commands: BTreeMap<String, (Digest, i64)>,
+    start_receipt: Option<ReplayedStartReceipt>,
     retained_bytes: usize,
+}
+/// Reconstructed authenticated host start identity and retention facts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplayedStartReceipt {
+    /// Authenticated original principal.
+    pub principal: String,
+    /// Registered target graph.
+    pub fingerprint: Digest,
+    /// Original required idempotency key.
+    pub idempotency_key: String,
+    /// Complete semantic host request digest.
+    pub request_digest: Digest,
+    /// Advertised receipt expiry in authoritative coordinator time.
+    pub expires_at_ms: i64,
 }
 impl ReplayState {
     /// Starts reconstruction from sequence one's creation event.
@@ -46,6 +61,7 @@ impl ReplayState {
             },
             records: BTreeMap::new(),
             commands: BTreeMap::new(),
+            start_receipt: None,
             retained_bytes: 0,
         })
     }
@@ -72,6 +88,7 @@ impl ReplayState {
         cbor::encode(&entry.payload, limits)?;
         match entry.event {
             JournalEvent::RunCreated => return Err(StoreError::Corrupt),
+            JournalEvent::RunInitialized => self.apply_initial(entry, limits)?,
             JournalEvent::OwnershipAcquired | JournalEvent::OwnershipRenewed => {
                 if self.header.status.is_terminal() || entry.command_id.is_some() {
                     return Err(StoreError::Corrupt);
@@ -139,7 +156,97 @@ impl ReplayState {
             return Err(StoreError::Corrupt);
         }
         let digest = command_digest(&entry.run_id, &entry.actor, &entry.causation, body, limits)?;
+        self.apply_body(body, limits, false)?;
+        self.retained_bytes = self
+            .retained_bytes
+            .checked_add(command.len() + 96)
+            .ok_or(StoreError::Invalid)?;
+        if self.retained_bytes > limits.max_document_bytes {
+            return Err(StoreError::Invalid);
+        }
+        self.commands
+            .insert(command.clone(), (digest, entry.sequence));
+        Ok(())
+    }
+    fn apply_initial(&mut self, entry: &JournalEntry, limits: &Limits) -> Result<(), StoreError> {
+        if self.header.sequence != 1
+            || self.header.owner.is_some()
+            || self.header.fence != 0
+            || !self.records.is_empty()
+            || self.start_receipt.is_some()
+        {
+            return Err(StoreError::Corrupt);
+        }
+        let [body, host] = array::<2>(&entry.payload)?;
+        let [principal, method, target, key, digest, expiry] = array::<6>(host)?;
+        let (principal, method, target, key) = (
+            string(principal)?,
+            string(method)?,
+            string(target)?,
+            string(key)?,
+        );
+        let expires_at_ms = integer(expiry)?;
+        if principal != entry.actor
+            || method != "start_run"
+            || entry.causation != method
+            || entry.command_id.as_deref() != Some(key)
+            || key.is_empty()
+            || target != self.header.fingerprint.to_string()
+            || expires_at_ms <= entry.timestamp_ms
+        {
+            return Err(StoreError::Corrupt);
+        }
+        let request_digest = string(digest)?.parse().map_err(|_| StoreError::Corrupt)?;
+        self.apply_body(body, limits, true)?;
+        let root = RecordKey {
+            family: RecordFamily::Scope,
+            id: self.header.root_scope.to_string(),
+        };
+        let scope = self.records.get(&root).ok_or(StoreError::Corrupt)?;
+        let Value::Map(fields) = &scope.0.payload else {
+            return Err(StoreError::Corrupt);
+        };
+        let expected = if self.header.status == RunStatus::Failed {
+            "failed"
+        } else {
+            "active"
+        };
+        if fields.get("status") != Some(&Value::Text(expected.into()))
+            || fields.get("origin_executable")
+                != Some(&Value::Text(self.header.fingerprint.to_string()))
+        {
+            return Err(StoreError::Corrupt);
+        }
+        self.retained_bytes = self
+            .retained_bytes
+            .checked_add(principal.len() + target.len() + key.len() + 96)
+            .ok_or(StoreError::Invalid)?;
+        if self.retained_bytes > limits.max_document_bytes {
+            return Err(StoreError::Invalid);
+        }
+        self.start_receipt = Some(ReplayedStartReceipt {
+            principal: principal.into(),
+            fingerprint: self.header.fingerprint,
+            idempotency_key: key.into(),
+            request_digest,
+            expires_at_ms,
+        });
+        Ok(())
+    }
+    fn apply_body(
+        &mut self,
+        body: &Value,
+        limits: &Limits,
+        initial: bool,
+    ) -> Result<(), StoreError> {
         let [writes, status, root, expected] = array::<4>(body)?;
+        if initial
+            && (!matches!(root, Value::Null)
+                || !matches!(status, Value::Null | Value::Text(_))
+                || matches!(expected, Value::Null))
+        {
+            return Err(StoreError::Corrupt);
+        }
         if !matches!(expected, Value::Null)
             && string(expected)? != self.header.fingerprint.to_string()
         {
@@ -155,6 +262,17 @@ impl ReplayState {
                 family: RecordFamily::parse(string(family)?)?,
                 id: string(id)?.into(),
             };
+            if initial
+                && !matches!(
+                    key.family,
+                    RecordFamily::Scope
+                        | RecordFamily::Artifact
+                        | RecordFamily::Usage
+                        | RecordFamily::Timer
+                )
+            {
+                return Err(StoreError::Corrupt);
+            }
             if previous.as_ref().is_some_and(|old| old >= &key) {
                 return Err(StoreError::Corrupt);
             }
@@ -164,6 +282,9 @@ impl ReplayState {
             } else {
                 Some(integer(expected)?)
             };
+            if initial && expected.is_some() {
+                return Err(StoreError::Corrupt);
+            }
             let Value::Bool(final_record) = final_record else {
                 return Err(StoreError::Corrupt);
             };
@@ -202,6 +323,9 @@ impl ReplayState {
                 "cancelled" => RunStatus::Cancelled,
                 _ => return Err(StoreError::Corrupt),
             };
+            if initial && next != RunStatus::Failed {
+                return Err(StoreError::Corrupt);
+            }
             if !self.header.status.can_transition_to(next) {
                 return Err(StoreError::Corrupt);
             }
@@ -214,20 +338,15 @@ impl ReplayState {
                 .map_err(|_| StoreError::Corrupt)?;
             self.header.root_scope = string(root)?.parse().map_err(|_| StoreError::Corrupt)?;
         }
-        self.retained_bytes = self
-            .retained_bytes
-            .checked_add(command.len() + 96)
-            .ok_or(StoreError::Invalid)?;
-        if self.retained_bytes > limits.max_document_bytes {
-            return Err(StoreError::Invalid);
-        }
-        self.commands
-            .insert(command.clone(), (digest, entry.sequence));
         Ok(())
     }
     /// Reconstructed authority header, for comparison with committed rows.
     pub fn header(&self) -> &RunHeader {
         &self.header
+    }
+    /// Authenticated host start receipt reconstructed from initialization, if any.
+    pub fn start_receipt(&self) -> Option<&ReplayedStartReceipt> {
+        self.start_receipt.as_ref()
     }
     /// Reconstructed authoritative record; derived indexes are not necessary.
     pub fn record(&self, key: &RecordKey) -> Option<&StoredRecord> {

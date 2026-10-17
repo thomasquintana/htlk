@@ -12,7 +12,7 @@ use htlk_executable::{
     digest::Digest,
     record_accounting::{EncodingLimitError, RecordAccounting},
 };
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 /// The six permitted invocation lifecycle states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,7 +97,7 @@ impl RunStatus {
 /// Trusted policy-assigned sorted unique opaque label strings. Merely constructing
 /// this set grants no authority; untrusted data fields cannot assign labels.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SecurityLabels(Vec<String>);
+pub struct SecurityLabels(Arc<[String]>);
 impl SecurityLabels {
     /// Bounds supplied labels before sorting/deduplicating without Unicode changes.
     ///
@@ -111,7 +111,7 @@ impl SecurityLabels {
         }
         labels.sort();
         labels.dedup();
-        Ok(Self(labels))
+        Ok(Self(labels.into()))
     }
     /// Borrows canonical decoded UTF-8 order.
     pub fn as_slice(&self) -> &[String] {
@@ -124,7 +124,7 @@ impl SecurityLabels {
     pub fn to_value(&self, limits: &Limits) -> Result<Value, RuntimeRecordError> {
         let mut accounting = RecordAccounting::new(limits)?;
         accounting.collection(self.0.len(), 0)?;
-        for label in &self.0 {
+        for label in self.0.iter() {
             accounting.text(label, 1)?;
         }
         Ok(Value::Array(
@@ -152,7 +152,7 @@ impl SecurityLabels {
             previous = Some(label);
             labels.push(label.clone());
         }
-        Ok(Self(labels))
+        Ok(Self(labels.into()))
     }
     /// Hashes the label set under the private `htlk.security_labels` 0.1 domain.
     ///
@@ -194,6 +194,27 @@ impl SecurityLabels {
         }
         Self::new(result, limits)
     }
+    /// Combines many immutable sets in one bounded traversal/sort. Each supplied
+    /// set header is charged even when empty, preventing input-count amplification.
+    /// Clone shares label storage; representation and digests remain unchanged.
+    ///
+    /// # Errors
+    /// Returns aggregate traversal/label limits before copying oversized metadata.
+    pub fn combine<'a>(
+        sets: impl IntoIterator<Item = &'a Self>,
+        limits: &Limits,
+    ) -> Result<Self, RuntimeRecordError> {
+        let mut accounting = RecordAccounting::new(limits)?;
+        let mut labels = Vec::new();
+        for set in sets {
+            accounting.collection(set.0.len(), 0)?;
+            for label in set.0.iter() {
+                accounting.text(label, 1)?;
+                labels.push(label.clone());
+            }
+        }
+        Self::new(labels, limits)
+    }
 }
 
 /// Frozen declared-port entry. Pending is deliberately unrepresentable here.
@@ -231,7 +252,7 @@ impl InputManifest {
     pub fn freeze(
         ports: &PortTable,
         mut entries: Vec<(Identifier, ManifestEntry)>,
-        mut influence: SecurityLabels,
+        influence: SecurityLabels,
         limits: &Limits,
     ) -> Result<Self, RuntimeRecordError> {
         // Bound retained metadata before sorting, including artifact IDs and labels.
@@ -246,6 +267,17 @@ impl InputManifest {
         if entries.len() != ports.len() {
             return Err(RuntimeRecordError::Manifest);
         }
+        let influence = SecurityLabels::combine(
+            std::iter::once(&influence).chain(entries.iter().filter_map(
+                |(_, entry)| match entry {
+                    ManifestEntry::Value {
+                        security_labels, ..
+                    } => Some(security_labels),
+                    ManifestEntry::Absent => None,
+                },
+            )),
+            limits,
+        )?;
         let mut inventory = Vec::new();
         for ((name, entry), (declared, port)) in entries.iter().zip(ports.iter()) {
             if name != declared || (port.required() && matches!(entry, ManifestEntry::Absent)) {
@@ -264,7 +296,6 @@ impl InputManifest {
                 ..
             } = entry
             {
-                influence = influence.union(security_labels, limits)?;
                 fields.push(("state".into(), Value::Text("value".into())));
                 fields.push((
                     "content_digest".into(),

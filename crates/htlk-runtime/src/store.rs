@@ -14,11 +14,15 @@ use htlk_executable::{
 use std::{fmt, path::Path, time::Duration};
 use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
 const ARTIFACT_SCHEMA: &str = include_str!("store_artifacts.sql");
+const RUN_SCHEMA: &str = include_str!("store_runs.sql");
+
+#[path = "store_runs.rs"]
+pub(crate) mod runs;
 
 #[path = "store_artifacts.rs"]
 mod artifacts;
@@ -30,7 +34,7 @@ mod registration;
 mod replay;
 #[path = "store_transitions.rs"]
 mod transitions;
-pub use replay::ReplayState;
+pub use replay::{ReplayState, ReplayedStartReceipt};
 pub use transitions::{
     CommitReceipt, JournalEntry, JournalEvent, OutboxNotice, RecordFamily, RecordKey, RecordWrite,
     RootReplacement, StoredRecord, Transition, TransitionContext,
@@ -111,14 +115,20 @@ impl SqliteStore {
                     tx.execute_batch(SCHEMA)?;
                     tx.execute_batch(REGISTRATION_SCHEMA)?;
                     tx.execute_batch(ARTIFACT_SCHEMA)?;
+                    tx.execute_batch(RUN_SCHEMA)?;
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application == APPLICATION_ID && version == 1 {
                     tx.execute_batch(REGISTRATION_SCHEMA)?;
                     tx.execute_batch(ARTIFACT_SCHEMA)?;
+                    tx.execute_batch(RUN_SCHEMA)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application == APPLICATION_ID && version == 2 {
                     tx.execute_batch(ARTIFACT_SCHEMA)?;
+                    tx.execute_batch(RUN_SCHEMA)?;
+                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                } else if application == APPLICATION_ID && version == 3 {
+                    tx.execute_batch(RUN_SCHEMA)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
                     return Err(StoreError::Schema);

@@ -380,3 +380,25 @@ fn request_digest_scopes_all_semantic_arguments_but_not_receipt_keys() {
         );
     }
 }
+
+#[test]
+fn multi_set_label_union_charges_empty_set_traversal_and_keeps_canonical_spelling() {
+    let l = Limits::default();
+    let a = SecurityLabels::new(vec!["z".into(), "a".into()], &l).unwrap();
+    let b = SecurityLabels::new(vec!["a".into(), "é".into()], &l).unwrap();
+    assert_eq!(
+        SecurityLabels::combine([&a, &b, &a], &l)
+            .unwrap()
+            .as_slice(),
+        &["a", "z", "é"]
+    );
+    let empty = SecurityLabels::default();
+    let small = Limits {
+        max_document_bytes: 8,
+        ..l
+    };
+    let mut visits = 0;
+    let sets = std::iter::repeat_n(&empty, 1000).inspect(|_| visits += 1);
+    assert!(SecurityLabels::combine(sets, &small).is_err());
+    assert!(visits <= 9);
+}

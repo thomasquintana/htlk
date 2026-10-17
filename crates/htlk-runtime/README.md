@@ -22,7 +22,8 @@ callback dispatch, actual-value checks, runtime schema projections and enforceme
 of analyzer obligations. The `store` module supplies SQLite schema/ownership
 foundations with fenced leases, atomic record transitions, internal command receipts,
 bounded journal/outbox delivery and capability-free replay. `Runtime` supplies
-policy-gated immutable graph registration and independent admitted reload.
+policy-gated immutable graph registration, independent admitted reload and atomic
+typed run admission with authenticated host receipts.
 Run coordination, dispatch authorization, scheduling and live MCP I/O remain pending.
 `htlk-executable::digest` supplies typed SHA-256 digests and hashing for future
 fingerprint checks and runtime identities, using consumer-defined preimages.
@@ -39,7 +40,7 @@ sets, explicit host input variants and lifecycle/source states. Manifest checkpo
 are versioned and recheck frozen hashes against authoritative port declarations.
 `failure` supplies stable redacted error values and separate protected causes.
 The repository's `docs/runtime-records.md` defines private hash/checkpoint contracts.
-Transactional enforcement and artifact authorization remain coordinator work.
+Coordinator binding/scope-boundary enforcement remains in progress.
 
 `SqliteStore` is trusted infrastructure rather than the logical authenticated host
 API. File stores use WAL/FULL synchronization, reject incompatible databases, and
@@ -57,8 +58,15 @@ saved envelopes against actual native implementations. See
 Staged value bytes are invisible until final metadata/output records commit.
 `Runtime::read_artifact` authorizes metadata before loading and verifying original
 typed native bytes. Producer-slot uniqueness and complete successful-node output
-crosschecks protect transactional publication. Run input admission, boundary labels
-and execution coordination remain subsequent integrations; see `docs/runtime-artifacts.md`.
+crosschecks protect transactional publication. See `docs/runtime-artifacts.md`.
+
+`Runtime::start_run` validates explicit typed/absent inputs and artifact references,
+preserves source IDs and protection, checks root preconditions, and commits initial
+root/input/usage/timer state with principal/method/target idempotency. False/error
+root contracts create failed runs without children. Durable ID/time allocation and
+receipt retention handle concurrency, restart and clock rollback; host clocks can
+be injected through `with_clock`. `docs/runtime-runs.md` documents the admission
+boundary. Scheduling and child execution are the next coordinator integration.
 
 ## Admission and checked execution
 

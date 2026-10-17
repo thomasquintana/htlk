@@ -374,6 +374,14 @@ impl PreparedArtifact {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+    pub(crate) fn metadata_at(&self, time: i64) -> Result<ArtifactMetadata, ArtifactError> {
+        if time < 0 {
+            return Err(ArtifactError::Shape);
+        }
+        let mut metadata = self.metadata.clone();
+        metadata.accepted_at = time;
+        Ok(metadata)
+    }
 }
 /// An authorized snapshot returned after checking current policy and byte integrity.
 #[derive(Clone, PartialEq)]

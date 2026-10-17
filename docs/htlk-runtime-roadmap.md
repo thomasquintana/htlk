@@ -28,8 +28,11 @@ the implemented `htlk-compiler`.
    explicit producer/authorization policy, detached provenance, bounded admitted
    cache and independent reload implemented. Typed artifact proposals, immutable
    byte staging, atomic metadata/output crosschecks and authorized integrity-checked
-   reads implemented. Host input validation and atomic run creation pending.
+   reads implemented. Authenticated/idempotent start, input admission, root contracts,
+   durable identity/time, initial scope/usage/timers and atomic host receipts implemented.
    [Registration API](runtime-registration.md) · [Artifacts](runtime-artifacts.md).
+   [Run admission](runtime-runs.md). Full boundary/cancellation/dispatch enforcement
+   is delivered with the execution phases below.
 4. **Pending — Pure graph execution:** deterministic binding reduction, guard-first
    admission, checked contexts, influence labels and atomic output publication.
 5. **Pending — Scopes and loops:** complete child settlement, conjunctive contracts,

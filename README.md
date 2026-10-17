@@ -23,7 +23,8 @@ recomputes semantic analysis from authoritative canonical bytes. Runtime owns
 evaluation, callback dispatch and actual-value enforcement. The compiler uses the
 same analysis for source lowering and canonical-input checking. Runtime graph
 registration now stores independently admitted immutable bytes under explicit host
-trust policy; durable run coordination and agent repair loops remain future work.
+trust policy, with atomic typed run admission and authenticated idempotent receipts.
+Graph scheduling, live MCP coordination and agent repair loops remain future work.
 
 ## Installation
 

@@ -416,7 +416,7 @@ mod tests {
             _: &HostContext,
             _: Digest,
             _: &Identifier,
-            _: &Value,
+            _: Option<&Value>,
         ) -> Result<SecurityLabels, RuntimeFailure> {
             Ok(SecurityLabels::default())
         }

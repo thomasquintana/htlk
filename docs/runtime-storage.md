@@ -7,7 +7,7 @@ Storage methods do not perform those application-level checks.
 
 ## Database identity and durability
 
-The private SQLite database uses application ID `0x48544c4b` and schema version 3.
+The private SQLite database uses application ID `0x48544c4b` and schema version 4.
 An empty database is initialized in an immediate transaction. Existing unrelated,
 nonempty or incompatible-version databases are rejected without relabeling them.
 File stores use WAL, synchronous FULL, foreign keys and a bounded busy timeout.
@@ -16,6 +16,8 @@ Version 1 is upgraded transactionally by adding immutable graph and detached
 provenance tables; existing authority/journal/outbox records are preserved.
 Migration 3 adds immutable value bytes and producer uniqueness indexes; version 2
 is upgraded without changing existing registered envelopes or execution records.
+Migration 4 adds durable host identity/time and authenticated receipt tables, plus
+a committed-time lookup index. Existing versions are upgraded transactionally.
 
 The initial layout has run authority headers, a version-0.1 journal, a transactional
 outbox, revisioned runtime-record families and internal command receipts. Graph
@@ -82,8 +84,8 @@ fingerprint, actor or causation conflict. A duplicate returns its original seque
 without another journal entry, including after that command terminated the run.
 Authority is still checked before receipt lookup; stale owners cannot publish.
 
-These are internal coordinator receipts. Principal/method/target-scoped logical
-host API receipts are a separate service integration.
+These are internal coordinator receipts. Separate principal/method/target-scoped
+[host start receipts](runtime-runs.md) are committed with initial run state.
 
 ## Journal schemas and replay
 
@@ -96,6 +98,7 @@ run_created:        [fingerprint, root_scope_id]
 ownership_acquired: [owner, fence, expires_at_ms]
 ownership_renewed:  [owner, fence, expires_at_ms]
 records_committed:  [owner, fence, body]
+run_initialized:    [body, [principal, method, fingerprint, key, digest, expiry]]
 
 body = [writes, terminal_status_or_null, new_root_or_null, expected_fingerprint_or_null]
 new_root = [fingerprint, scope_instance_id]
@@ -139,6 +142,7 @@ duplicate outbox delivery, corrupt payloads, replay equivalence and altered hist
 
 [Immutable graph registration](runtime-registration.md) and
 [artifact storage/read integrity](runtime-artifacts.md) are implemented consumers.
-Atomic run-input publication and graph execution follow. Timer, reservation and
-other families are vocabulary;
+[Atomic run-input publication](runtime-runs.md) and host receipts are implemented;
+graph execution follows. Initial finite timers/zero usage are saved, while their
+coordinator enforcement and reservation consumers remain later integrations;
 their execution semantics are not established merely by a generic record commit.

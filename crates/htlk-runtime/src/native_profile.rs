@@ -43,6 +43,10 @@ pub fn native_profile(
         include_bytes!("artifact.rs"),
         include_bytes!("store_artifacts.rs"),
         include_bytes!("store_artifacts.sql"),
+        include_bytes!("clock.rs"),
+        include_bytes!("run.rs"),
+        include_bytes!("store_runs.rs"),
+        include_bytes!("store_runs.sql"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);

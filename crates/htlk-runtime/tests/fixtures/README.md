@@ -108,3 +108,9 @@ Artifact preparation/publication adds `artifact.rs`, `store_artifacts.rs` and
 immutable bytes and rebuildable producer uniqueness. Core/regex/URI-template
 source identities refresh; the graph/policy/schema-validator and independent
 runtime identity vectors keep their previous contents and identities.
+
+Run admission adds `clock.rs`, `run.rs`, `store_runs.rs` and `store_runs.sql` to
+core source coverage, with migration 4 and replayable host start receipts. Shared
+immutable label storage changes no label/input encoding or semantic hashes.
+Regeneration refreshes source-derived core/regex/URI identities and the envelope
+fingerprint while leaving the empty graph, policy and schema identity unchanged.

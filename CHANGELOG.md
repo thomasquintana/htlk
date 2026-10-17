@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add authenticated idempotent run admission, protected input/absence manifests,
+  root contract evidence, durable host identity/time, initial usage/deadline records
+  and replayable start receipts through SQLite migration 4. Historical receipts
+  do not require re-executing code or re-reading inputs; new work still does.
 - Add typed artifact preparation, shared immutable value bytes, producer-slot
   uniqueness, atomic metadata/output checks and authorized integrity-checked reads
   with SQLite migration 3.
