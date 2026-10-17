@@ -11,55 +11,8 @@ use htlk_executable::cbor::Limits;
 use htlk_executable::*;
 use std::{collections::BTreeMap, sync::Arc};
 
-fn native_compiler() -> (Compiler, NativeRegistry) {
-    let l = Limits::default();
-    let policy = PolicyDocument::new(
-        PolicyFields {
-            cost_unit: "credits".into(),
-            defaults: ExecutionLimits::new()
-                .with_timeout_ms(1000)
-                .unwrap()
-                .with_attempt_timeout_ms(100)
-                .unwrap()
-                .with_max_concurrency(1)
-                .unwrap(),
-            evaluator_limits: EvaluatorLimits {
-                max_expression_depth: 64,
-                max_value_bytes: 65536,
-                max_collection_visits: 10000,
-                max_regex_bytes: 4096,
-                max_regex_compiled_bytes: 65536,
-                max_output_bytes: 65536,
-                max_steps: 100000,
-            },
-            maximum_scope_depth: 32,
-            maximum_expanded_nodes: 1000,
-        },
-        &l,
-    )
-    .unwrap();
-    let mut registry = NativeRegistry::new(&l).unwrap();
-    let profile = registry.link_policy(&policy).unwrap();
-    let compiler = Compiler::new(CompilerConfig {
-        profile,
-        policy,
-        libraries: BTreeMap::new(),
-        limits: l.clone(),
-        frontend: FrontendLimits::default(),
-        schema_options: analyzer::NativeSchemaOptions::default(),
-        capabilities: CompilerCapabilities::default(),
-    })
-    .unwrap();
-    (compiler, registry)
-}
-
-fn catalogs() -> MCPCatalogInputs {
-    MCPCatalogInputs::from_json(
-        include_bytes!("../specs/examples/decision_brief.catalogs.json"),
-        &Limits::default(),
-    )
-    .unwrap()
-}
+mod support;
+use support::{catalogs, native_compiler};
 
 #[test]
 fn source_output_is_admitted_under_exact_native_configuration() {

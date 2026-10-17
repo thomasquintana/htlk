@@ -140,7 +140,7 @@ assert.equal(get(profile, 'core_digest').value, native([
   rawDigest(model), rawDigest(analyzer),
   ...sources('htlk-runtime', [
     'lib.rs', 'native_profile.rs', 'evaluate.rs', 'checked_evaluate.rs', 'runtime_type.rs',
-    'schema_projection.rs', 'native_registry.rs', 'verified.rs', 'identity.rs', 'failure.rs', 'records.rs', 'store.rs', 'store_transitions.rs', 'store_replay.rs', 'store.sql', 'mcp_protocol.rs', 'uri_template.rs',
+    'schema_projection.rs', 'native_registry.rs', 'verified.rs', 'identity.rs', 'failure.rs', 'records.rs', 'store.rs', 'store_transitions.rs', 'store_replay.rs', 'store.sql', 'runtime.rs', 'store_registration.rs', 'store_registration.sql', 'mcp_protocol.rs', 'uri_template.rs',
   ]),
 ]));
 assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value,

@@ -12,6 +12,7 @@ mod mcp_protocol;
 mod native_profile;
 mod native_registry;
 pub mod records;
+mod runtime;
 mod runtime_type;
 mod schema_projection;
 pub mod store;
@@ -28,6 +29,10 @@ pub use mcp_protocol::{validate_mcp_prompt_result, validate_resource_snapshot};
 pub use native_profile::native_profile;
 pub use native_registry::{
     NativeCallContext, NativeFunction, NativeFunctionImpl, NativeRegistry, NativeRegistryError,
+};
+pub use runtime::{
+    Attestation, Authorization, GraphRegistration, HostContext, Runtime, RuntimeConfig,
+    RuntimeError, RuntimePolicy,
 };
 pub use runtime_type::{project_typed_value, validate_typed_value};
 pub use schema_projection::SchemaProjection;

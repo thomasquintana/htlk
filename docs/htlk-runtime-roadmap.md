@@ -24,8 +24,10 @@ the implemented `htlk-compiler`.
    Atomic revisioned/final record transitions, internal command receipts, bounded
    journal/outbox delivery and capability-free reconstruction implemented. Consumer
    timer/reservation/host receipts pending. [Storage boundary](runtime-storage.md).
-3. **Pending — Registration and runs:** immutable exact-byte registrations, trust,
-   artifact ingress, input validation and atomic run creation.
+3. **In progress — Registration and runs:** immutable exact-byte graph registration,
+   explicit producer/authorization policy, detached provenance, bounded admitted
+   cache and independent reload implemented. Artifact ingress, input validation and
+   atomic run creation pending. [Registration API](runtime-registration.md).
 4. **Pending — Pure graph execution:** deterministic binding reduction, guard-first
    admission, checked contexts, influence labels and atomic output publication.
 5. **Pending — Scopes and loops:** complete child settlement, conjunctive contracts,

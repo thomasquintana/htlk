@@ -96,3 +96,9 @@ Atomic record transitions/reconstruction extend the explicit source coverage wit
 `store_transitions.rs` and `store_replay.rs`. Both contribute to the core digest;
 the profile-source edit also refreshes regex/URI-template identities. Regenerate
 and independently check the same native fixture after reviewing these modules.
+
+Policy-gated graph registration adds `runtime.rs`, `store_registration.rs` and
+`store_registration.sql` to native core coverage. The source-profile edit refreshes
+the core/regex/URI-template identities; graph, policy and schema-validator identity
+remain unchanged. The registration storage tests rebind the fixture's policy to
+current native code before testing transactions; they do not bypass admission.

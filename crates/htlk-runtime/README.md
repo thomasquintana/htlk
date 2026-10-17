@@ -21,8 +21,9 @@ This crate owns `verify_executable`, `NativeRegistry`, native expression evaluat
 callback dispatch, actual-value checks, runtime schema projections and enforcement
 of analyzer obligations. The `store` module supplies SQLite schema/ownership
 foundations with fenced leases, atomic record transitions, internal command receipts,
-bounded journal/outbox delivery and capability-free replay. Registration transactions,
-deployment authorization, scheduling and live MCP I/O remain pending.
+bounded journal/outbox delivery and capability-free replay. `Runtime` supplies
+policy-gated immutable graph registration and independent admitted reload.
+Run coordination, dispatch authorization, scheduling and live MCP I/O remain pending.
 `htlk-executable::digest` supplies typed SHA-256 digests and hashing for future
 fingerprint checks and runtime identities, using consumer-defined preimages.
 Its `ExecutableEnvelope` API validates version-0.1 envelope fields, format,
@@ -44,6 +45,13 @@ Transactional enforcement and artifact authorization remain coordinator work.
 API. File stores use WAL/FULL synchronization, reject incompatible databases, and
 commit run ownership with journal/outbox evidence. See `docs/runtime-storage.md`
 for the delivered storage boundary and its remaining coordinator integrations.
+
+Construct `Runtime` with an explicit `RuntimePolicy` and authenticated `HostContext`
+to call `register_graph` or inspect an admitted `executable`. Registration verifies
+bytes independently of compiler reports and stores detached provenance separately;
+inspection rechecks current authorization even on cache hits. Fresh services re-admit
+saved envelopes against actual native implementations. See
+`docs/runtime-registration.md` for configuration and trust contracts.
 
 ## Admission and checked execution
 

@@ -7,11 +7,13 @@ Storage methods do not perform those application-level checks.
 
 ## Database identity and durability
 
-The private SQLite database uses application ID `0x48544c4b` and schema version 1.
+The private SQLite database uses application ID `0x48544c4b` and schema version 2.
 An empty database is initialized in an immediate transaction. Existing unrelated,
 nonempty or incompatible-version databases are rejected without relabeling them.
 File stores use WAL, synchronous FULL, foreign keys and a bounded busy timeout.
 `in_memory` is ephemeral and is only suitable for tests or disposable execution.
+Version 1 is upgraded transactionally by adding immutable graph and detached
+provenance tables; existing authority/journal/outbox records are preserved.
 
 The initial layout has run authority headers, a version-0.1 journal, a transactional
 outbox, revisioned runtime-record families and internal command receipts. Graph
@@ -133,6 +135,7 @@ Transition tests additionally cover multi-record publication, final outcomes,
 stale/final record rollback, takeover receipts, concurrent revisions, bounded pages,
 duplicate outbox delivery, corrupt payloads, replay equivalence and altered history.
 
-Registration/artifact storage, atomic run-input publication and graph execution are
-subsequent consumers. Timer, reservation and other families are storage vocabulary;
+[Immutable graph registration](runtime-registration.md) is implemented as a
+consumer with separate provenance. Artifact storage, atomic run-input publication
+and graph execution follow. Timer, reservation and other families are vocabulary;
 their execution semantics are not established merely by a generic record commit.

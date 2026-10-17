@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add policy-gated immutable graph registration with detached provenance, authenticated
+  host context, bounded admitted caching, fresh native reload and SQLite migration 2.
 - Add atomic revisioned/final runtime record publication, takeover-safe internal
   command receipts, bounded journal/outbox delivery and capability-free state replay.
 - Add the trusted SQLite authority foundation with schema identity/version checks,

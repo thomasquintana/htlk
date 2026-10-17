@@ -21,8 +21,9 @@ The analyzer depends on the model and on neither compiler nor runtime.
 `htlk_runtime::verify_executable` performs exact host-policy/implementation admission and
 recomputes semantic analysis from authoritative canonical bytes. Runtime owns
 evaluation, callback dispatch and actual-value enforcement. The compiler uses the
-same analysis for source lowering and canonical-input checking. Agent repair loops
-and runtime registration transactions remain future work.
+same analysis for source lowering and canonical-input checking. Runtime graph
+registration now stores independently admitted immutable bytes under explicit host
+trust policy; durable run coordination and agent repair loops remain future work.
 
 ## Installation
 

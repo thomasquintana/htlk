@@ -80,6 +80,7 @@ htlk-compiler.workspace = true
 htlk-runtime.workspace = true
 
 [dev-dependencies]
+actix.workspace = true
 htlk-executable.workspace = true
 htlk-analyzer.workspace = true
 

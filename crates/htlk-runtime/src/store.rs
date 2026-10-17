@@ -14,9 +14,13 @@ use htlk_executable::{
 use std::{fmt, path::Path, time::Duration};
 use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
+const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
+
+#[path = "store_registration.rs"]
+mod registration;
 
 #[path = "store_replay.rs"]
 mod replay;
@@ -101,7 +105,11 @@ impl SqliteStore {
                         return Err(StoreError::Schema);
                     }
                     tx.execute_batch(SCHEMA)?;
+                    tx.execute_batch(REGISTRATION_SCHEMA)?;
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                } else if application == APPLICATION_ID && version == 1 {
+                    tx.execute_batch(REGISTRATION_SCHEMA)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
                     return Err(StoreError::Schema);
@@ -1182,6 +1190,36 @@ mod tests {
                 SqliteStore::open(future.path(), StoreConfig::default()).await,
                 Err(StoreError::Schema)
             ));
+        });
+    }
+
+    #[test]
+    fn registration_migration_preserves_existing_version_one_run_authority() {
+        actix::System::new().block_on(async {
+            let temporary=TempDb::new();
+            let raw=Connection::open(temporary.path()).await.unwrap();
+            let run=seed("legacy");let legacy=run.clone();
+            raw.call(move|db|->Result<(),StoreError>{
+                db.pragma_update(None,"foreign_keys",true)?;
+                db.execute_batch(SCHEMA)?;
+                db.pragma_update(None,"application_id",APPLICATION_ID)?;
+                db.pragma_update(None,"user_version",1)?;
+                let tx=db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute("INSERT INTO runs(run_id,fingerprint,root_scope,status,sequence,fence,last_time_ms) VALUES(?1,?2,?3,'running',1,0,0)",params![legacy.run_id.as_str(),legacy.fingerprint.to_string(),legacy.root_scope.to_string()])?;
+                let payload=cbor::encode(&Value::Array(vec![Value::Text(legacy.fingerprint.to_string()),Value::Text(legacy.root_scope.to_string())]),&Limits::default())?;
+                append_event(&tx,legacy.run_id.as_str(),1,EventMeta{kind:"run_created",actor:"principal",timestamp:0,causation:"start-request",command:None},&payload,&Limits::default())?;
+                tx.commit()?;Ok(())
+            }).await.unwrap();
+            raw.close().await.unwrap();
+            let store=SqliteStore::open(temporary.path(),StoreConfig::default()).await.unwrap();
+            let header=store.run_header(&run.run_id).await.unwrap();
+            assert_eq!(header.root_scope,run.root_scope);
+            assert_eq!(counts(&store).await,(1,1,1));
+            let version=store.connection.call(|db|db.pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0))).await.unwrap();
+            assert_eq!(version,2);
+            let rows=store.connection.call(|db|db.query_row("SELECT count(*) FROM graphs",[],|r|r.get::<_,i64>(0))).await.unwrap();
+            assert_eq!(rows,0);
+            store.close().await.unwrap();
         });
     }
 }

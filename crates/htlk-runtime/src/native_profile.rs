@@ -37,6 +37,9 @@ pub fn native_profile(
         include_bytes!("store_transitions.rs"),
         include_bytes!("store_replay.rs"),
         include_bytes!("store.sql"),
+        include_bytes!("runtime.rs"),
+        include_bytes!("store_registration.rs"),
+        include_bytes!("store_registration.sql"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);
