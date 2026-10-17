@@ -53,6 +53,13 @@ inspection rechecks current authorization even on cache hits. Fresh services re-
 saved envelopes against actual native implementations. See
 `docs/runtime-registration.md` for configuration and trust contracts.
 
+`artifact` provides type-checked `PreparedArtifact` proposals and immutable metadata.
+Staged value bytes are invisible until final metadata/output records commit.
+`Runtime::read_artifact` authorizes metadata before loading and verifying original
+typed native bytes. Producer-slot uniqueness and complete successful-node output
+crosschecks protect transactional publication. Run input admission, boundary labels
+and execution coordination remain subsequent integrations; see `docs/runtime-artifacts.md`.
+
 ## Admission and checked execution
 
 `verify_executable` decodes authoritative canonical envelope bytes, checks the

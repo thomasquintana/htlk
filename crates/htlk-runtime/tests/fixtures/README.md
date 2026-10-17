@@ -102,3 +102,9 @@ Policy-gated graph registration adds `runtime.rs`, `store_registration.rs` and
 the core/regex/URI-template identities; graph, policy and schema-validator identity
 remain unchanged. The registration storage tests rebind the fixture's policy to
 current native code before testing transactions; they do not bypass admission.
+
+Artifact preparation/publication adds `artifact.rs`, `store_artifacts.rs` and
+`store_artifacts.sql` to both core source coverage lists. Migration 3 introduces
+immutable bytes and rebuildable producer uniqueness. Core/regex/URI-template
+source identities refresh; the graph/policy/schema-validator and independent
+runtime identity vectors keep their previous contents and identities.

@@ -2,7 +2,9 @@
 
 use crate::{
     ExecutableVerificationError, NativeRegistry, VerifiedExecutable,
-    failure::{FailureCode, RuntimeFailure},
+    artifact::{ArtifactError, ArtifactMetadata, AuthorizedValue},
+    failure::{FailureBoundary, FailureCode, RuntimeFailure},
+    identity::ArtifactId,
     records::{RuntimeRecordError, SecurityLabels},
     store::{SqliteStore, StoreError},
     verify_executable_owned,
@@ -72,6 +74,11 @@ pub enum Authorization<'a> {
     InspectGraph {
         /// Exact requested graph identity.
         fingerprint: Digest,
+    },
+    /// Read an accepted value under its immutable protection/provenance.
+    ReadArtifact {
+        /// Verified accepted metadata, before loading value bytes.
+        metadata: &'a ArtifactMetadata,
     },
 }
 /// Trusted host policy. Implementations authenticate evidence and evaluate grants;
@@ -236,6 +243,32 @@ impl Runtime {
         self.cache(Arc::clone(&admitted))?;
         Ok(admitted)
     }
+    /// Authorizes accepted artifact metadata before loading its immutable bytes,
+    /// then checks raw content and original typed/provenance identities. A staged
+    /// blob without committed metadata is not readable through this API.
+    ///
+    /// # Errors
+    /// Returns missing/retained data, current policy denial or integrity failures.
+    pub async fn read_artifact(
+        &self,
+        context: &HostContext,
+        id: ArtifactId,
+    ) -> Result<AuthorizedValue, RuntimeError> {
+        let metadata = self.store.artifact_metadata(id).await?;
+        self.policy.authorize(
+            context,
+            Authorization::ReadArtifact {
+                metadata: &metadata,
+            },
+        )?;
+        metadata.to_value(&self.config.limits)?;
+        let bytes = self
+            .store
+            .artifact_bytes(metadata.storage_reference())
+            .await?;
+        let value = metadata.verify_value(&bytes, &self.config.limits)?;
+        Ok(AuthorizedValue { metadata, value })
+    }
     fn cache(&self, executable: Arc<VerifiedExecutable<'static>>) -> Result<(), RuntimeError> {
         if self.config.max_cached_executables == 0 {
             return Ok(());
@@ -306,6 +339,8 @@ pub enum RuntimeError {
     Failure(RuntimeFailure),
     /// Runtime record representation failed.
     Record(RuntimeRecordError),
+    /// Proposed or stored artifact failed value/metadata integrity checks.
+    Artifact(Box<ArtifactError>),
 }
 impl RuntimeError {
     pub(crate) fn failure(code: FailureCode) -> Self {
@@ -318,6 +353,7 @@ impl RuntimeError {
             Self::Storage(e) => e.code(),
             Self::Record(RuntimeRecordError::Integrity) => FailureCode::Digest,
             Self::Record(_) => FailureCode::Input,
+            Self::Artifact(error) => error.code(FailureBoundary::Input),
             Self::Verification(error) => match error.as_ref() {
                 ExecutableVerificationError::Envelope(
                     htlk_executable::EnvelopeError::FingerprintMismatch,
@@ -349,6 +385,7 @@ impl std::error::Error for RuntimeError {
             Self::Storage(e) => Some(e),
             Self::Failure(e) => Some(e),
             Self::Record(e) => Some(e),
+            Self::Artifact(e) => Some(e.as_ref()),
         }
     }
 }
@@ -375,5 +412,10 @@ impl From<RuntimeRecordError> for RuntimeError {
 impl From<cbor::Error> for RuntimeError {
     fn from(e: cbor::Error) -> Self {
         Self::Record(RuntimeRecordError::Codec(e))
+    }
+}
+impl From<ArtifactError> for RuntimeError {
+    fn from(error: ArtifactError) -> Self {
+        Self::Artifact(Box::new(error))
     }
 }

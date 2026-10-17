@@ -4,6 +4,7 @@
 use htlk_analyzer::*;
 use htlk_executable::*;
 
+pub mod artifact;
 mod checked_evaluate;
 mod evaluate;
 pub mod failure;

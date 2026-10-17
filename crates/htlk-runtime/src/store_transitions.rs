@@ -212,12 +212,14 @@ impl SqliteStore {
             if transition.expected_fingerprint.is_some_and(|fp|fp!=header.fingerprint) { return Err(StoreError::Conflict); }
             if transition.next_status.is_some_and(|status|!header.status.can_transition_to(status)) { return Err(StoreError::Terminal); }
             for (write,payload) in transition.writes.iter().zip(&writes) {
+                artifacts::check_artifact_write(&tx,&lease.run_id,write,&limits)?;
                 let old=tx.query_row("SELECT revision,final FROM records WHERE run_id=?1 AND family=?2 AND record_id=?3",params![lease.run_id.as_str(),write.key.family.as_str(),write.key.id],|r| Ok((r.get::<_,i64>(0)?,r.get::<_,bool>(1)?))).optional()?;
                 if old.is_some_and(|(_,final_record)|final_record) { return Err(StoreError::Terminal); }
                 if old.map(|(revision,_)|revision) != write.expected_revision { return Err(StoreError::Conflict); }
                 let revision=next_revision(write.expected_revision)?;
                 tx.execute("INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,family,record_id) DO UPDATE SET revision=excluded.revision,final=excluded.final,payload=excluded.payload",params![lease.run_id.as_str(),write.key.family.as_str(),write.key.id,revision,write.final_record,payload])?;
             }
+            artifacts::check_output_publication(&tx,&lease.run_id,&transition.writes,&limits)?;
             let sequence=header.sequence.checked_add(1).ok_or(StoreError::Invalid)?;
             let fingerprint=transition.root.as_ref().map_or(header.fingerprint,|r|r.fingerprint);
             let root=transition.root.as_ref().map_or(header.root_scope,|r|r.root_scope);

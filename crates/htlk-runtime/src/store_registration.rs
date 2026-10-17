@@ -58,13 +58,13 @@ impl SqliteStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{NativeRegistry, verify_executable_owned};
     use htlk_executable::{CanonicalDocument, ExecutableEnvelope, PolicyDocument};
     use std::sync::Arc;
 
-    fn executable() -> (VerifiedExecutable<'static>, Vec<u8>) {
+    pub(in crate::store) fn executable() -> (VerifiedExecutable<'static>, Vec<u8>) {
         let l = Limits::default();
         let fixture = include_str!("../tests/fixtures/native-empty.hex")
             .lines()

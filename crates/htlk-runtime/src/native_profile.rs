@@ -40,6 +40,9 @@ pub fn native_profile(
         include_bytes!("runtime.rs"),
         include_bytes!("store_registration.rs"),
         include_bytes!("store_registration.sql"),
+        include_bytes!("artifact.rs"),
+        include_bytes!("store_artifacts.rs"),
+        include_bytes!("store_artifacts.sql"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);

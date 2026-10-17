@@ -11,8 +11,9 @@ current `RuntimePolicy`, executable limits and a finite admitted-cache count.
 check-and-save operation. `Runtime::executable(context, fingerprint)` authorizes
 inspection and returns immutable admitted definitions and checked plans.
 
-These methods do not execute nodes or start runs. Run/artifact APIs are the next
-implementation slice.
+`read_artifact` additionally authorizes and verifies previously accepted value
+snapshots; see [artifact publication](runtime-artifacts.md). These methods do not
+execute nodes or start runs; atomic run creation is the next implementation slice.
 
 ## Configuration and authenticated context
 

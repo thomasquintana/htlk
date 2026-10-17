@@ -14,10 +14,14 @@ use htlk_executable::{
 use std::{fmt, path::Path, time::Duration};
 use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
+const ARTIFACT_SCHEMA: &str = include_str!("store_artifacts.sql");
+
+#[path = "store_artifacts.rs"]
+mod artifacts;
 
 #[path = "store_registration.rs"]
 mod registration;
@@ -106,10 +110,15 @@ impl SqliteStore {
                     }
                     tx.execute_batch(SCHEMA)?;
                     tx.execute_batch(REGISTRATION_SCHEMA)?;
+                    tx.execute_batch(ARTIFACT_SCHEMA)?;
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application == APPLICATION_ID && version == 1 {
                     tx.execute_batch(REGISTRATION_SCHEMA)?;
+                    tx.execute_batch(ARTIFACT_SCHEMA)?;
+                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                } else if application == APPLICATION_ID && version == 2 {
+                    tx.execute_batch(ARTIFACT_SCHEMA)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
                     return Err(StoreError::Schema);
@@ -566,7 +575,7 @@ mod tests {
     fn write(id: &str, revision: Option<i64>, final_record: bool, value: i64) -> RecordWrite {
         RecordWrite {
             key: RecordKey {
-                family: RecordFamily::Invocation,
+                family: RecordFamily::Observation,
                 id: id.into(),
             },
             expected_revision: revision,
@@ -1216,7 +1225,7 @@ mod tests {
             assert_eq!(header.root_scope,run.root_scope);
             assert_eq!(counts(&store).await,(1,1,1));
             let version=store.connection.call(|db|db.pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0))).await.unwrap();
-            assert_eq!(version,2);
+            assert_eq!(version,SCHEMA_VERSION);
             let rows=store.connection.call(|db|db.query_row("SELECT count(*) FROM graphs",[],|r|r.get::<_,i64>(0))).await.unwrap();
             assert_eq!(rows,0);
             store.close().await.unwrap();
