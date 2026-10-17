@@ -122,6 +122,7 @@ pub(crate) fn parse(
         });
     }
     Ok(Module {
+        tokens: p.tokens.len(),
         imports,
         declarations,
     })

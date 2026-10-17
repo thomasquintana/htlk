@@ -230,3 +230,153 @@ fn bounded_frontend_rejects_invalid_lexical_and_block_forms() {
         );
     }
 }
+
+#[test]
+fn supplied_modular_program_has_identical_executable_bytes() {
+    let (compiler, _) = compiler();
+    let l = Limits::default();
+    let catalogs = MCPCatalogInputs::from_json(
+        include_bytes!("../../../specs/examples/decision_brief.catalogs.json"),
+        &l,
+    )
+    .unwrap();
+    let bundle = SourceBundle::from_json(
+        include_bytes!("../../../specs/examples/modules/source_bundle.json"),
+        &l,
+    )
+    .unwrap();
+    for (pin, p) in &bundle.packages {
+        assert_eq!(*pin, p.digest(&l).unwrap());
+    }
+    let standalone = compiler
+        .compile_ir(
+            include_str!("../../../specs/examples/decision_brief.htlk"),
+            &catalogs,
+        )
+        .unwrap();
+    let modular = compiler.compile_ir(&bundle, &catalogs).unwrap();
+    assert_eq!(standalone.canonical_document, modular.canonical_document);
+    assert_eq!(standalone.executable_bytes, modular.executable_bytes);
+    assert!(
+        modular
+            .source_map
+            .iter()
+            .all(|e| matches!(e.span.source, SourceLocation::Module { .. }))
+    );
+    let module = ModuleRef {
+        package_digest: bundle.entry.package_digest,
+        module_path: "types".into(),
+    };
+    let report = compiler
+        .inspect_module(&bundle, &module, &["BriefOutcome".into()], &catalogs)
+        .unwrap();
+    assert_eq!(report.available_exports.len(), 1);
+    assert!(matches!(&report.exports[0],ExportSummary::Type{name,..} if name=="BriefOutcome"));
+}
+
+fn bundle_with_sources(sources: &[(&str, &str)]) -> SourceBundle {
+    let package = SourcePackage {
+        manifest: SourcePackageManifest {
+            package_name: "test.package".into(),
+            package_version: "0.1".into(),
+            modules: sources
+                .iter()
+                .map(|(m, _)| (m.to_string(), format!("src/{m}.htlk")))
+                .collect(),
+            dependencies: BTreeMap::new(),
+        },
+        sources: sources
+            .iter()
+            .map(|(m, s)| (format!("src/{m}.htlk"), s.to_string()))
+            .collect(),
+    };
+    let id = package.digest(&Limits::default()).unwrap();
+    SourceBundle {
+        entry: ModuleRef {
+            package_digest: id,
+            module_path: "main".into(),
+        },
+        packages: BTreeMap::from([(id, package)]),
+    }
+}
+
+#[test]
+fn module_validation_distinguishes_unvisited_bodies_from_snapshot_headers() {
+    let (compiler, _) = compiler();
+    let main = r#"ir_version="0.1" graph test.empty{inputs={} outputs={} nodes{} edges{}}"#;
+    let valid = bundle_with_sources(&[
+        ("main", main),
+        ("unused", "ir_version=\"0.1\" THIS IS NOT VALID SOURCE"),
+    ]);
+    compiler.compile_bundle(&valid, &catalogs()).unwrap();
+    let invalid = bundle_with_sources(&[
+        ("main", main),
+        ("unused", "ir_version=\"0.0\" THIS IS NOT VALID SOURCE"),
+    ]);
+    assert_eq!(
+        compiler
+            .compile_bundle(&invalid, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_VERSION"
+    );
+    let mut modified = valid;
+    modified
+        .packages
+        .values_mut()
+        .next()
+        .unwrap()
+        .sources
+        .get_mut("src/main.htlk")
+        .unwrap()
+        .push_str("-- changed pin");
+    assert_eq!(
+        compiler
+            .compile_bundle(&modified, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_PACKAGE_PIN"
+    );
+}
+
+#[test]
+fn imports_enforce_visibility_and_defining_module_resolution() {
+    let (compiler, _) = compiler();
+    let main = r#"ir_version="0.1" import lib from "self/library"
+      graph test.answer { inputs={} outputs={answer=string} nodes{ work=use(lib.public_task) } edges{edge answer{from=work.outputs.answer to=outputs.answer}} }"#;
+    let library = r#"ir_version="0.1" prompt hidden="hello"
+      export task public_task { inputs={} outputs={answer=string} nodes{ value=eval(string,render(&hidden,{})) } edges{edge answer{from=value.outputs.value to=outputs.answer}} }"#;
+    let bundle = bundle_with_sources(&[("main", main), ("library", library)]);
+    compiler.compile_bundle(&bundle, &catalogs()).unwrap();
+    let r = ModuleRef {
+        package_digest: bundle.entry.package_digest,
+        module_path: "library".into(),
+    };
+    assert!(
+        compiler
+            .inspect_module(&bundle, &r, &["hidden".into()], &catalogs())
+            .is_err()
+    );
+    let report = compiler
+        .inspect_module(&bundle, &r, &[], &catalogs())
+        .unwrap();
+    assert_eq!(report.available_exports.len(), 1);
+    assert!(report.exports.is_empty());
+    let cycle = bundle_with_sources(&[
+        ("main", main),
+        (
+            "library",
+            "ir_version=\"0.1\" import app from \"self/main\"",
+        ),
+    ]);
+    assert_eq!(
+        compiler
+            .compile_bundle(&cycle, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_IMPORT_CYCLE"
+    );
+}

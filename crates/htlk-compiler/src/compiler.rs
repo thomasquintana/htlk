@@ -79,7 +79,47 @@ pub struct CompilationSuccess {
 pub struct Compiler {
     pub(crate) config: CompilerConfig,
 }
+
+/// The three normative compilation input forms.
+pub enum CompilationInput<'a> {
+    /// One standalone source string.
+    SourceText(&'a str),
+    /// Finite package snapshots and selected entry.
+    SourceBundle(&'a crate::SourceBundle),
+    /// An untrusted normalized document to revalidate.
+    CanonicalDocument(CanonicalDocument),
+}
+impl<'a> From<&'a str> for CompilationInput<'a> {
+    fn from(v: &'a str) -> Self {
+        Self::SourceText(v)
+    }
+}
+impl<'a> From<&'a crate::SourceBundle> for CompilationInput<'a> {
+    fn from(v: &'a crate::SourceBundle) -> Self {
+        Self::SourceBundle(v)
+    }
+}
+impl From<CanonicalDocument> for CompilationInput<'_> {
+    fn from(v: CanonicalDocument) -> Self {
+        Self::CanonicalDocument(v)
+    }
+}
 impl Compiler {
+    /// Compiles source, a finite source bundle, or a canonical document.
+    ///
+    /// # Errors
+    /// Returns structured diagnostics; failure never contains a partial executable.
+    pub fn compile_ir<'a>(
+        &self,
+        input: impl Into<CompilationInput<'a>>,
+        catalogs: &MCPCatalogInputs,
+    ) -> Result<CompilationSuccess> {
+        match input.into() {
+            CompilationInput::SourceText(s) => self.compile_source(s, catalogs),
+            CompilationInput::SourceBundle(b) => self.compile_bundle(b, catalogs),
+            CompilationInput::CanonicalDocument(d) => self.compile_document(d, catalogs),
+        }
+    }
     /// Validates fixed compiler selections and resource ceilings.
     ///
     /// # Errors

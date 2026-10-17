@@ -100,6 +100,7 @@ pub(crate) struct Decl {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Module {
+    pub tokens: usize,
     pub imports: Vec<Located<(String, String)>>,
     pub declarations: Vec<Decl>,
 }

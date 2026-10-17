@@ -20,6 +20,28 @@ pub(crate) fn lex(
     max_tokens: usize,
     limits: &Limits,
 ) -> Result<Vec<Located<Token>>> {
+    lex_inner(source, location, max_tokens, limits, false)
+}
+pub(crate) fn check_header(source: &str, location: SourceLocation, limits: &Limits) -> Result<()> {
+    let tokens = lex_inner(source, location.clone(), 3, limits, true)?;
+    if matches!(tokens.as_slice(),[
+        Located{value:Token::Word(name),..},Located{value:Token::Symbol(eq),..},Located{value:Token::String(version),..}
+    ] if name=="ir_version" && eq=="=" && version=="0.1")
+    {
+        Ok(())
+    } else {
+        let mut e = at("source requires ir_version = \"0.1\"", location, 0, 0);
+        e.diagnostics[0].code = "C_VERSION".into();
+        Err(e)
+    }
+}
+fn lex_inner(
+    source: &str,
+    location: SourceLocation,
+    max_tokens: usize,
+    limits: &Limits,
+    header_only: bool,
+) -> Result<Vec<Located<Token>>> {
     let mut result = Vec::new();
     let mut p = 0;
     let b = source.as_bytes();
@@ -202,6 +224,9 @@ pub(crate) fn lex(
                 end_byte: p,
             },
         });
+        if header_only && result.len() == 3 {
+            break;
+        }
     }
     Ok(result)
 }

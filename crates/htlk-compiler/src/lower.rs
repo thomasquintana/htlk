@@ -97,6 +97,7 @@ pub(crate) struct Session<'a> {
     pub pool: DocumentFields,
     pub source_map: Vec<SourceMapEntry>,
     pub documentation: BTreeMap<String, String>,
+    pub diagnostics: Vec<crate::Diagnostic>,
     work: usize,
     depth: usize,
 }
@@ -160,6 +161,7 @@ impl<'a> Session<'a> {
             pool,
             source_map: vec![],
             documentation: BTreeMap::new(),
+            diagnostics: Vec::new(),
             work: 0,
             depth: 0,
         })
@@ -222,7 +224,7 @@ impl<'a> Session<'a> {
                         let doc = self.document("compiler.validation", id)?;
                         self.compiler
                             .compile_document(doc, self.catalogs)
-                            .map(|_| ())
+                            .map(|out| self.diagnostics.extend(out.diagnostics))
                     }
                 };
                 result.map_err(|e| self.source_error(located(e, &d.span)))?;
@@ -1088,7 +1090,7 @@ impl<'a> Session<'a> {
         }
         e
     }
-    fn source_location(&self, l: &DiagnosticLocation) -> DiagnosticLocation {
+    pub(crate) fn source_location(&self, l: &DiagnosticLocation) -> DiagnosticLocation {
         if let DiagnosticLocation::CanonicalRecordPath(p) = l
             && let Some(entry) = self
                 .source_map
