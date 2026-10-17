@@ -116,6 +116,14 @@ pub enum Authorization<'a> {
     },
     /// Resolve an authenticated typed input wait.
     SubmitReply {
+        /// Trusted reply authority frozen at request creation.
+        authority: &'a str,
+        /// Frozen host policy version; current grants are still checked.
+        policy_version: &'a str,
+        /// Principal on whose behalf the question was opened.
+        requesting_principal: &'a str,
+        /// Source routing label, never itself an authority grant.
+        topic: &'a str,
         /// Run containing this request.
         run_id: &'a crate::identity::RunId,
         /// Exact wait identity.
@@ -157,6 +165,12 @@ pub enum Authorization<'a> {
     },
     /// Resolve an exact-action approval using actual authenticated approver grants.
     Approve {
+        /// Requested trusted authority, not ordinary approval-like graph data.
+        authority: &'a str,
+        /// Principal whose exact action is being approved.
+        requesting_principal: &'a str,
+        /// Request and previously accepted disposition protection.
+        labels: &'a SecurityLabels,
         /// Target run.
         run_id: &'a crate::identity::RunId,
         /// Immutable generation.
@@ -169,6 +183,50 @@ pub enum Authorization<'a> {
 /// ordinary graph data cannot implement or replace this policy. Registration trust
 /// never permits invalid bytes to bypass complete independent verification.
 pub trait RuntimePolicy: Send + Sync {
+    /// Selects trusted reply authority for an admitted request. A topic or an
+    /// approval-like data field cannot select its own grants.
+    ///
+    /// # Errors
+    /// Returns a redacted routing/authorization failure before a wait opens.
+    fn wait_policy(
+        &self,
+        _context: &HostContext,
+        _fingerprint: Digest,
+        _node: Digest,
+        _topic: &str,
+        _request: &Value,
+    ) -> Result<crate::execution::WaitPolicy, RuntimeFailure> {
+        Ok(crate::execution::WaitPolicy::default())
+    }
+    /// Classifies an authenticated external input reply. The runtime persists these
+    /// labels and carries them through control influence and accepted outputs.
+    ///
+    /// # Errors
+    /// Returns a redacted trusted classification/policy failure.
+    fn reply_labels(
+        &self,
+        _context: &HostContext,
+        _run: &crate::identity::RunId,
+        _wait: crate::identity::WaitId,
+        _value: &Value,
+    ) -> Result<SecurityLabels, RuntimeFailure> {
+        Ok(SecurityLabels::default())
+    }
+    /// Classifies an authenticated exact-action disposition without turning its
+    /// decision into graph data or granting authority through ordinary fields.
+    ///
+    /// # Errors
+    /// Returns a redacted trusted classification/policy failure.
+    fn approval_labels(
+        &self,
+        _context: &HostContext,
+        _run: &crate::identity::RunId,
+        _wait: crate::identity::WaitId,
+        _request: &Value,
+        _allow: bool,
+    ) -> Result<SecurityLabels, RuntimeFailure> {
+        Ok(SecurityLabels::default())
+    }
     /// Authorizes an authenticated principal's exact action. Registration must also
     /// enforce any required detached-signature/producer policy here.
     ///

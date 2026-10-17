@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add host-selected versioned input-wait reply authority, frozen requester metadata
+  and current authenticated grant checks independent of source routing topics.
 - Add exact-origin startup recovery, immutable checkpoint/value/protection checks,
   producer-index reconstruction, saved MCP-response and loop/wait resumption, and
   explicit missing-implementation, corruption and no-progress failures.
@@ -100,6 +102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop descendants atomically on calculation-path deadlines, close expired approval
+  requests with their denial classification, and preserve live coordination after
+  stale terminal-child results so fallback execution can continue immediately.
+- Persist trusted reply/approval disposition classification atomically with control
+  protection, carry it through proposed outputs and history, and expose exact
+  requested authority/principal to current approver authorization.
 - Persist and replay terminal cancellation no-op receipts without requiring an
   execution owner, preserving committed outcomes and idempotency-key conflicts.
 - Update the locked rustls dependency to 0.23.46 to resolve

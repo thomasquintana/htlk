@@ -11,6 +11,8 @@ use htlk_executable::{CanonicalDocument, cbor::Value, digest::Digest};
 /// Host-visible typed input/approval request; evidence bytes require separate access.
 #[derive(Clone, Debug)]
 pub struct WaitView {
+    /// Trusted input-reply routing policy frozen when the request opened.
+    pub authorization_policy: Option<Value>,
     /// Exact approval request identity, if this is an approval wait.
     pub request_digest: Option<Digest>,
     /// Protected exact-action request metadata, after authorization.
@@ -150,6 +152,7 @@ impl Runtime {
                 },
             )?;
             waits.push(WaitView {
+                authorization_policy: map(&wait.payload)?.get("authorization_policy").cloned(),
                 request_digest: map(&wait.payload)?.get("request_digest").and_then(|v| {
                     if let Value::Text(s) = v {
                         s.parse().ok()

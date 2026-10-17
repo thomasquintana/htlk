@@ -6,11 +6,28 @@ holding a calculation worker, recording topic, request artifact, response type,
 expiry, invocation and protection. Requests are addressed by wait ID, never by a
 source-authored global correlation string.
 
+`RuntimePolicy::wait_policy` chooses a trusted authority namespace and version for
+the admitted question. The wait freezes that policy and the actual requesting
+principal. Current reply authorization receives these facts separately from the
+source topic. `WaitView::authorization_policy` lets an authorized host route the
+request; a source-authored topic or ordinary approval-like field grants no rights.
+
 `Runtime::submit_reply` authenticates through HostContext, checks purpose and current
 policy, and routes changes to the local fenced owner. Type validation and current
 coordinator deadline checks precede one atomic wait/reply/host-receipt commit.
 The node then applies its ordinary postcondition and output publication. Reply
 acceptance is distinct from graph-node success and grants no policy authority.
+
+`RuntimePolicy::reply_labels` classifies authenticated response data. Its trusted
+labels are saved with the accepted reply and atomically unioned into the invocation's
+control protection before any postcondition or output acceptance. Copies and later
+boundaries retain them; historical receipt retries cannot reclassify old data.
+`approval_labels` similarly protects authenticated dispositions without publishing
+an approval Boolean. Approver authorization receives the exact authority, requesting
+principal, request digest and sensitivity labels, and is rechecked by the owner.
+Unrenewed approval expiry records an expired request and `E_APPROVAL_DENIED` at
+the waiting node. Historical accepted dispositions remain available without a live
+worker; new late replies and dispositions report their explicit expiry classification.
 
 Identical accepted replies return historical receipts after expiry/terminal outcome,
 including after worker shutdown. Conflicting request content under the same key

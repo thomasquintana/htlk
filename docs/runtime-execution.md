@@ -49,6 +49,12 @@ their enclosing outcome. Shutdown stops local actors while preserving durable st
 takeover advances fencing after leases expire. Notification delivery is a hint;
 authoritative records drive progress.
 
+The calculation path and asynchronous deadline controller use the same recursive
+stop transaction. A stale result conflicting with a terminal child causes a fresh
+reducer pass under the existing owner; it does not abandon a live run or delay a
+valid fallback until ownership expiry. Approval-wait expiry uses its distinct
+denial classification and closes the outstanding request atomically.
+
 Execution also integrates [durable waits and host control](runtime-waits.md) and
 [MCP dispatch, reservations and exact-action approvals](runtime-mcp.md). The roadmap
 tracks remaining recovery, extension, retention and full conformance work.

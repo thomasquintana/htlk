@@ -191,14 +191,7 @@ impl Runtime {
         if string(&wait.payload, "purpose")? != "approval" {
             return Err(RuntimeError::failure(FailureCode::Policy));
         }
-        self.policy.authorize(
-            context,
-            Authorization::Approve {
-                run_id: &run,
-                wait_id,
-                request_digest,
-            },
-        )?;
+        authorize_approval(self, context, &run, &wait, wait_id, request_digest)?;
         if string(&wait.payload, "request_digest")? != request_digest.to_string() {
             return Err(RuntimeError::failure(FailureCode::Policy));
         }
@@ -236,6 +229,23 @@ impl Runtime {
                 disposition: string(&response, "disposition")?,
             });
         }
+        let state = string(&wait.payload, "state")?;
+        if state == "accepted" {
+            let decision = if allow { "allow" } else { "deny" };
+            if string(&wait.payload, "decision")? != decision {
+                return Err(RuntimeError::failure(FailureCode::IdempotencyConflict));
+            }
+            return Ok(ReplyReceipt {
+                wait_id,
+                disposition: decision.into(),
+            });
+        }
+        if state != "open"
+            || self.store.coordinator_time(self.clock.now_ms()?).await?
+                >= number(&wait.payload, "expires_at")?
+        {
+            return Err(RuntimeError::failure(FailureCode::ApprovalDenied));
+        }
         let response = route(self, command).await?;
         Ok(ReplyReceipt {
             wait_id,
@@ -261,15 +271,7 @@ impl Runtime {
         if string(&wait.payload, "purpose")? != "input" {
             return Err(RuntimeError::failure(FailureCode::Policy));
         }
-        let protection = labels(&wait.payload, &self.config.limits)?;
-        self.policy.authorize(
-            context,
-            Authorization::SubmitReply {
-                run_id: &run,
-                wait_id,
-                labels: &protection,
-            },
-        )?;
+        authorize_reply(self, context, &run, &wait, wait_id).await?;
         if idempotency_key.is_empty() {
             return Err(RuntimeError::failure(FailureCode::Input));
         }
@@ -320,7 +322,18 @@ impl Runtime {
             });
         }
         if record_terminal_wait(&wait.payload)? {
-            return Err(RuntimeError::failure(FailureCode::Cancelled));
+            return Err(RuntimeError::failure(
+                if string(&wait.payload, "state")? == "expired" {
+                    FailureCode::WaitExpired
+                } else {
+                    FailureCode::Cancelled
+                },
+            ));
+        }
+        if self.store.coordinator_time(self.clock.now_ms()?).await?
+            >= number(&wait.payload, "expires_at")?
+        {
+            return Err(RuntimeError::failure(FailureCode::WaitExpired));
         }
         let response = route(self, command).await?;
         Ok(ReplyReceipt {
@@ -407,6 +420,14 @@ async fn apply(
                 .store
                 .record(lease.run_id(), &key(RecordFamily::Wait, id))
                 .await?;
+            authorize_approval(
+                &runtime,
+                &command.context,
+                lease.run_id(),
+                &wait,
+                *id,
+                *request,
+            )?;
             if string(&wait.payload, "purpose")? != "approval"
                 || string(&wait.payload, "request_digest")? != request.to_string()
             {
@@ -442,12 +463,31 @@ async fn apply(
             if wait.final_record || now >= number(&wait.payload, "expires_at")? {
                 return Err(RuntimeError::failure(FailureCode::ApprovalDenied));
             }
+            let disposition_labels = runtime.policy.approval_labels(
+                &command.context,
+                lease.run_id(),
+                *id,
+                field(&wait.payload, "approval_request")?,
+                *allow,
+            )?;
+            let protection = labels(&wait.payload, &runtime.config.limits)?
+                .union(&disposition_labels, &runtime.config.limits)?;
+            let influence = labels(&invocation.payload, &runtime.config.limits)?
+                .union(&protection, &runtime.config.limits)?;
             let payload = replace(
                 &wait.payload,
                 [
                     ("state", Value::Text("accepted".into())),
                     ("decision", Value::Text(decision.into())),
                     ("approver", Value::Text(command.context.principal().into())),
+                    (
+                        "influence_labels",
+                        protection.to_value(&runtime.config.limits)?,
+                    ),
+                    (
+                        "disposition_labels",
+                        disposition_labels.to_value(&runtime.config.limits)?,
+                    ),
                 ],
             )?;
             step::commit(
@@ -456,6 +496,20 @@ async fn apply(
                 format!("approval-disposition:{id}"),
                 vec![
                     update(&wait, payload, true),
+                    update(
+                        &invocation,
+                        replace(
+                            &invocation.payload,
+                            [
+                                (
+                                    "influence_labels",
+                                    influence.to_value(&runtime.config.limits)?,
+                                ),
+                                ("reason", Value::Text("approval_resolved".into())),
+                            ],
+                        )?,
+                        false,
+                    ),
                     receipt(&runtime, &command, response.clone())?,
                 ],
                 None,
@@ -502,9 +556,6 @@ pub(super) async fn reply_writes(
     id: WaitId,
     value: &Value,
 ) -> Result<(Value, Vec<RecordWrite>), RuntimeError> {
-    if let Some(response) = recorded(runtime, command).await? {
-        return Ok((response, vec![]));
-    }
     let record = runtime
         .store
         .record(lease.run_id(), &key(RecordFamily::Wait, id))
@@ -512,14 +563,10 @@ pub(super) async fn reply_writes(
     if string(&record.payload, "purpose")? != "input" {
         return Err(RuntimeError::failure(FailureCode::Policy));
     }
-    runtime.policy.authorize(
-        &command.context,
-        Authorization::SubmitReply {
-            run_id: lease.run_id(),
-            wait_id: id,
-            labels: &labels(&record.payload, &runtime.config.limits)?,
-        },
-    )?;
+    authorize_reply(runtime, &command.context, lease.run_id(), &record, id).await?;
+    if let Some(response) = recorded(runtime, command).await? {
+        return Ok((response, vec![]));
+    }
     let encoded = cbor::encode(value, &runtime.config.limits)?;
     let digest = crate::identity::ValueDigest::new(
         &ValueType::from_value(
@@ -541,7 +588,13 @@ pub(super) async fn reply_writes(
     }
     let header = runtime.store.run_header(lease.run_id()).await?;
     if header.status.is_terminal() || record.final_record {
-        return Err(RuntimeError::failure(FailureCode::Cancelled));
+        return Err(RuntimeError::failure(
+            if string(&record.payload, "state")? == "expired" {
+                FailureCode::WaitExpired
+            } else {
+                FailureCode::Cancelled
+            },
+        ));
     }
     let scope = runtime
         .store
@@ -575,12 +628,40 @@ pub(super) async fn reply_writes(
     if now >= number(&record.payload, "expires_at")? {
         return Err(RuntimeError::failure(FailureCode::WaitExpired));
     }
+    let reply_labels = runtime
+        .policy
+        .reply_labels(&command.context, lease.run_id(), id, value)?;
+    let protection = labels(&record.payload, &runtime.config.limits)?
+        .union(&reply_labels, &runtime.config.limits)?;
+    let invocation = runtime
+        .store
+        .record(
+            lease.run_id(),
+            &key(
+                RecordFamily::Invocation,
+                string(&record.payload, "invocation_id")?,
+            ),
+        )
+        .await?;
+    if invocation.final_record {
+        return Err(RuntimeError::failure(FailureCode::Cancelled));
+    }
+    let influence = labels(&invocation.payload, &runtime.config.limits)?
+        .union(&protection, &runtime.config.limits)?;
     let payload = replace(
         &record.payload,
         [
             ("state", Value::Text("accepted".into())),
             ("accepted_reply_digest", Value::Text(digest.to_string())),
             ("reply_value", Value::Bytes(encoded)),
+            (
+                "influence_labels",
+                protection.to_value(&runtime.config.limits)?,
+            ),
+            (
+                "reply_labels",
+                reply_labels.to_value(&runtime.config.limits)?,
+            ),
             (
                 "reply_principal",
                 Value::Text(command.context.principal().into()),
@@ -591,9 +672,97 @@ pub(super) async fn reply_writes(
         response.clone(),
         vec![
             update(&record, payload, true),
+            update(
+                &invocation,
+                replace(
+                    &invocation.payload,
+                    [
+                        (
+                            "influence_labels",
+                            influence.to_value(&runtime.config.limits)?,
+                        ),
+                        ("reason", Value::Text("reply_received".into())),
+                    ],
+                )?,
+                false,
+            ),
             receipt(runtime, command, response)?,
         ],
     ))
+}
+fn authorize_approval(
+    runtime: &Runtime,
+    context: &HostContext,
+    run: &RunId,
+    wait: &crate::store::StoredRecord,
+    id: WaitId,
+    digest: Digest,
+) -> Result<(), RuntimeError> {
+    let request = field(&wait.payload, "approval_request")?;
+    let authority = string(request, "authority")?;
+    let principal = string(request, "principal")?;
+    let protection = labels(&wait.payload, &runtime.config.limits)?;
+    runtime.policy.authorize(
+        context,
+        Authorization::Approve {
+            run_id: run,
+            wait_id: id,
+            request_digest: digest,
+            authority: &authority,
+            requesting_principal: &principal,
+            labels: &protection,
+        },
+    )?;
+    Ok(())
+}
+async fn authorize_reply(
+    runtime: &Runtime,
+    context: &HostContext,
+    run: &RunId,
+    wait: &crate::store::StoredRecord,
+    id: WaitId,
+) -> Result<(), RuntimeError> {
+    let (authority, version, requester) =
+        if let Some(policy) = map(&wait.payload)?.get("authorization_policy") {
+            (
+                string(policy, "authority")?,
+                string(policy, "version")?,
+                string(policy, "requester")?,
+            )
+        } else {
+            // Earlier immutable receipts remain inspectable without their old native
+            // implementation. Current host policy may explicitly reject legacy routing.
+            let scope = runtime
+                .store
+                .record(
+                    run,
+                    &key(
+                        RecordFamily::Scope,
+                        string(&wait.payload, "scope_instance_id")?,
+                    ),
+                )
+                .await?;
+            (
+                "host".into(),
+                "legacy".into(),
+                string(&scope.payload, "principal")?,
+            )
+        };
+    let topic = string(&wait.payload, "topic")?;
+    let protection = labels(&wait.payload, &runtime.config.limits)?;
+    runtime.policy.authorize(
+        context,
+        Authorization::SubmitReply {
+            run_id: run,
+            wait_id: id,
+            authority: &authority,
+            policy_version: &version,
+            requesting_principal: &requester,
+            topic: &topic,
+            labels: &protection,
+        },
+    )?;
+    Ok(())
 }
 fn digest_value(value: &Value) -> Result<Digest, RuntimeError> {
     digest(value, "origin_executable")

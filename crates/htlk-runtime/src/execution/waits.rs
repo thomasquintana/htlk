@@ -14,6 +14,23 @@ use htlk_executable::{
     cbor::{self, Value},
 };
 use std::sync::Arc;
+/// Trusted routing policy frozen when an input wait opens. Source topics never
+/// grant authority; current submitter grants are checked against this host result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WaitPolicy {
+    /// Host authority namespace required for replies.
+    pub authority: String,
+    /// Trusted policy version captured with the immutable request.
+    pub version: String,
+}
+impl Default for WaitPolicy {
+    fn default() -> Self {
+        Self {
+            authority: "host".into(),
+            version: "0.1".into(),
+        }
+    }
+}
 pub(super) async fn operate(
     runtime: &Arc<Runtime>,
     lease: &RunLease,
@@ -47,6 +64,17 @@ pub(super) async fn operate(
                     .ok_or_else(err)?,
             )?
             .ok_or_else(err)?;
+            let value = runtime.read_artifact(&scope.context, request).await?;
+            let policy = runtime.policy.wait_policy(
+                &scope.context,
+                scope.executable.fingerprint(),
+                node.digest(&runtime.config.limits).map_err(|_| err())?,
+                topic,
+                &value.value,
+            )?;
+            if policy.authority.is_empty() || policy.version.is_empty() {
+                return Err(RuntimeError::failure(FailureCode::Policy));
+            }
             let payload = object([
                 ("record_version", Value::Text("0.1".into())),
                 ("run_id", Value::Text(lease.run_id().to_string())),
@@ -56,6 +84,14 @@ pub(super) async fn operate(
                 ("generation", Value::Integer(0)),
                 ("topic", Value::Text(topic.clone())),
                 ("request_artifact_id", Value::Text(request.to_string())),
+                (
+                    "authorization_policy",
+                    object([
+                        ("authority", Value::Text(policy.authority)),
+                        ("version", Value::Text(policy.version)),
+                        ("requester", Value::Text(scope.context.principal().into())),
+                    ])?,
+                ),
                 (
                     "response_type",
                     node.fields()
@@ -155,7 +191,10 @@ pub(super) async fn operate(
                 record,
                 OutputProposal {
                     values: &proposed,
-                    influence: labels(&record.payload, &runtime.config.limits)?,
+                    influence: labels(&record.payload, &runtime.config.limits)?.union(
+                        &labels(&wait.payload, &runtime.config.limits)?,
+                        &runtime.config.limits,
+                    )?,
                     parents: vec![],
                 },
             )

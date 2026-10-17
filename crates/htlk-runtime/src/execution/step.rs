@@ -184,12 +184,15 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
                 continue;
             }
             if due(&record.payload, now)? {
-                finish_failure(
+                let code = super::control::node_timeout_code(&runtime, &lease, record).await?;
+                super::control::stop(
                     &runtime,
                     &lease,
-                    record,
-                    FailureCode::Timeout,
-                    labels(&record.payload, &runtime.config.limits)?,
+                    None,
+                    Some(&record.key.id),
+                    code,
+                    false,
+                    vec![],
                 )
                 .await?;
                 return Ok(Progress::Changed);
@@ -914,7 +917,23 @@ async fn operate(
         Operation::Scope(_) | Operation::Loop { .. } => {
             super::composite::operate(runtime, lease, scope, node, record).await
         }
-        Operation::Wait { .. } => super::waits::operate(runtime, lease, scope, node, record).await,
+        Operation::Wait { .. } => {
+            match super::waits::operate(runtime, lease, scope, node, record).await {
+                Ok(changed) => Ok(changed),
+                Err(error @ RuntimeError::Storage(_)) => Err(error),
+                Err(error) => {
+                    finish_failure(
+                        runtime,
+                        lease,
+                        record,
+                        error.code(),
+                        labels(&record.payload, &runtime.config.limits)?,
+                    )
+                    .await?;
+                    Ok(true)
+                }
+            }
+        }
         Operation::Mcp { .. } => {
             match super::mcp::operate(runtime, lease, scope, node, record).await {
                 Ok(changed) => Ok(changed),

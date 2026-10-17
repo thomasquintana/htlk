@@ -421,6 +421,51 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
             .map_err(|_| corrupt())?;
         let node = invocations.get(&invocation).ok_or_else(corrupt)?;
         let generation = number(&wait.payload, "generation")?;
+        let scope: ScopeInstanceId = string(&node.payload, "scope_instance_id")?
+            .parse()
+            .map_err(|_| corrupt())?;
+        let (executable, definition) = definitions.get(&scope).ok_or_else(corrupt)?;
+        let local = string(&node.payload, "local_id")?;
+        let definition = executable.document().fields().scopes[definition]
+            .fields()
+            .nodes
+            .iter()
+            .find(|n| n.id().as_str() == local)
+            .ok_or_else(corrupt)?;
+        match string(&wait.payload, "purpose")?.as_str() {
+            "input" => {
+                let Operation::Wait { topic, .. } = &definition.fields().operation else {
+                    return Err(corrupt());
+                };
+                let ty = htlk_executable::ValueType::from_value(
+                    field(&wait.payload, "response_type")?,
+                    htlk_executable::TypeContext::Value,
+                    &runtime.config.limits,
+                )
+                .map_err(|_| corrupt())?;
+                let policy = field(&wait.payload, "authorization_policy")?;
+                let owner = scopes
+                    .iter()
+                    .find(|s| s.key.id == scope.to_string())
+                    .ok_or_else(corrupt)?;
+                if string(&wait.payload, "topic")? != *topic
+                    || definition
+                        .fields()
+                        .outputs
+                        .get("value")
+                        .ok_or_else(corrupt)?
+                        .value_type()
+                        != &ty
+                    || string(policy, "authority")?.is_empty()
+                    || string(policy, "version")?.is_empty()
+                    || field(policy, "requester")? != field(&owner.payload, "principal")?
+                {
+                    return Err(corrupt());
+                }
+            }
+            "approval" if matches!(definition.fields().operation, Operation::Mcp { .. }) => {}
+            _ => return Err(corrupt()),
+        }
         let expected = match string(&wait.payload, "purpose")?.as_str() {
             "input" if generation == 0 => WaitId::input(invocation, &runtime.config.limits),
             "approval" => WaitId::approval(

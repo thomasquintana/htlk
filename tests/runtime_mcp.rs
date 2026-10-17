@@ -279,6 +279,15 @@ impl RuntimePolicy for Policy {
                 htlk::runtime::failure::FailureCode::Policy,
             ));
         }
+        if let Authorization::Approve {
+            authority,
+            requesting_principal,
+            ..
+        } = action
+        {
+            assert_eq!(authority, "exact-tool");
+            assert_eq!(requesting_principal, "alice");
+        }
         Ok(())
     }
     fn input_labels(
@@ -301,6 +310,16 @@ impl RuntimePolicy for Policy {
             policy_version: self.version.load(Ordering::SeqCst).to_string(),
             ..Default::default()
         })
+    }
+    fn approval_labels(
+        &self,
+        _: &HostContext,
+        _: &htlk::runtime::identity::RunId,
+        _: htlk::runtime::identity::WaitId,
+        _: &Value,
+        _: bool,
+    ) -> Result<SecurityLabels, RuntimeFailure> {
+        Ok(SecurityLabels::new(vec!["approval-secret".into()], &Limits::default()).unwrap())
     }
 }
 struct Clock;
@@ -446,6 +465,26 @@ fn approval_generations_are_authenticated_and_old_allow_cannot_authorize_new_req
             RunStatus::Succeeded
         );
         assert_eq!(script.calls.load(Ordering::SeqCst), 1);
+        let view = runtime.inspect_run(&caller, &run.run_id).await.unwrap();
+        let Some(Value::Map(outputs)) = view.outputs else {
+            panic!()
+        };
+        let Some(Value::Map(output)) = outputs.get("value") else {
+            panic!()
+        };
+        let Some(Value::Text(id)) = output.get("artifact_id") else {
+            panic!()
+        };
+        assert!(
+            runtime
+                .read_artifact(&caller, id.parse().unwrap())
+                .await
+                .unwrap()
+                .metadata
+                .security_labels()
+                .as_slice()
+                .contains(&"approval-secret".into())
+        );
         let denied = runtime
             .start_run(
                 &caller,
@@ -514,6 +553,18 @@ async fn pending_approval(
         actix::clock::sleep(Duration::from_millis(2)).await;
     }
     panic!("approval did not open")
+}
+#[test]
+fn unrenewed_approval_expiry_closes_the_request_and_fails_without_dispatch() {
+    actix::System::new().block_on(async {
+        let (compiler,registry)=native_compiler();let graph=compiler.compile_source(r#"ir_version="0.1" graph test.approval_expiry{inputs={}outputs={value=json}nodes{args=eval(json,{query="question"}) lookup=call(mcp.tool("research","lookup")){limits{timeout_ms=50}}}edges{edge args{from=args.outputs.value to=lookup.inputs.arguments}edge value{from=lookup.outputs.value to=outputs.value}}}"#,&catalogs()).unwrap();
+        let script=Arc::new(Script{descriptors:graph.canonical_document.fields().bindings.values().map(|b|(b.descriptor(),graph.canonical_document.fields().documents[&b.descriptor()].clone())).collect(),calls:AtomicUsize::new(0),reviews:AtomicUsize::new(0),accept_at:1,pause_discovery:AtomicBool::new(false),waiting_discovery:AtomicBool::new(false)});
+        let clock=Arc::new(MovingClock(AtomicI64::new(1000)));let store=SqliteStore::in_memory(StoreConfig::default()).await.unwrap();let runtime=Arc::new(Runtime::new(store.clone(),Arc::new(registry),Arc::new(Policy{approval:true,version:AtomicUsize::new(1)}),RuntimeConfig::default()).unwrap().with_clock(clock.clone()).with_mcp(script.clone()));let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();let approver=HostContext::new("approver".into(),&Limits::default()).unwrap();runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{poll_interval:Duration::from_millis(1),..Default::default()}).unwrap();let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::new(),"start",None).await.unwrap();
+        let request=pending_approval(&runtime,&caller,&run.run_id,None).await;clock.0.store(1050,Ordering::SeqCst);let view=terminal(&runtime,&caller,&run.run_id).await;assert_eq!(view.header.status,RunStatus::Failed);assert_eq!(script.calls.load(Ordering::SeqCst),0);
+        let node=runtime.inspect_node(&caller,&run.run_id,htlk::runtime::identity::InvocationId::new(view.header.root_scope,&"lookup".parse().unwrap(),&Limits::default()).unwrap()).await.unwrap();assert_eq!(node.failure.unwrap().code(),htlk::runtime::failure::FailureCode::ApprovalDenied);
+        let wait=store.record(&run.run_id,&htlk::runtime::store::RecordKey{family:htlk::runtime::store::RecordFamily::Wait,id:request.wait_id.to_string()}).await.unwrap();assert!(wait.final_record);assert!(matches!(wait.payload,Value::Map(m) if m.get("state")==Some(&Value::Text("expired".into()))));
+        assert_eq!(runtime.submit_approval(&approver,request.wait_id,request.request_digest.unwrap(),true,"late").await.unwrap_err().code(),htlk::runtime::failure::FailureCode::ApprovalDenied);engine.shutdown().await.unwrap();
+    })
 }
 impl CoordinatorClock for Clock {
     fn now_ms(&self) -> Result<i64, RuntimeFailure> {

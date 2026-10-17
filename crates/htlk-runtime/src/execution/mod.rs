@@ -11,6 +11,7 @@ mod recovery;
 pub use inspection::{GraphView, NodeView, RunView, WaitView};
 mod waits;
 pub use host::{CancelReceipt, ReplyReceipt};
+pub use waits::WaitPolicy;
 mod frame;
 mod model;
 mod step;
@@ -344,10 +345,10 @@ impl Handler<Pulse> for Coordinator {
                         }
                         Ok(Ok(step::Progress::Blocked)) => {}
                         Ok(Ok(step::Progress::Terminal)) => ctx.stop(),
+                        Ok(Err(RuntimeError::Storage(StoreError::Fenced))) => ctx.stop(),
                         Ok(Err(RuntimeError::Storage(
-                            StoreError::Fenced | StoreError::Terminal,
-                        ))) => ctx.stop(),
-                        Ok(Err(RuntimeError::Storage(StoreError::Conflict))) => ctx.notify(Pulse),
+                            StoreError::Conflict | StoreError::Terminal,
+                        ))) => ctx.notify(Pulse),
                         _ => ctx.stop(),
                     }
                 }),

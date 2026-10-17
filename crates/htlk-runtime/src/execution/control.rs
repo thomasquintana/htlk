@@ -75,12 +75,13 @@ pub(super) async fn enforce(runtime: Arc<Runtime>, lease: RunLease) -> Result<()
     }
     for node in all(&runtime, &lease, RecordFamily::Invocation).await? {
         if !node.final_record && due(&node.payload, now)? {
+            let code = node_timeout_code(&runtime, &lease, &node).await?;
             return stop(
                 &runtime,
                 &lease,
                 None,
                 Some(&node.key.id),
-                FailureCode::Timeout,
+                code,
                 false,
                 vec![],
             )
@@ -88,6 +89,28 @@ pub(super) async fn enforce(runtime: Arc<Runtime>, lease: RunLease) -> Result<()
         }
     }
     Ok(())
+}
+pub(super) async fn node_timeout_code(
+    runtime: &Runtime,
+    lease: &RunLease,
+    node: &StoredRecord,
+) -> Result<FailureCode, RuntimeError> {
+    if let Some(Value::Text(id)) = map(&node.payload)?.get("approval_wait") {
+        let wait = runtime
+            .store
+            .record(lease.run_id(), &key(RecordFamily::Wait, id))
+            .await?;
+        let state = string(&wait.payload, "state")?;
+        let waiting = string(&node.payload, "reason")
+            .is_ok_and(|r| matches!(r.as_str(), "awaiting_approval" | "approval_resolved"));
+        if waiting
+            && (state == "open"
+                || (state == "accepted" && string(&wait.payload, "decision")? == "deny"))
+        {
+            return Ok(FailureCode::ApprovalDenied);
+        }
+    }
+    Ok(FailureCode::Timeout)
 }
 fn due(value: &Value, now: i64) -> Result<bool, RuntimeError> {
     Ok(matches!(map(value)?.get("deadline_ms"),Some(Value::Integer(n))if now>=*n))
@@ -229,7 +252,22 @@ pub(super) async fn stop(
         {
             writes.push(update(
                 &wait,
-                replace(&wait.payload, [("state", Value::Text("cancelled".into()))])?,
+                replace(
+                    &wait.payload,
+                    [(
+                        "state",
+                        Value::Text(
+                            if code == FailureCode::ApprovalDenied
+                                && string(&wait.payload, "purpose")? == "approval"
+                            {
+                                "expired"
+                            } else {
+                                "cancelled"
+                            }
+                            .into(),
+                        ),
+                    )],
+                )?,
                 true,
             ));
         }

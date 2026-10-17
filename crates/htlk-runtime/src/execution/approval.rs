@@ -66,12 +66,28 @@ pub(super) async fn gate(
                 .coordinator_time(runtime.clock.now_ms()?)
                 .await?;
             if now >= number(&old.payload, "expires_at")? {
-                step::finish_failure(
+                let writes = if old.final_record {
+                    vec![]
+                } else {
+                    vec![update(
+                        &old,
+                        replace(&old.payload, [("state", Value::Text("expired".into()))])?,
+                        true,
+                    )]
+                };
+                step::finish_node(
                     runtime,
                     lease,
                     record,
-                    FailureCode::ApprovalDenied,
-                    labels(&record.payload, &runtime.config.limits)?,
+                    "failed",
+                    Some(crate::failure::RuntimeFailure::new(
+                        FailureCode::ApprovalDenied,
+                    )),
+                    labels(&record.payload, &runtime.config.limits)?.union(
+                        &labels(&old.payload, &runtime.config.limits)?,
+                        &runtime.config.limits,
+                    )?,
+                    writes,
                 )
                 .await?;
                 return Ok(false);
@@ -107,6 +123,26 @@ pub(super) async fn gate(
     }
     let id = WaitId::approval(invocation, generation as u64, &runtime.config.limits)
         .map_err(|_| err())?;
+    if runtime
+        .store
+        .coordinator_time(runtime.clock.now_ms()?)
+        .await?
+        >= number(&record.payload, "deadline_ms")?
+    {
+        step::finish_node(
+            runtime,
+            lease,
+            record,
+            "failed",
+            Some(crate::failure::RuntimeFailure::new(
+                FailureCode::ApprovalDenied,
+            )),
+            labels(&record.payload, &runtime.config.limits)?,
+            writes,
+        )
+        .await?;
+        return Ok(false);
+    }
     let payload = object([
         ("run_id", Value::Text(lease.run_id().to_string())),
         ("scope_instance_id", Value::Text(scope.id.to_string())),
