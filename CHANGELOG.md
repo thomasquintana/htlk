@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Update the locked rustls dependency to 0.23.46 to resolve
+  RUSTSEC-2026-0346 through RUSTSEC-2026-0349 and refresh its license notice.
+
+- Complete analyzer admission for literal regex syntax and policy compiler ceilings,
+  sharing pinned construction rules with runtime; invalid literals fail even in lazy
+  branches. Reject proven-disjoint schema-root/whole-port boundaries and expose simple
+  schema field/item/presence hints while retaining exact refinement obligations.
+- Apply final retained-plan limits to focused expression analysis, charge repeated
+  schema hint traversal to its enclosing allowance, and bound warning/report storage.
+  Add direct whole-document analysis and runtime admission regression coverage.
+
 - Graph-record diagnostics now explain representation, port-layout, ordering,
   endpoint, scope-role, and resource failures in user-facing prose, with generic
   fallbacks for unrecognized public descriptions. Structured errors, source chains,
@@ -70,6 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nonexistent crates.io package.
 
 ### Added
+
+- Canonical `AnalysisDiagnostic`/`AnalysisLocation` reports, located early linkage
+  causes and related declarations, and `W_CONDITIONAL_WRITERS` warnings. Bounded
+  complement/distinct-equality recognition suppresses unnecessary warnings while
+  preserving runtime uniqueness checks. `JsonPointer::resolve_value` resolves report
+  paths against native canonical wire views, including byte-string leaves.
+- Explicit focused `ExpressionAnalysisOptions` and `RegexOptions` controls. Refresh
+  source-derived native identities and the independent fixture; regex identity now
+  includes the shared analyzer compilation adapter.
 
 - Shared `htlk-analyzer` with focused expression/scope/linkage checks, offline
   schema preparation, structured diagnostics, explicit runtime obligations and

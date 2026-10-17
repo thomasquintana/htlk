@@ -108,11 +108,34 @@ applicable. `NativeSchemaDiagnostic` carries original document digests and JSON
 Pointers when the failure has a known schema location. Diagnostics do not retain
 submitted operand values or native validator message text.
 
+`DocumentAnalysisError::LocatedLinkage` adds canonical locations and related
+declarations to early linkage/interface/MCP failures while retaining the original
+`LinkageError`. `DocumentAnalysisError::diagnostic(document, limits)` maps stage
+failures into an `AnalysisDiagnostic` with a specification `C_*` code, severity,
+content-independent message, `AnalysisLocation`, and related locations. A location's
+pointer addresses the canonical document's actual arrays/maps; `scope_use` records
+the root/task/loop use when relevant. Loop-until locations point into the containing
+node's operation. Schema errors retain their additional pointer inside the external
+JSON document; the canonical pointer addresses that document's byte string.
+`JsonPointer::resolve_value` resolves these paths against `CanonicalDocument::to_value`
+without converting native byte strings to JSON.
+
+`AnalyzedDocument::diagnostics()` retains deterministic `W_CONDITIONAL_WRITERS`
+warnings for possibly overlapping candidate groups. Bounded syntax recognizes
+direct negations and equality tests of one selector against distinct scalar literals
+of the same representation. These suppress the warning, while every multi-candidate
+binding keeps `needs_uniqueness_check()` for execution. `BindingPlan::may_overlap()`
+exposes the focused classification. Reports remain outside canonical identity.
+
 `Limits` exposes only `max_document_bytes` and `max_depth`. Encoded inputs and
 derived plans each receive a fresh byte budget. Derived index/graph/schema stages
 charge entry or visit markers plus associated bytes, including retained runtime
 checks and call signatures. Inference also uses the numeric byte ceiling as its
 private step allowance; callback compatibility retains its explicit work budget.
+Focused expression results receive the same final retained-size check as graph
+plans. Schema hint visits/copies consume their enclosing inference allowance, and
+regex literal admission caches validated spellings within that operation's budget.
+Successful reports have their own aggregate retained-location budget.
 Temporary representations have independently bounded overhead. Native JSON Schema
 validation has the capability contract documented below, not a claimed hard heap
 cap, whole-validation fuel counter, or in-process deadline. Runtime registration
@@ -340,6 +363,15 @@ Schema-aware checked evaluation and exact native-registry matching are composed 
 
 ### Static expression checking
 
+Regex literals are semantically compiled during analysis, including in lazy branches.
+`ExpressionAnalysisOptions` supplies immutable schemas and `RegexOptions` to
+`check_expression_with_options`, returning located diagnostics. Focused defaults
+are 64 KiB pattern bytes and 2 MiB compiled representation; document analysis uses
+the policy's exact regex ceilings. `validate_regex` centralizes the pinned engine's
+flags/construction rules, with redacted syntax/size failures. Runtime applies its
+own deterministic compilation charges around those same rules. This literal engine
+is separate from JSON Schema pattern admission.
+
 `check_expression` resolves and analyzes every AST branch against an
 `ExpressionTypeEnvironment` containing the owning context's value declarations,
 permitted outcomes, complete library manifests, and templates. `check_condition`
@@ -440,6 +472,12 @@ An analysis report alone does not execute its runtime obligations.
 and rejects proven disjoint boundaries without a general schema-subtyping solver.
 Uncertain refinements retain actual-value checks. JSON Schema mathematical integer
 constraints do not silently convert a native floating representation to an integer.
+Whole-value and edge boundaries use prepared root-schema families to reject proven
+disjoint representations. Simple projection hints include homogeneous array items,
+named record fields and requiredness, following static references with their bases.
+Complex applicators, recursive references and dynamic scope retain conservative
+family hints and exact original-root obligations. Structural hints do not discharge
+arbitrary schema refinements or change the declared schema type's identity.
 `CheckedExpression::new` borrows immutable syntax and declarations, analyzes all
 branches, and rejects unresolved schema-projection obligations.
 `CheckedExpression::with_schemas` admits them against pinned offline validators. Its `evaluate`

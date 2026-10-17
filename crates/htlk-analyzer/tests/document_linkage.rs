@@ -1612,7 +1612,8 @@ fn executable_native_schemas_enforce_callable_roots_and_validate_instances() {
         Doc::new(f, &l)
             .unwrap()
             .native_schemas(NativeSchemaOptions::default(), &l),
-        Err(Error::NativeSchema(NativeSchemaError::ObjectRootRequired))
+        Err(Error::SchemaDiagnostic(cause)) if cause.error == NativeSchemaError::ObjectRootRequired
+            && cause.location.as_ref().is_some_and(|l| l.pointer.to_string().is_empty())
     ));
 }
 

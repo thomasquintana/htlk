@@ -127,7 +127,7 @@ const model = implementation('htlk.model-implementation/0.1\n', [
 const analyzer = implementation('htlk.analyzer-implementation/0.1\n', [
   rawDigest(model),
   ...sources('htlk-analyzer', [
-    'implementation.rs', 'lib.rs', 'analyzed.rs', 'error.rs', 'context.rs', 'linkage.rs', 'linked.rs',
+    'implementation.rs', 'lib.rs', 'analyzed.rs', 'error.rs', 'context.rs', 'diagnostic.rs', 'regex.rs', 'linkage.rs', 'linked.rs',
     'binding_validation.rs', 'graph_verify.rs', 'structure.rs', 'type_check.rs',
     'native_schema.rs', 'schema_catalog.rs', 'schema_hints.rs', 'schema_locations.rs',
     'schema_resources.rs', 'schema_projection.rs', 'mcp_protocol.rs',
@@ -144,7 +144,7 @@ assert.equal(get(profile, 'core_digest').value, native([
   ]),
 ]));
 assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value,
-  native(sources('htlk-runtime', ['native_profile.rs', 'evaluate.rs'])));
+  native([...sources('htlk-runtime', ['native_profile.rs', 'evaluate.rs']), rawDigest(analyzer)]));
 assert.equal(get(get(profile, 'uri_template_engine'), 'implementation_digest').value,
   native([...sources('htlk-runtime', ['native_profile.rs', 'uri_template.rs']), rawDigest(model)]));
 assert.equal(get(get(profile, 'schema_validator'), 'implementation_digest').value, analyzer);

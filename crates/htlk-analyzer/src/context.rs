@@ -75,6 +75,15 @@ pub fn check_expression_context(
 }
 
 pub(crate) fn scope(scope: &Scope, c: ScopeContext) -> Result<(), GraphRecordError> {
+    scope_at(scope, c, "", &mut None)
+}
+pub(crate) fn scope_at(
+    scope: &Scope,
+    c: ScopeContext,
+    base: &str,
+    path: &mut Option<String>,
+) -> Result<(), GraphRecordError> {
+    *path = Some(base.to_owned());
     let f = scope.fields();
     if c == ScopeContext::Ordinary && !f.carried.is_empty() {
         return Err(GraphRecordError::InvalidScopeRole);
@@ -91,7 +100,8 @@ pub(crate) fn scope(scope: &Scope, c: ScopeContext) -> Result<(), GraphRecordErr
         .iter()
         .map(|n| (n.id().as_str(), n.fields()))
         .collect();
-    for node in &f.nodes {
+    for (index, node) in f.nodes.iter().enumerate() {
+        *path = Some(format!("{base}/nodes/{index}/operation"));
         let n = node.fields();
         if let Operation::Loop { initializers, .. } = &n.operation {
             for (_, input) in initializers {
@@ -99,7 +109,8 @@ pub(crate) fn scope(scope: &Scope, c: ScopeContext) -> Result<(), GraphRecordErr
             }
         }
     }
-    for edge in &f.edges {
+    for (index, edge) in f.edges.iter().enumerate() {
+        *path = Some(format!("{base}/edges/{index}/source"));
         match edge.source() {
             EdgeSource::Input(n) => require_port(&f.inputs, n, "scope input")?,
             EdgeSource::Carried(n) => {
@@ -117,6 +128,7 @@ pub(crate) fn scope(scope: &Scope, c: ScopeContext) -> Result<(), GraphRecordErr
                 "source output",
             )?,
         }
+        *path = Some(format!("{base}/edges/{index}/destination"));
         match edge.destination() {
             EdgeDestination::Output(n) => require_port(&f.outputs, n, "scope output")?,
             EdgeDestination::Next(n) => {

@@ -40,6 +40,7 @@ pub fn native_profile(
         identity(&[
             include_bytes!("native_profile.rs"),
             include_bytes!("evaluate.rs"),
+            htlk_analyzer::implementation_digest().as_bytes(),
         ]),
         limits,
     )?;

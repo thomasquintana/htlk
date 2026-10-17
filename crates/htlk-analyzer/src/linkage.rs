@@ -118,78 +118,179 @@ impl DocumentAnalysis for CanonicalDocument {
                         .documents
                         .get(id)
                         .ok_or(Error::MissingRecord("tool schema document"))?;
-                    schemas.require_object_root(&crate::embedded_schema_base(document, limits)?)?;
+                    schemas
+                        .require_object_root(&crate::embedded_schema_base(document, limits)?)
+                        .map_err(|error| {
+                            Error::SchemaDiagnostic(Box::new(crate::NativeSchemaDiagnostic {
+                                location: Some(crate::SchemaDiagnosticLocation {
+                                    document: document.digest(),
+                                    pointer: JsonPointer::new("", limits).expect("empty pointer"),
+                                }),
+                                error,
+                            }))
+                        })?;
                 }
             }
         }
         Ok(schemas)
     }
     fn validate_mcp_descriptors(&self, limits: &Limits) -> Result<(), Error> {
-        self.to_value(limits)?;
-        let mut selections = BTreeMap::new();
-        let mut checked = BTreeSet::new();
-        for binding in self.fields().bindings.values() {
-            use crate::McpDescriptorKind as K;
-            let (kind, tag, selected) = match binding.kind() {
-                McpBindingKind::Tool { name, .. } => (K::Tool, "tool", name),
-                McpBindingKind::Resource { uri } => (K::Resource, "resource", uri),
-                McpBindingKind::Template { uri_template } => {
-                    (K::ResourceTemplate, "template", uri_template)
-                }
-                McpBindingKind::Prompt { name } => (K::Prompt, "prompt", name),
-            };
-            if checked.insert((tag, binding.descriptor())) {
-                let descriptor = self
-                    .fields()
-                    .documents
-                    .get(&binding.descriptor())
-                    .ok_or(Error::MissingRecord("descriptor document"))?;
-                crate::validate_mcp_descriptor(kind, descriptor, limits)?;
-            }
-            let key = (binding.server().digest(limits)?, tag, selected.as_str());
-            if selections
-                .insert(key, binding.descriptor())
-                .is_some_and(|previous| previous != binding.descriptor())
-            {
-                return Err(Error::ConflictingMcpSelection);
-            }
-        }
-        Ok(())
+        validate_mcp(self, limits, &mut None, &mut Vec::new())
     }
+}
+
+fn validate_mcp(
+    document: &CanonicalDocument,
+    limits: &Limits,
+    path: &mut Option<String>,
+    related: &mut Vec<String>,
+) -> Result<(), Error> {
+    document.to_value(limits)?;
+    let mut selections = BTreeMap::new();
+    let mut checked = BTreeSet::new();
+    for (id, binding) in &document.fields().bindings {
+        *path = Some(format!("/bindings/{id}"));
+        related.clear();
+        related.push(format!("/documents/{}", binding.descriptor()));
+        use crate::McpDescriptorKind as K;
+        let (kind, tag, selected) = match binding.kind() {
+            McpBindingKind::Tool { name, .. } => (K::Tool, "tool", name),
+            McpBindingKind::Resource { uri } => (K::Resource, "resource", uri),
+            McpBindingKind::Template { uri_template } => {
+                (K::ResourceTemplate, "template", uri_template)
+            }
+            McpBindingKind::Prompt { name } => (K::Prompt, "prompt", name),
+        };
+        if checked.insert((tag, binding.descriptor())) {
+            let descriptor = document
+                .fields()
+                .documents
+                .get(&binding.descriptor())
+                .ok_or(Error::MissingRecord("descriptor document"))?;
+            crate::validate_mcp_descriptor(kind, descriptor, limits)?;
+        }
+        let key = (binding.server().digest(limits)?, tag, selected.as_str());
+        if let Some((previous, previous_binding)) =
+            selections.insert(key, (binding.descriptor(), *id))
+            && previous != binding.descriptor()
+        {
+            related.push(format!("/bindings/{previous_binding}"));
+            return Err(Error::ConflictingMcpSelection);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn mcp_located(
+    document: &CanonicalDocument,
+    limits: &Limits,
+) -> Result<(), crate::DocumentAnalysisError> {
+    let mut path = None;
+    let mut related = Vec::new();
+    validate_mcp(document, limits, &mut path, &mut related).map_err(|error| {
+        if let Some(path) = path
+            && let Ok(location) = crate::diagnostic::location(&path, None, limits)
+        {
+            return crate::DocumentAnalysisError::LocatedLinkage(Box::new(
+                crate::LinkageDiagnostic {
+                    location,
+                    related_locations: related
+                        .iter()
+                        .filter_map(|p| crate::diagnostic::location(p, None, limits).ok())
+                        .collect(),
+                    error,
+                },
+            ));
+        }
+        error.into()
+    })
 }
 
 pub(crate) fn verify(
     document: &CanonicalDocument,
     l: &Limits,
 ) -> Result<(PolicyDocument, StructuralSummary), Error> {
+    let mut path = None;
+    let mut related = Vec::new();
+    verify_inner(document, l, &mut path, &mut related)
+}
+
+pub(crate) fn verify_located(
+    document: &CanonicalDocument,
+    l: &Limits,
+) -> Result<(PolicyDocument, StructuralSummary), crate::DocumentAnalysisError> {
+    let mut path = None;
+    let mut related = Vec::new();
+    verify_inner(document, l, &mut path, &mut related).map_err(|error| {
+        if let Some(path) = path
+            && let Ok(location) = crate::diagnostic::location(&path, None, l)
+        {
+            let related_locations = related
+                .iter()
+                .filter_map(|p| crate::diagnostic::location(p, None, l).ok())
+                .collect();
+            return crate::DocumentAnalysisError::LocatedLinkage(Box::new(
+                crate::LinkageDiagnostic {
+                    location,
+                    related_locations,
+                    error,
+                },
+            ));
+        }
+        error.into()
+    })
+}
+
+fn verify_inner(
+    document: &CanonicalDocument,
+    l: &Limits,
+    path: &mut Option<String>,
+    related: &mut Vec<String>,
+) -> Result<(PolicyDocument, StructuralSummary), Error> {
     document.to_value(l)?;
     let f = document.fields();
-    let roles = scope_roles(f)?;
+    *path = Some("/root_scope".into());
+    let roles = scope_roles(f, path)?;
     for (id, scope) in &f.scopes {
+        *path = Some(format!("/scopes/{id}"));
         if roles[id] & 1 != 0 {
-            crate::context::scope(scope, ScopeContext::Ordinary)?;
+            crate::context::scope_at(
+                scope,
+                ScopeContext::Ordinary,
+                &format!("/scopes/{id}"),
+                path,
+            )?;
         }
         if roles[id] & 2 != 0 {
-            crate::context::scope(scope, ScopeContext::LoopBody)?;
+            crate::context::scope_at(
+                scope,
+                ScopeContext::LoopBody,
+                &format!("/scopes/{id}"),
+                path,
+            )?;
         }
     }
+    *path = Some("/profile/policy_document".into());
     let policy = f
         .documents
         .get(&f.profile.policy_document())
         .ok_or(Error::MissingRecord("policy document"))?;
     let policy = PolicyDocument::decode(policy.as_bytes(), l)?;
-    for id in f.schema_uris.values() {
+    for (uri, id) in &f.schema_uris {
+        *path = Some(format!("/schema_uris/{}", crate::diagnostic::escape(uri)));
         if !f.documents.contains_key(id) {
             return Err(Error::MissingRecord("schema URI document"));
         }
     }
-    for template in f.templates.values() {
+    for (id, template) in &f.templates {
+        *path = Some(format!("/templates/{id}"));
         crate::context::template(template)?;
     }
     let mut used = Used::default();
     let mut schema_roots = BTreeSet::new();
     let mut template_variables = BTreeMap::new();
     for (id, binding) in &f.bindings {
+        *path = Some(format!("/bindings/{id}"));
         if let McpBindingKind::Template { uri_template } = binding.kind() {
             template_variables.insert(*id, uri_template_variables(uri_template, l)?);
         }
@@ -202,31 +303,80 @@ pub(crate) fn verify(
             schema_roots.extend([*input_schema, *output_schema]);
         }
     }
-    for scope in f.scopes.values() {
+    for (scope_id, scope) in &f.scopes {
+        let base = format!("/scopes/{scope_id}");
+        *path = Some(base.clone());
+        related.clear();
         let s = scope.fields();
-        for table in [&s.inputs, &s.outputs, &s.carried] {
-            type_documents(table, f, &schema_roots)?;
+        for (name, table) in [
+            ("inputs", &s.inputs),
+            ("outputs", &s.outputs),
+            ("carried", &s.carried),
+        ] {
+            type_documents(table, f, &schema_roots, &format!("{base}/{name}"), path)?;
         }
-        expression(&s.preconditions, f, &mut used)?;
-        expression(&s.postconditions, f, &mut used)?;
-        for edge in &s.edges {
-            expression(edge.guard(), f, &mut used)?;
+        expression(
+            &s.preconditions,
+            f,
+            &mut used,
+            &format!("{base}/preconditions"),
+            path,
+        )?;
+        expression(
+            &s.postconditions,
+            f,
+            &mut used,
+            &format!("{base}/postconditions"),
+            path,
+        )?;
+        for (index, edge) in s.edges.iter().enumerate() {
+            expression(
+                edge.guard(),
+                f,
+                &mut used,
+                &format!("{base}/edges/{index}/guard"),
+                path,
+            )?;
         }
-        for node in &s.nodes {
+        for (index, node) in s.nodes.iter().enumerate() {
+            let node_path = format!("{base}/nodes/{index}");
+            *path = Some(node_path.clone());
+            related.clear();
             let n = node.fields();
-            type_documents(&n.inputs, f, &schema_roots)?;
-            type_documents(&n.outputs, f, &schema_roots)?;
-            for e in [&n.guard, &n.preconditions, &n.postconditions] {
-                expression(e, f, &mut used)?;
+            type_documents(
+                &n.inputs,
+                f,
+                &schema_roots,
+                &format!("{node_path}/inputs"),
+                path,
+            )?;
+            type_documents(
+                &n.outputs,
+                f,
+                &schema_roots,
+                &format!("{node_path}/outputs"),
+                path,
+            )?;
+            for (field, e) in [
+                ("guard", &n.guard),
+                ("preconditions", &n.preconditions),
+                ("postconditions", &n.postconditions),
+            ] {
+                expression(e, f, &mut used, &format!("{node_path}/{field}"), path)?;
             }
+            *path = Some(format!("{node_path}/operation"));
+            related.clear();
             match &n.operation {
-                Operation::Eval(e) => expression(e, f, &mut used)?,
+                Operation::Eval(e) => {
+                    expression(e, f, &mut used, &format!("{node_path}/operation/1"), path)?
+                }
                 Operation::Mcp { binding, .. } => {
                     let b = f
                         .bindings
                         .get(binding)
                         .ok_or(Error::MissingRecord("binding"))?;
                     used.bindings.insert(*binding);
+                    related.push(format!("/bindings/{binding}"));
                     crate::binding_validation::ports(n, b, f)?;
                     if let Some(variables) = template_variables.get(binding) {
                         crate::binding_validation::template_ports(n, variables)?;
@@ -238,6 +388,7 @@ pub(crate) fn verify(
                         .get(d)
                         .ok_or(Error::MissingRecord("scope"))?
                         .fields();
+                    related.push(format!("/scopes/{d}"));
                     if n.inputs != target.inputs || n.outputs != target.outputs {
                         return Err(Error::ScopeInterfaceMismatch);
                     }
@@ -259,21 +410,36 @@ pub(crate) fn verify(
                                 return Err(Error::ScopeInterfaceMismatch);
                             }
                         }
-                        expression(until, f, &mut used)?;
+                        expression(
+                            until,
+                            f,
+                            &mut used,
+                            &format!("{node_path}/operation/3"),
+                            path,
+                        )?;
                     }
                 }
                 Operation::Wait { .. } => (),
             }
         }
     }
+    *path = None;
+    related.clear();
     exact(&used.bindings, f.bindings.keys(), "binding")?;
     exact(&used.templates, f.templates.keys(), "template")?;
     exact(&used.libraries, f.libraries.keys(), "library")?;
-    for binding in f.bindings.values() {
+    for (id, binding) in &f.bindings {
+        *path = Some(format!("/bindings/{id}"));
+        related.clear();
+        if f.documents.contains_key(&binding.descriptor()) {
+            related.push(format!("/documents/{}", binding.descriptor()));
+        }
         crate::binding_validation::descriptor(binding, f, l)?;
     }
-    for lib in f.libraries.values() {
-        for (_, sig) in lib.functions() {
+    for (id, lib) in &f.libraries {
+        for (name, sig) in lib.functions() {
+            *path = Some(format!("/libraries/{id}/functions/{name}"));
+            related.clear();
             crate::context::signature(sig)?;
             for port in sig
                 .parameters()
@@ -284,15 +450,21 @@ pub(crate) fn verify(
             }
         }
     }
+    *path = Some(format!("/documents/{}", f.profile.policy_document()));
+    related.clear();
     let summary = crate::structure::analyze(f, policy.fields())?;
     Ok((policy, summary))
 }
 
-fn scope_roles(f: &DocumentFields) -> Result<BTreeMap<Digest, u8>, Error> {
+fn scope_roles(
+    f: &DocumentFields,
+    path: &mut Option<String>,
+) -> Result<BTreeMap<Digest, u8>, Error> {
     let mut roles = BTreeMap::new();
     let mut adjacency = BTreeMap::new();
-    let mut work = vec![(f.root_scope, 1)];
-    while let Some((id, role)) = work.pop() {
+    let mut work = vec![(f.root_scope, 1, "/root_scope".to_owned())];
+    while let Some((id, role, origin)) = work.pop() {
+        *path = Some(origin);
         let scope = f.scopes.get(&id).ok_or(Error::MissingRecord("scope"))?;
         let known = roles.entry(id).or_insert(0);
         if *known & role != 0 {
@@ -304,14 +476,24 @@ fn scope_roles(f: &DocumentFields) -> Result<BTreeMap<Digest, u8>, Error> {
                 .fields()
                 .nodes
                 .iter()
-                .filter_map(|n| match &n.fields().operation {
-                    Operation::Scope(d) => Some((*d, 1)),
-                    Operation::Loop { body, .. } => Some((*body, 2)),
+                .enumerate()
+                .filter_map(|(index, n)| match &n.fields().operation {
+                    Operation::Scope(d) => {
+                        Some((*d, 1, format!("/scopes/{id}/nodes/{index}/operation/1")))
+                    }
+                    Operation::Loop { body, .. } => {
+                        Some((*body, 2, format!("/scopes/{id}/nodes/{index}/operation/1")))
+                    }
                     _ => None,
                 })
                 .collect();
-            work.extend(children.iter().copied());
-            entry.insert(children);
+            work.extend(children.iter().cloned());
+            entry.insert(
+                children
+                    .into_iter()
+                    .map(|(id, role, _)| (id, role))
+                    .collect::<Vec<_>>(),
+            );
         }
     }
     if roles.len() != f.scopes.len() {
@@ -360,7 +542,14 @@ fn exact<'a>(
         Ok(())
     }
 }
-fn expression(e: &Expression, f: &DocumentFields, used: &mut Used) -> Result<(), Error> {
+fn expression(
+    e: &Expression,
+    f: &DocumentFields,
+    used: &mut Used,
+    base: &str,
+    path: &mut Option<String>,
+) -> Result<(), Error> {
+    *path = Some(base.to_owned());
     use ExpressionKind as E;
     match e.kind() {
         E::Call {
@@ -380,8 +569,14 @@ fn expression(e: &Expression, f: &DocumentFields, used: &mut Used) -> Result<(),
                 }
                 used.libraries.insert(*library);
             }
-            for e in arguments {
-                expression(e, f, used)?;
+            for (index, child) in arguments.iter().enumerate() {
+                expression(
+                    child,
+                    f,
+                    used,
+                    &crate::diagnostic::child_path(e, base, index).expect("call child"),
+                    path,
+                )?;
             }
         }
         E::FunctionRef { library, name } => {
@@ -411,24 +606,44 @@ fn expression(e: &Expression, f: &DocumentFields, used: &mut Used) -> Result<(),
                 return Err(Error::TemplateArguments);
             }
             used.templates.insert(*template);
-            for (_, e) in arguments {
-                expression(e, f, used)?;
+            for (index, (_, child)) in arguments.iter().enumerate() {
+                expression(
+                    child,
+                    f,
+                    used,
+                    &crate::diagnostic::child_path(e, base, index).expect("render child"),
+                    path,
+                )?;
             }
         }
         E::List(items) => {
-            for e in items {
-                expression(e, f, used)?;
+            for (index, child) in items.iter().enumerate() {
+                expression(
+                    child,
+                    f,
+                    used,
+                    &crate::diagnostic::child_path(e, base, index).expect("list child"),
+                    path,
+                )?;
             }
         }
         E::Record(fields) => {
-            for (_, e) in fields {
-                expression(e, f, used)?;
+            for (index, (_, child)) in fields.iter().enumerate() {
+                expression(
+                    child,
+                    f,
+                    used,
+                    &crate::diagnostic::child_path(e, base, index).expect("record child"),
+                    path,
+                )?;
             }
         }
-        E::Get { value, .. } | E::Not(value) => expression(value, f, used)?,
+        E::Get { value, .. } | E::Not(value) => {
+            expression(value, f, used, &format!("{base}/1"), path)?
+        }
         E::Binary { left, right, .. } => {
-            expression(left, f, used)?;
-            expression(right, f, used)?;
+            expression(left, f, used, &format!("{base}/1"), path)?;
+            expression(right, f, used, &format!("{base}/2"), path)?;
         }
         _ => (),
     }
@@ -438,8 +653,11 @@ fn type_documents(
     table: &PortTable,
     f: &DocumentFields,
     roots: &BTreeSet<Digest>,
+    base: &str,
+    path: &mut Option<String>,
 ) -> Result<(), Error> {
-    for (_, p) in table.iter() {
+    for (name, p) in table.iter() {
+        *path = Some(format!("{base}/{name}/type"));
         type_refs(p.value_type(), f, roots)?;
     }
     Ok(())
@@ -521,6 +739,6 @@ mod tests {
         .unwrap();
         let mut fields = DocumentFields::new("test.cycle".into(), profile, id);
         fields.scopes.insert(id, scope);
-        assert_eq!(scope_roles(&fields), Err(Error::ScopeCycle));
+        assert_eq!(scope_roles(&fields, &mut None), Err(Error::ScopeCycle));
     }
 }

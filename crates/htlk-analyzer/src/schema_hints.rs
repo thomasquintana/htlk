@@ -1,7 +1,7 @@
 //! Conservative representation-family refinement at original schema locations.
 //! These hints do not replace complete native validation or perform schema subtyping.
 use crate::{
-    BuiltinType as P, JsonPointer, NativeSchemaError as Error, PathStep, SchemaCatalog,
+    BuiltinType as P, JsonPointer, NativeSchemaError as Error, PathStep, Port, SchemaCatalog,
     SchemaResourceError, TypeContext, ValueType as T, ValueTypeKind as K,
 };
 use htlk_cbor::{Limits, Value};
@@ -14,12 +14,12 @@ const STRING: u8 = 8;
 const ARRAY: u8 = 16;
 const OBJECT: u8 = 32;
 const ANY: u8 = 63;
-pub(crate) fn projection_type(
+pub(crate) fn projection_hint(
     catalog: &SchemaCatalog,
     uri: &str,
     path: &[PathStep],
     limits: &Limits,
-) -> Result<T, Error> {
+) -> Result<(Port, usize), Error> {
     let pointer = JsonPointer::new("", limits).map_err(SchemaResourceError::from)?;
     let mut walker = Walker {
         catalog,
@@ -28,10 +28,18 @@ pub(crate) fn projection_type(
         active: BTreeSet::new(),
     };
     let mask = walker.walk(uri, &pointer, path, 0)?;
+    if let Some(port) = walker.shape(uri, &pointer, path, 0)? {
+        let size = port.value_type().encode(TypeContext::Value, limits)?.len();
+        walker.charge(size)?;
+        return Ok((port, walker.bytes));
+    }
     // An empty present-value family can still describe a legitimately absent
     // optional property (for example properties: {x:false}); preserve its checks.
     if mask == ANY || mask == 0 {
-        return Ok(T::builtin(P::Json));
+        return Ok((
+            Port::new(T::builtin(P::Json), path.is_empty()),
+            walker.bytes,
+        ));
     }
     let mut types = Vec::new();
     for (bit, primitive) in [(NULL, P::Null), (BOOL, P::Boolean), (STRING, P::String)] {
@@ -56,11 +64,12 @@ pub(crate) fn projection_type(
             limits,
         )?);
     }
-    if types.len() == 1 {
-        Ok(types.pop().expect("one type"))
+    let ty = if types.len() == 1 {
+        types.pop().expect("one type")
     } else {
-        Ok(T::new(K::Union(types), TypeContext::Value, limits)?)
-    }
+        T::new(K::Union(types), TypeContext::Value, limits)?
+    };
+    Ok((Port::new(ty, path.is_empty()), walker.bytes))
 }
 struct Walker<'a> {
     catalog: &'a SchemaCatalog,
@@ -69,6 +78,149 @@ struct Walker<'a> {
     active: BTreeSet<(String, String, usize)>,
 }
 impl Walker<'_> {
+    // Structural facts from uncomplicated schemas. Applicators/dynamic scopes
+    // retain the family walk above and exact runtime checks rather than guessing
+    // field declarations or presence across alternative evaluation paths.
+    fn shape(
+        &mut self,
+        uri: &str,
+        pointer: &JsonPointer,
+        path: &[PathStep],
+        depth: usize,
+    ) -> Result<Option<Port>, Error> {
+        if depth >= self.limits.max_depth {
+            return Ok(None);
+        }
+        let key = (uri.to_owned(), pointer.to_string(), usize::MAX - path.len());
+        self.charge(uri.len().saturating_add(key.1.len()))?;
+        if !self.active.insert(key.clone()) {
+            return Ok(None);
+        }
+        let result = self.shape_at(uri, pointer, path, depth);
+        self.active.remove(&key);
+        result
+    }
+    fn shape_at(
+        &mut self,
+        uri: &str,
+        pointer: &JsonPointer,
+        path: &[PathStep],
+        depth: usize,
+    ) -> Result<Option<Port>, Error> {
+        let document = self.catalog.document(uri).ok_or(Error::UnknownRoot)?;
+        let Value::Map(schema) = pointer
+            .resolve(document)
+            .map_err(SchemaResourceError::from)?
+        else {
+            return Ok(None);
+        };
+        if [
+            "$dynamicRef",
+            "allOf",
+            "anyOf",
+            "oneOf",
+            "if",
+            "dependentSchemas",
+        ]
+        .iter()
+        .any(|k| schema.get(k).is_some())
+        {
+            return Ok(None);
+        }
+        if let Some(Value::Text(reference)) = schema.get("$ref") {
+            let target = self.catalog.resolve(uri, pointer, reference, self.limits)?;
+            return self.shape(target.retrieval_uri(), target.pointer(), path, depth + 1);
+        }
+        let mut required_names = BTreeSet::new();
+        if let Some(Value::Array(names)) = schema.get("required") {
+            for name in names {
+                if let Value::Text(name) = name {
+                    self.charge(name.len())?;
+                    required_names.insert(name.as_str());
+                }
+            }
+        }
+        if let Some((step, rest)) = path.split_first() {
+            let (keyword, token, required) = match step {
+                PathStep::Field(name) => {
+                    let Some(Value::Map(properties)) = schema.get("properties") else {
+                        return Ok(None);
+                    };
+                    if properties.get(name).is_none() {
+                        return Ok(None);
+                    }
+                    let required = required_names.contains(name.as_str());
+                    ("properties", name.clone(), required)
+                }
+                PathStep::Index(index) => {
+                    if let Some(Value::Array(prefix)) = schema.get("prefixItems")
+                        && usize::try_from(*index).is_ok_and(|i| i < prefix.len())
+                    {
+                        let parent = self.child(pointer, "prefixItems")?;
+                        let child = self.child(&parent, &index.to_string())?;
+                        return self.shape(uri, &child, rest, depth + 1);
+                    }
+                    if schema.get("items").is_none() {
+                        return Ok(None);
+                    }
+                    let child = self.child(pointer, "items")?;
+                    return self.shape(uri, &child, rest, depth + 1);
+                }
+            };
+            let parent = self.child(pointer, keyword)?;
+            let child = self.child(&parent, &token)?;
+            return Ok(self
+                .shape(uri, &child, rest, depth + 1)?
+                .map(|p| Port::new(p.value_type().clone(), required && p.required())));
+        }
+        let Some(Value::Text(kind)) = schema.get("type") else {
+            return Ok(None);
+        };
+        let ty = match kind.as_str() {
+            "string" => T::builtin(P::String),
+            "boolean" => T::builtin(P::Boolean),
+            "null" => T::builtin(P::Null),
+            "integer" | "number" => T::new(
+                K::Union(vec![T::builtin(P::Integer), T::builtin(P::Float)]),
+                TypeContext::Value,
+                self.limits,
+            )?,
+            "array" => {
+                if schema.get("prefixItems").is_some() {
+                    return Ok(None);
+                }
+                let item = if schema.get("items").is_some() {
+                    let child = self.child(pointer, "items")?;
+                    self.shape(uri, &child, &[], depth + 1)?
+                        .map(|p| p.value_type().clone())
+                        .unwrap_or_else(|| T::builtin(P::Json))
+                } else {
+                    T::builtin(P::Json)
+                };
+                T::new(K::List(Box::new(item)), TypeContext::Value, self.limits)?
+            }
+            "object" => {
+                let mut fields = Vec::new();
+                if let Some(Value::Map(properties)) = schema.get("properties") {
+                    let parent = self.child(pointer, "properties")?;
+                    for (name, _) in properties.iter() {
+                        self.charge(name.len())?;
+                        let child = self.child(&parent, name)?;
+                        let ty = self
+                            .shape(uri, &child, &[], depth + 1)?
+                            .map(|p| p.value_type().clone())
+                            .unwrap_or_else(|| T::builtin(P::Json));
+                        let required = required_names.contains(name);
+                        fields.push((name.to_owned(), Port::new(ty, required)));
+                    }
+                }
+                T::new(K::Record(fields), TypeContext::Value, self.limits)?
+            }
+            _ => return Ok(None),
+        };
+        self.charge(ty.encode(TypeContext::Value, self.limits)?.len())?;
+        Ok(Some(Port::new(ty, true)))
+    }
     fn charge(&mut self, bytes: usize) -> Result<(), Error> {
         // Include a one-byte visit marker in the derived byte budget.
         self.bytes = self

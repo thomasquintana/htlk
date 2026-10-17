@@ -331,17 +331,17 @@ impl NativeSchemas {
     pub fn has_schema_type(&self, schema: &Digest) -> bool {
         self.schema_types.contains_key(schema)
     }
-    pub(crate) fn projection_type(
+    pub(crate) fn projection_hint(
         &self,
         schema: &Digest,
         path: &[crate::PathStep],
         limits: &Limits,
-    ) -> Result<crate::ValueType, NativeSchemaError> {
+    ) -> Result<(crate::Port, usize), NativeSchemaError> {
         let uri = self
             .schema_types
             .get(schema)
             .ok_or(NativeSchemaError::UnknownRoot)?;
-        crate::schema_hints::projection_type(&self.catalog, uri, path, limits)
+        crate::schema_hints::projection_hint(&self.catalog, uri, path, limits)
     }
     /// Writes native evaluation annotations for an already valid root instance.
     /// Runtime integrations supply a bounded writer and meter value conversion.

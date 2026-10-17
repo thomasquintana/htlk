@@ -88,6 +88,7 @@ pub struct BindingPlan {
     destination: WaitVertex,
     candidates: Vec<Identifier>,
     required: bool,
+    exclusive: bool,
 }
 impl BindingPlan {
     /// Destination binding event.
@@ -105,6 +106,10 @@ impl BindingPlan {
     /// More than one selected guard must fail at runtime; no SAT proof is assumed.
     pub fn needs_uniqueness_check(&self) -> bool {
         self.candidates.len() > 1
+    }
+    /// Multiple candidates whose exclusivity is not established by bounded syntax.
+    pub fn may_overlap(&self) -> bool {
+        self.needs_uniqueness_check() && !self.exclusive
     }
 }
 /// Derived local verification data, not an alternative serialized graph.
@@ -260,6 +265,7 @@ struct ScopeChecker<'a> {
     templates: &'a BTreeMap<Digest, PromptTemplate>,
     schemas: &'a NativeSchemas,
     budget: Budget<'a>,
+    regex: crate::RegexOptions,
     expressions: BTreeMap<ExpressionSite, ExpressionAnalysis>,
     environments: BTreeMap<ExpressionSite, ExpressionTypeEnvironment>,
     dependencies: BTreeSet<(WaitVertex, WaitVertex)>,
@@ -396,12 +402,15 @@ impl<'a> ScopeChecker<'a> {
             }
         }
         self.current_path.clear();
-        let analysis = crate::check_expression_diagnostic(
+        let analysis = crate::check_expression_with_options(
             expression,
             context,
             &env,
             Some(expected),
-            Some(self.schemas),
+            crate::ExpressionAnalysisOptions {
+                schemas: Some(self.schemas),
+                regex: self.regex,
+            },
             self.budget.limits,
         )
         .map_err(|diagnostic| {
@@ -458,6 +467,29 @@ pub fn verify_scope_graph(
     schemas: &NativeSchemas,
     limits: &Limits,
 ) -> Result<ScopeGraphPlan, ScopeVerificationError> {
+    verify_scope_graph_options(
+        scope,
+        role,
+        until,
+        libraries,
+        templates,
+        schemas,
+        crate::RegexOptions::default(),
+        limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_scope_graph_options(
+    scope: &Scope,
+    role: ScopeContext,
+    until: Option<&Expression>,
+    libraries: &BTreeMap<Digest, Library>,
+    templates: &BTreeMap<Digest, PromptTemplate>,
+    schemas: &NativeSchemas,
+    regex: crate::RegexOptions,
+    limits: &Limits,
+) -> Result<ScopeGraphPlan, ScopeVerificationError> {
     use ScopeVerificationErrorKind as K;
     scope.to_value(limits).map_err(|e| error(K::Graph(e)))?;
     crate::context::scope(scope, role).map_err(|e| error(K::Graph(e)))?;
@@ -472,6 +504,7 @@ pub fn verify_scope_graph(
         templates,
         schemas,
         budget: Budget { bytes: 0, limits },
+        regex,
         expressions: BTreeMap::new(),
         environments: BTreeMap::new(),
         dependencies: BTreeSet::new(),
@@ -632,13 +665,19 @@ pub fn verify_scope_graph(
         .map_err(expression_error)?;
         let destination_copy = checker.budget.port(&group.0)?;
         let destination_value = Port::new(destination_copy.value_type().clone(), false);
-        let analysis =
-            crate::check_expression(&expression, C::Eval, &env, Some(&destination_value), limits)
-                .map_err(|e| {
-                let mut e = expression_error(e);
-                e.site = Some(ExpressionSite::EdgeBoundary(edge.id().clone()));
-                e
-            })?;
+        let analysis = crate::check_expression_with_schemas(
+            &expression,
+            C::Eval,
+            &env,
+            Some(&destination_value),
+            schemas,
+            limits,
+        )
+        .map_err(|e| {
+            let mut e = expression_error(e);
+            e.site = Some(ExpressionSite::EdgeBoundary(edge.id().clone()));
+            e
+        })?;
         checker
             .budget
             .charge(analysis.stored_size(limits).map_err(expression_error)?)?;
@@ -659,6 +698,7 @@ pub fn verify_scope_graph(
         }
     }
     let mut bindings = Vec::new();
+    let edges: BTreeMap<_, _> = fields.edges.iter().map(|e| (e.id(), e.guard())).collect();
     for (destination, (port, candidates, unconditional)) in groups {
         if port.required() && candidates.is_empty() {
             return Err(error(K::MissingCandidate(destination)));
@@ -676,10 +716,28 @@ pub fn verify_scope_graph(
                 },
             )?;
         }
+        let mut exclusive = true;
+        'pairs: for (index, a) in candidates.iter().enumerate() {
+            for b in &candidates[index + 1..] {
+                let a = edges[a];
+                let b = edges[b];
+                checker.budget.charge(
+                    a.encode(limits)
+                        .map_err(expression_error)?
+                        .len()
+                        .saturating_add(b.encode(limits).map_err(expression_error)?.len()),
+                )?;
+                if !exclusive_guards(a, b) {
+                    exclusive = false;
+                    break 'pairs;
+                }
+            }
+        }
         bindings.push(BindingPlan {
             destination,
             candidates,
             required: port.required(),
+            exclusive,
         });
     }
     if let Some(until) = until {
@@ -757,6 +815,37 @@ pub fn verify_scope_graph(
         boundaries,
         bytes: checker.budget.bytes,
     })
+}
+
+fn exclusive_guards(a: &Expression, b: &Expression) -> bool {
+    if matches!(a.kind(), E::Not(inner) if inner.as_ref() == b)
+        || matches!(b.kind(), E::Not(inner) if inner.as_ref() == a)
+        || matches!(a.kind(), E::Literal(ScalarLiteral::Boolean(false)))
+        || matches!(b.kind(), E::Literal(ScalarLiteral::Boolean(false)))
+    {
+        return true;
+    }
+    fn equality(e: &Expression) -> Option<(&Expression, &ScalarLiteral)> {
+        let E::Binary {
+            operator: crate::BinaryOperator::Eq,
+            left,
+            right,
+        } = e.kind()
+        else {
+            return None;
+        };
+        if let E::Literal(literal) = right.kind() {
+            Some((left, literal))
+        } else if let E::Literal(literal) = left.kind() {
+            Some((right, literal))
+        } else {
+            None
+        }
+    }
+    if let (Some((a, av)), Some((b, bv))) = (equality(a), equality(b)) {
+        return a == b && std::mem::discriminant(av) == std::mem::discriminant(bv) && av != bv;
+    }
+    false
 }
 
 /// A use of a definition, rather than an exclusive role attached to its digest.
@@ -853,6 +942,24 @@ pub(crate) fn verify_linked_graphs(
             )))),
         })?;
     let fields = document.fields();
+    let policy = fields
+        .documents
+        .get(&fields.profile.policy_document())
+        .ok_or_else(|| GraphVerificationError {
+            scope_use: None,
+            scope: None,
+            cause: Box::new(error(ScopeVerificationErrorKind::UnknownReference)),
+        })?;
+    let policy = crate::PolicyDocument::decode(policy.as_bytes(), limits).map_err(|e| {
+        GraphVerificationError {
+            scope_use: None,
+            scope: None,
+            cause: Box::new(error(ScopeVerificationErrorKind::Document(Box::new(
+                e.into(),
+            )))),
+        }
+    })?;
+    let regex = crate::RegexOptions::from_policy(&policy.fields().evaluator_limits);
     let mut uses = vec![(ScopeUse::Root, fields.root_scope, None)];
     for (scope, definition) in &fields.scopes {
         for node in &definition.fields().nodes {
@@ -897,7 +1004,7 @@ pub(crate) fn verify_linked_graphs(
                 .scopes
                 .get(&scope)
                 .ok_or_else(|| wrap(error(ScopeVerificationErrorKind::UnknownReference)))?;
-            let plan = verify_scope_graph(
+            let plan = verify_scope_graph_options(
                 definition,
                 if until.is_some() {
                     ScopeContext::LoopBody
@@ -908,6 +1015,7 @@ pub(crate) fn verify_linked_graphs(
                 &fields.libraries,
                 &fields.templates,
                 schemas,
+                regex,
                 limits,
             )
             .map_err(wrap)?;

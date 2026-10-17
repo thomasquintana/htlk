@@ -9,7 +9,7 @@ pub fn implementation_digest() -> Digest {
     let sources:&[&[u8]]=&[
         model.as_bytes(),
         include_bytes!("implementation.rs"),include_bytes!("lib.rs"),include_bytes!("analyzed.rs"),
-        include_bytes!("error.rs"),include_bytes!("context.rs"),include_bytes!("linkage.rs"),include_bytes!("linked.rs"),
+        include_bytes!("error.rs"),include_bytes!("context.rs"),include_bytes!("diagnostic.rs"),include_bytes!("regex.rs"),include_bytes!("linkage.rs"),include_bytes!("linked.rs"),
         include_bytes!("binding_validation.rs"),include_bytes!("graph_verify.rs"),
         include_bytes!("structure.rs"),include_bytes!("type_check.rs"),
         include_bytes!("native_schema.rs"),include_bytes!("schema_catalog.rs"),include_bytes!("schema_hints.rs"),

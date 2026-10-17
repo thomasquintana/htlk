@@ -61,3 +61,11 @@ generator. Editing the graph model's diagnostic source changes the core,
 schema-validator, and URI-template implementation identities and the envelope
 fingerprint. The regex identity, root-scope digest, policy, graph wire bytes,
 and existing wire-format goldens remain unchanged.
+
+Analyzer completion refreshes the fixture for policy-aware regex admission,
+schema-root/structural hints, located reports and final retained-plan checks. The
+regex identity now includes the analyzer contribution that owns shared compilation
+rules. The independent checker explicitly covers the new diagnostic/regex modules.
+Model pointer lookup changes also contribute to native identities. Regeneration
+changes profile digests and the envelope fingerprint, while the empty root scope,
+policy and existing canonical record goldens retain their identities.

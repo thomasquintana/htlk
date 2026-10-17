@@ -810,3 +810,102 @@ fn canonical_construction_order_is_irrelevant_and_unused_documents_are_rejected(
         matches!(verify_executable(&bytes(extra),&registry,&limits),Err(Error::Analysis(error)) if matches!(*error,htlk_analyzer::DocumentAnalysisError::Linkage(ref cause) if matches!(**cause,htlk_analyzer::LinkageError::UnreachableRecord(_))))
     );
 }
+
+#[test]
+fn runtime_admission_rejects_regex_literals_before_checked_execution() {
+    use htlk_analyzer::{DocumentAnalysisError, ExpressionTypeError, RegexError};
+    let limits = Limits::default();
+    let mut root = scope().fields().clone();
+    let mut node = root.nodes[0].fields().clone();
+    node.operation = Operation::Eval(
+        Expression::new(
+            E::Call {
+                function: htlk_executable::FunctionId::Core(htlk_executable::CoreFunction::Present),
+                arguments: vec![
+                    Expression::new(
+                        E::Regex {
+                            pattern: "(?=PRIVATE_PATTERN)".into(),
+                            flags: "".into(),
+                        },
+                        &limits,
+                    )
+                    .unwrap(),
+                ],
+            },
+            &limits,
+        )
+        .unwrap(),
+    );
+    root.nodes[0] = Node::new(node, &limits).unwrap();
+    let document =
+        CanonicalDocument::new(fields(Scope::new(root, &limits).unwrap()), &limits).unwrap();
+    let encoded = document.envelope(&limits).unwrap().encode(&limits).unwrap();
+    let registry = registry();
+    let failure = verify_executable(&encoded, &registry, &limits)
+        .err()
+        .unwrap();
+    let Error::Analysis(ref error) = failure else {
+        panic!()
+    };
+    let DocumentAnalysisError::Graph(cause) = error.as_ref() else {
+        panic!()
+    };
+    assert_eq!(cause.cause.expression_path, Some(vec![0]));
+    assert_eq!(
+        cause.cause.kind,
+        ScopeVerificationErrorKind::Expression(Box::new(ExpressionTypeError::Regex(
+            RegexError::Syntax
+        )))
+    );
+    let report = error.diagnostic(&document, &limits).unwrap();
+    assert_eq!(report.code, "C_REGEX");
+    report
+        .location
+        .pointer
+        .resolve_value(&document.to_value(&limits).unwrap())
+        .unwrap();
+    assert!(!format!("{failure:?}").contains("PRIVATE_PATTERN"));
+}
+
+#[test]
+fn runtime_admission_preserves_analyzer_conditional_writer_reports() {
+    let limits = Limits::default();
+    let guard = Expression::new(
+        E::Ref {
+            source: ValueReference::Input("flag".parse().unwrap()),
+            path: vec![],
+        },
+        &limits,
+    )
+    .unwrap();
+    let root = Scope::new(
+        ScopeFields {
+            inputs: ports(&["flag"]),
+            outputs: ports(&["result"]),
+            edges: ["a", "b"]
+                .into_iter()
+                .map(|id| {
+                    Edge::new(
+                        id.parse().unwrap(),
+                        S::Input("flag".parse().unwrap()),
+                        D::Output("result".parse().unwrap()),
+                    )
+                    .with_guard(guard.clone())
+                })
+                .collect(),
+            ..Default::default()
+        },
+        &limits,
+    )
+    .unwrap();
+    let registry = registry();
+    let encoded = bytes(fields(root));
+    let verified = verify_executable(&encoded, &registry, &limits).unwrap();
+    assert_eq!(
+        verified.analysis().diagnostics()[0].code,
+        "W_CONDITIONAL_WRITERS"
+    );
+    assert!(
+        verified.graphs().plan(&ScopeUse::Root).unwrap().bindings()[0].needs_uniqueness_check()
+    );
+}

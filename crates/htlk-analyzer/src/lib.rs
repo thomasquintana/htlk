@@ -7,6 +7,7 @@ use htlk_executable::*;
 mod analyzed;
 mod binding_validation;
 mod context;
+mod diagnostic;
 mod error;
 mod graph_verify;
 mod implementation;
@@ -14,6 +15,7 @@ mod linkage;
 mod linked;
 mod mcp_protocol;
 mod native_schema;
+mod regex;
 mod schema_catalog;
 mod schema_hints;
 mod schema_locations;
@@ -26,6 +28,7 @@ pub use analyzed::{AnalyzedDocument, DocumentAnalysisError, analyze_document};
 pub use context::check_expression_context;
 pub use context::check_function_signature;
 pub use context::check_prompt_template;
+pub use diagnostic::{AnalysisDiagnostic, AnalysisLocation, DiagnosticSeverity, LinkageDiagnostic};
 pub use error::LinkageError;
 pub use graph_verify::{
     BindingPlan, EdgeBoundaryPlan, ExpressionSite, GraphVerification, GraphVerificationError,
@@ -41,6 +44,7 @@ pub use native_schema::{
     NativeSchemaDiagnostic, NativeSchemaError, NativeSchemaOptions, NativeSchemas,
     SchemaDiagnosticLocation,
 };
+pub use regex::{RegexError, RegexOptions, validate_regex};
 pub use schema_catalog::{
     ResolvedSchema, SchemaCatalog, SchemaClosure, SchemaReference, SchemaReferenceKind,
 };
@@ -51,8 +55,8 @@ pub use structure::{StructuralLimit, StructuralSummary};
 pub use type_check::CallbackCompatibility;
 pub use type_check::callback_compatibility;
 pub use type_check::{
-    ExpressionAnalysis, ExpressionCallType, ExpressionCallbackType, ExpressionDiagnostic,
-    ExpressionNodeType, ExpressionTypeEnvironment, ExpressionTypeError, RuntimeTypeCheck,
-    RuntimeTypeCheckKind, check_condition, check_expression, check_expression_diagnostic,
-    check_expression_with_schemas,
+    ExpressionAnalysis, ExpressionAnalysisOptions, ExpressionCallType, ExpressionCallbackType,
+    ExpressionDiagnostic, ExpressionNodeType, ExpressionTypeEnvironment, ExpressionTypeError,
+    RuntimeTypeCheck, RuntimeTypeCheckKind, check_condition, check_expression,
+    check_expression_diagnostic, check_expression_with_options, check_expression_with_schemas,
 };

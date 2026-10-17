@@ -28,6 +28,15 @@ pub struct ExpressionTypeEnvironment {
     pub templates: BTreeMap<Digest, PromptTemplate>,
 }
 
+/// Focused semantic backend controls; whole-document checks use policy ceilings.
+#[derive(Clone, Copy, Default)]
+pub struct ExpressionAnalysisOptions<'a> {
+    /// Immutable schemas for conservative refinement and original-root projection.
+    pub schemas: Option<&'a crate::NativeSchemas>,
+    /// Literal regex compiler ceilings.
+    pub regex: crate::RegexOptions,
+}
+
 /// Actual-value checks required where static types cannot establish compatibility.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeTypeCheckKind {
@@ -239,7 +248,7 @@ pub fn check_expression(
         context,
         environment,
         expected,
-        None,
+        ExpressionAnalysisOptions::default(),
         limits,
         None,
     )
@@ -257,13 +266,38 @@ pub fn check_expression_diagnostic(
     schemas: Option<&crate::NativeSchemas>,
     limits: &Limits,
 ) -> Result<ExpressionAnalysis, ExpressionDiagnostic> {
+    check_expression_with_options(
+        expression,
+        context,
+        environment,
+        expected,
+        ExpressionAnalysisOptions {
+            schemas,
+            ..Default::default()
+        },
+        limits,
+    )
+}
+
+/// Checks every expression branch with explicit immutable backend controls.
+///
+/// # Errors
+/// Returns located static failures or finite inference/backend limit failures.
+pub fn check_expression_with_options(
+    expression: &Expression,
+    context: ExpressionContext,
+    environment: &ExpressionTypeEnvironment,
+    expected: Option<&Port>,
+    options: ExpressionAnalysisOptions<'_>,
+    limits: &Limits,
+) -> Result<ExpressionAnalysis, ExpressionDiagnostic> {
     let mut location = None;
     analyze_expression(
         expression,
         context,
         environment,
         expected,
-        schemas,
+        options,
         limits,
         Some(&mut location),
     )
@@ -313,7 +347,10 @@ pub fn check_expression_with_schemas(
         context,
         environment,
         expected,
-        Some(schemas),
+        ExpressionAnalysisOptions {
+            schemas: Some(schemas),
+            ..Default::default()
+        },
         limits,
         None,
     )
@@ -323,7 +360,7 @@ fn analyze_expression(
     context: ExpressionContext,
     environment: &ExpressionTypeEnvironment,
     expected: Option<&Port>,
-    schemas: Option<&crate::NativeSchemas>,
+    options: ExpressionAnalysisOptions<'_>,
     limits: &Limits,
     diagnostic: Option<&mut Option<Vec<usize>>>,
 ) -> Result<ExpressionAnalysis, ExpressionTypeError> {
@@ -349,7 +386,9 @@ fn analyze_expression(
         operations: Vec::new(),
         deferred: Vec::new(),
         combined_limit: None,
-        schemas,
+        schemas: options.schemas,
+        regex: options.regex,
+        regex_literals: BTreeSet::new(),
         diagnostic,
     };
     let result = checker.infer(expression, &[], 0)?;
@@ -469,14 +508,16 @@ fn analyze_expression(
     }
     calls.sort_unstable_by(|a, b| a.expression_path.cmp(&b.expression_path));
     let projection_roots = projection_origins(expression, &nodes, &mut checker)?;
-    Ok(ExpressionAnalysis {
+    let analysis = ExpressionAnalysis {
         result,
         boundary: expected.map(|port| checker.copy_port(port)).transpose()?,
         nodes,
         checks,
         calls,
         projection_roots,
-    })
+    };
+    analysis.stored_size(limits)?;
+    Ok(analysis)
 }
 /// Checks a guard/contract as Boolean while retaining any required presence checks.
 ///
@@ -702,6 +743,8 @@ pub fn callback_compatibility(
         deferred: Vec::new(),
         combined_limit: Some(usize::try_from(remaining).unwrap_or(usize::MAX)),
         schemas: None,
+        regex: crate::RegexOptions::default(),
+        regex_literals: BTreeSet::new(),
         diagnostic: None,
     };
     let result = checker.compatible(actual, expected, 0);
@@ -754,6 +797,8 @@ struct Checker<'a> {
     deferred: Vec<(T, T, usize)>,
     combined_limit: Option<usize>,
     schemas: Option<&'a crate::NativeSchemas>,
+    regex: crate::RegexOptions,
+    regex_literals: BTreeSet<(String, String)>,
     diagnostic: Option<&'a mut Option<Vec<usize>>>,
 }
 impl Checker<'_> {
@@ -1040,7 +1085,16 @@ impl Checker<'_> {
                 L::Null => P::Null,
                 L::Bytes(_) => P::Bytes,
             })),
-            E::Regex { .. } => Ok(required(P::Regex)),
+            E::Regex { pattern, flags } => {
+                self.account(pattern.len().saturating_add(size_of::<(String, String)>()))?;
+                let key = (pattern.clone(), flags.clone());
+                if !self.regex_literals.contains(&key) {
+                    crate::validate_regex(pattern, flags, self.regex)
+                        .map_err(ExpressionTypeError::Regex)?;
+                    self.regex_literals.insert(key);
+                }
+                Ok(required(P::Regex))
+            }
             E::Ref {
                 source,
                 path: steps,
@@ -1094,6 +1148,34 @@ impl Checker<'_> {
     ) -> Result<Port, ExpressionTypeError> {
         let child = self.child(path, 0)?;
         let mut port = self.infer(value, &child, depth + 1)?;
+        // Schema-origin metadata on one constructed member does not make the
+        // authored record itself schema-open. Check known constructor layers
+        // before allowing dynamic fields on schema-derived structural hints.
+        let mut syntax = value;
+        for step in steps {
+            match (syntax.kind(), step) {
+                (E::Record(fields), PathStep::Field(name)) => {
+                    self.account(
+                        fields
+                            .iter()
+                            .map(|(key, _)| key.len().saturating_add(1))
+                            .sum(),
+                    )?;
+                    syntax = fields
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, e)| e)
+                        .ok_or(ExpressionTypeError::InvalidProjection)?;
+                }
+                (E::List(items), PathStep::Index(index)) => {
+                    let Some(item) = usize::try_from(*index).ok().and_then(|i| items.get(i)) else {
+                        break;
+                    };
+                    syntax = item;
+                }
+                _ => break,
+            }
+        }
         if let K::Schema(schema) = port.value_type().kind()
             && !steps.is_empty()
             && self.schemas.is_some()
@@ -1650,6 +1732,9 @@ impl Checker<'_> {
                         optional |= !p.required();
                     } else {
                         optional = true;
+                        if *schema_context {
+                            projected.push(T::builtin(P::Json));
+                        }
                     }
                 }
                 (K::Map(t), PathStep::Field(_)) | (K::List(t), PathStep::Index(_)) => {
@@ -1685,11 +1770,12 @@ impl Checker<'_> {
                             step: step.clone(),
                         },
                     )?;
-                    projected.push(match self.schemas {
-                        Some(schemas) => schemas
-                            .projection_type(id, std::slice::from_ref(step), self.limits)
-                            .map_err(|e| ExpressionTypeError::Schema(Box::new(e)))?,
-                        None => T::builtin(P::Json),
+                    projected.push(if self.schemas.is_some() {
+                        self.schema_hint(*id, std::slice::from_ref(step))?
+                            .value_type()
+                            .clone()
+                    } else {
+                        T::builtin(P::Json)
                     });
                     optional = true;
                 }
@@ -1719,12 +1805,8 @@ impl Checker<'_> {
         path: &[usize],
     ) -> Result<Port, ExpressionTypeError> {
         self.step(path.len())?;
-        let ty = self
-            .schemas
-            .expect("schema-aware analysis")
-            .projection_type(&schema, steps, self.limits)
-            .map_err(|e| ExpressionTypeError::Schema(Box::new(e)))?;
-        self.charge_type(&ty)?;
+        let port = self.schema_hint(schema, steps)?;
+        self.charge_type(port.value_type())?;
         self.add_check(
             path,
             RuntimeTypeCheckKind::SchemaProjection {
@@ -1732,7 +1814,30 @@ impl Checker<'_> {
                 step: steps[0].clone(),
             },
         )?;
-        Ok(Port::new(ty, false))
+        Ok(port)
+    }
+    fn schema_hint(
+        &mut self,
+        schema: Digest,
+        steps: &[PathStep],
+    ) -> Result<Port, ExpressionTypeError> {
+        let mut limits = self.limits.clone();
+        limits.max_document_bytes = limits.max_document_bytes.saturating_sub(self.bytes);
+        let (port, work) = self
+            .schemas
+            .expect("schema-aware analysis")
+            .projection_hint(&schema, steps, &limits)
+            .map_err(|e| ExpressionTypeError::Schema(Box::new(e)))?;
+        self.account(work)?;
+        Ok(port)
+    }
+    fn refined_families(&mut self, ty: &T) -> Result<u16, ExpressionTypeError> {
+        if let K::Schema(id) = ty.kind()
+            && self.schemas.is_some()
+        {
+            return Ok(families(self.schema_hint(*id, &[])?.value_type()));
+        }
+        Ok(families(ty))
     }
     fn builtin_record(&mut self, builtin: P) -> Result<T, ExpressionTypeError> {
         self.step(0)?;
@@ -1779,7 +1884,7 @@ impl Checker<'_> {
                 Match::Never
             });
         }
-        if families(actual) & families(expected) == 0 {
+        if self.refined_families(actual)? & self.refined_families(expected)? == 0 {
             return Ok(Match::Never);
         }
         match (actual.kind(), expected.kind()) {
@@ -2001,6 +2106,8 @@ fn allocation(_: std::collections::TryReserveError) -> ExpressionTypeError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExpressionTypeError {
+    /// Literal regex syntax or compiler ceiling failure.
+    Regex(crate::RegexError),
     /// Location-preserving native schema refinement admission failed.
     Schema(Box<crate::NativeSchemaError>),
     /// Codec failure.
@@ -2074,12 +2181,35 @@ impl fmt::Display for ExpressionTypeError {
 impl std::error::Error for ExpressionTypeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Regex(e) => Some(e),
             Self::Schema(e) => Some(e.as_ref()),
             Self::Codec(e) => Some(e),
             Self::Expression(e) => Some(e),
             Self::Type(e) => Some(e),
             Self::Metadata(e) => Some(e),
             _ => None,
+        }
+    }
+}
+
+impl ExpressionTypeError {
+    /// Specification diagnostic family for this expression admission failure.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Regex(_) => "C_REGEX",
+            Self::Schema(_) => "C_SCHEMA",
+            Self::UnknownReference | Self::UnknownOutcome => "C_NAME",
+            Self::UnknownLibrary
+            | Self::UnknownFunction
+            | Self::Metadata(_)
+            | Self::IdentityMismatch => "C_LIBRARY",
+            Self::UnknownTemplate => "C_PROMPT",
+            Self::Expression(_) => "C_SCOPE",
+            Self::Codec(_)
+            | Self::LimitExceeded { .. }
+            | Self::AllocationFailed
+            | Self::InferenceLimit => "C_SERIALIZATION",
+            _ => "C_TYPE",
         }
     }
 }

@@ -226,3 +226,21 @@ fn maximum_depth_lookup_is_iterative_and_borrowed() {
         })
     ));
 }
+#[test]
+fn canonical_native_wire_views_allow_byte_string_leaves() {
+    use htlk_executable::cbor::{Map, Value};
+    let limits = Limits::default();
+    let value =
+        Value::Map(Map::try_from_entries([("payload".into(), Value::Bytes(vec![0xf6]))]).unwrap());
+    let leaf = htlk_executable::JsonPointer::new("/payload", &limits).unwrap();
+    assert_eq!(
+        leaf.resolve_value(&value).unwrap(),
+        &Value::Bytes(vec![0xf6])
+    );
+    assert!(matches!(
+        htlk_executable::JsonPointer::new("/payload/0", &limits)
+            .unwrap()
+            .resolve_value(&value),
+        Err(htlk_executable::JsonPointerError::ScalarTraversal { segment: 1 })
+    ));
+}

@@ -34,6 +34,24 @@ Tasks 1–7 are implemented and covered by component and composed verification t
 Runtime's `VerifiedExecutable` additionally pins host policy and the native registry
 and borrows admitted execution plans without per-evaluation plan copying.
 
+### Analyzer completion audit
+
+The Draft 0.1 follow-up audit closed gaps hidden by the original checklist:
+
+| Specification obligation | Implementation | Verification evidence |
+| --- | --- | --- |
+| Compiler §4.2 literal regex admission | Shared bounded `validate_regex`; policy-aware document analysis | Analyzer `completion`/`analyzed`, runtime `verified` |
+| Compiler §§3.1, 5 known-disjoint boundary rejection | Root-schema refinement and schema-aware whole-port edges | Analyzer `completion`, runtime `schema_projection` |
+| Compiler §3.1 simple structural projection | Named fields/requiredness and homogeneous item hints, conservative complex fallback | Analyzer `completion`, runtime `schema_projection` |
+| Compiler §10 canonical diagnostics | Located early linkage, graph child/use pointers, related declarations and specification codes | Analyzer `analyzed`, executable `json_pointer` |
+| Compiler §10 conditional-writer warnings | Immutable reports, bounded complement/distinct-equality recognition, runtime uniqueness retained | Analyzer `analyzed`, runtime `verified` |
+| Compiler §3.1 finite derived analysis | Final focused-plan check, enclosing hint-work accounting, bounded report locations | Analyzer `completion`, existing graph amplification/controlled-stack suites |
+
+Direct `analyze_document` tests also cover immutable document ownership, policy regex
+ceilings, loop-until owner locations, and external schema document/inner-pointer
+failures. These reports are sidecars; native source-derived identities and the fixed
+fixture are refreshed through the established generator and independent checker.
+
 ### 1. Finish schema admission and validation
 
 - [x] Enforce callable input/output **object-root** constraints: accept a direct

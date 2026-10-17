@@ -114,7 +114,15 @@ impl JsonPointer {
     /// Returns missing target, invalid array index, or scalar-traversal errors.
     /// A present JSON null is a successful result, never a missing target.
     pub fn resolve<'a>(&self, document: &'a JsonDocument) -> Result<&'a Value, JsonPointerError> {
-        let mut current = document.value();
+        self.resolve_value(document.value())
+    }
+    /// Resolves a canonical record location in an already bounded native wire view.
+    /// Byte strings are valid leaf values, including external JSON document bytes.
+    ///
+    /// # Errors
+    /// Returns missing target, invalid array index, or scalar-traversal errors.
+    pub fn resolve_value<'a>(&self, value: &'a Value) -> Result<&'a Value, JsonPointerError> {
+        let mut current = value;
         for (segment, token) in self.tokens.iter().enumerate() {
             current = match current {
                 Value::Map(m) => m

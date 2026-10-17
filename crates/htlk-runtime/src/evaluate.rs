@@ -681,17 +681,18 @@ pub(crate) fn compile_regex(
     // Reserve the configured compiler-size allowance before native work;
     // this deterministic upper-bound charge is independent of caches.
     meter.charge(meter.policy.max_regex_compiled_bytes)?;
-    regex::RegexBuilder::new(pattern)
-        .case_insensitive(flags.contains('i'))
-        .multi_line(flags.contains('m'))
-        .dot_matches_new_line(flags.contains('s'))
-        .size_limit(compiled_limit)
-        .dfa_size_limit(compiled_limit)
-        .build()
-        .map_err(|e| match e {
-            regex::Error::CompiledTooBig(_) => EvaluationError::Limit("regex compiled bytes"),
-            _ => EvaluationError::Regex,
-        })?;
+    htlk_analyzer::validate_regex(
+        pattern,
+        flags,
+        htlk_analyzer::RegexOptions {
+            max_pattern_bytes: usize::try_from(meter.policy.max_regex_bytes).unwrap_or(usize::MAX),
+            max_compiled_bytes: compiled_limit,
+        },
+    )
+    .map_err(|e| match e {
+        htlk_analyzer::RegexError::CompiledLimit => EvaluationError::Limit("regex compiled bytes"),
+        _ => EvaluationError::Regex,
+    })?;
     Ok(())
 }
 #[inline(never)]
