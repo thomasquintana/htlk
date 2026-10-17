@@ -854,8 +854,31 @@ binding, server) and hashes the raw `htlk.<kind>/0.1\n` prefix plus canonical CB
 It validates encoding limits, not arbitrary supplied record schemas. Library
 identities and external JSON documents retain their separate digest rules.
 
-`GraphRecordError` retains codec/type/expression/option causes and static structural
-diagnostics without copying input names or values into error messages. Tests cover
+`GraphRecordError` covers model representation and local invariant failures plus
+selected semantic failures produced by analysis. Scope-role legality and local
+endpoint membership are analyzer work. `InvalidScopeRole` deliberately gives a
+general explanation: ordinary scopes cannot declare carried values or use
+carried/next endpoints; loop bodies require empty scope limits and literal-true
+scope preconditions and postconditions. The unit variant does not identify which
+rule failed.
+
+Resource failures may appear directly or through wrapped codec, type, expression,
+or execution-option errors. Inspect structured variants and `Error::source()`
+chains (including original codec offsets), rather than parsing Display text.
+For example, `InvalidPorts("wait request input")` displays “A wait node must have
+exactly one input named request, declared as required JSON.” The shared primitive
+output diagnostic describes all applicable rules: Eval permits an optional value
+output, whereas MCP and wait require it. `UnknownField` identifies the record
+category, not the submitted field name; `UnknownOperation` concerns a canonical
+operation tag, not linked library or MCP binding lookup.
+
+Validation-produced errors retain fixed schema terms without copying submitted
+names, topics, expressions, regex patterns, or payloads into Display or Debug.
+Public string-bearing variants accept consumer-supplied descriptions; unrecognized
+descriptions get generic Display prose but remain available through Debug and
+structured inspection. Execution-option failures retain their source error;
+graph Display gives resource details or general execution-limit/retry context.
+Tests cover
 exact empty-scope bytes, all five record domains, primitive layouts, endpoint and
 ordering errors, and whole-scope embedded expression depth/failure cleanup.
 

@@ -11,8 +11,16 @@ use crate::{
     TypeError, ValueTypeKind,
 };
 
-/// Canonical graph-record shape, local linkage, context, or conversion failure.
-/// Names/descriptions carried by errors are fixed schema terms, not input data.
+/// Graph model representation/local invariant failures and selected semantic
+/// failures produced by analysis. Scope-role and endpoint-membership checks belong
+/// to the analyzer, not model construction or codecs.
+///
+/// Resource failures may occur directly or through codec, type, expression, or
+/// execution-option causes. Inspect structured variants and [`std::error::Error::source`]
+/// chains rather than parsing Display text.
+/// Validation-produced descriptions are fixed schema terms, not submitted data.
+/// Unrecognized consumer-supplied descriptions receive generic Display prose;
+/// Debug and structured inspection still expose those descriptions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GraphRecordError {
@@ -40,7 +48,9 @@ pub enum GraphRecordError {
     InvalidBound(&'static str),
     /// A node uses a reserved expression root as its name.
     ReservedNodeName,
-    /// Ordinary/loop-body structural requirements are violated.
+    /// Analysis found an incompatible scope use role. Ordinary scopes cannot
+    /// declare carried values or use carried/next endpoints. Loop bodies must
+    /// have empty scope limits and literal-true preconditions and postconditions.
     InvalidScopeRole,
     /// A local node or edge ID occurs more than once.
     DuplicateId(&'static str),
@@ -86,27 +96,86 @@ impl From<EncodingLimitError> for GraphRecordError {
 impl fmt::Display for GraphRecordError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Codec(e) => write!(f, "graph record: {e}"),
-            Self::Identifier(e) => write!(f, "graph identifier: {e}"),
-            Self::Digest(e) => write!(f, "graph digest: {e}"),
-            Self::Type(e) => write!(f, "graph port: {e}"),
-            Self::Expression(e) => write!(f, "graph expression: {e}"),
-            Self::Options(e) => write!(f, "graph options: {e}"),
-            Self::InvalidShape(site) => write!(f, "invalid graph record shape: {site}"),
-            Self::MissingField(field) => write!(f, "missing graph record field: {field}"),
-            Self::UnknownField(record) => write!(f, "unknown field in graph record: {record}"),
-            Self::UnknownOperation => f.write_str("unknown canonical operation"),
-            Self::InvalidBound(field) => write!(f, "graph bound must be in 1..=i64::MAX: {field}"),
-            Self::ReservedNodeName => f.write_str("reserved root cannot name a node"),
-            Self::InvalidScopeRole => f.write_str("invalid ordinary/loop-body scope structure"),
-            Self::DuplicateId(kind) => write!(f, "duplicate local {kind} ID"),
-            Self::NonCanonicalOrder(kind) => write!(f, "noncanonical {kind} ID order"),
-            Self::UnknownEndpoint(site) => write!(f, "undeclared local graph endpoint: {site}"),
-            Self::InvalidPorts(site) => write!(f, "invalid operation ports: {site}"),
-            Self::LimitExceeded { limit, maximum } => {
-                write!(f, "graph conversion limit exceeded: {limit:?} ({maximum})")
-            }
-            Self::AllocationFailed => f.write_str("graph record allocation failed"),
+            Self::Codec(e) => write!(f, "Could not process the graph record's CBOR representation: {e}"),
+            Self::Identifier(e) => write!(f, "Could not process a graph identifier: {e}"),
+            Self::Digest(e) => write!(f, "A graph digest is invalid: {e}."),
+            Self::Type(e) => write!(f, "Could not process a graph port or type: {e}"),
+            Self::Expression(e) => write!(f, "Could not process a graph expression: {e}"),
+            Self::Options(ExecutionOptionsError::Codec(e)) => write!(f, "Could not process the graph's execution limits or retry policy: {e}"),
+            Self::Options(ExecutionOptionsError::LimitExceeded { limit: LimitKind::DocumentBytes, maximum }) => write!(f, "The graph's execution limits or retry policy exceeds the configured maximum of {maximum} bytes."),
+            Self::Options(ExecutionOptionsError::LimitExceeded { limit: LimitKind::Depth, maximum }) => write!(f, "The graph's execution limits or retry policy exceeds the configured maximum nesting depth of {maximum}."),
+            Self::Options(_) => f.write_str("Could not process the graph's execution limits or retry policy. Inspect the source error for details."),
+            Self::InvalidShape(site) => f.write_str(match *site {
+                "identifier" => "A graph identifier must be text.",
+                "digest" => "A graph digest must be text.",
+                "constructor arity" => "The tagged graph array has an incorrect number of elements.",
+                "port table" => "Port declarations must be a map of names to ports.",
+                "source" => "An edge source must be a nonempty tagged array.",
+                "destination" => "An edge destination must be a nonempty tagged array.",
+                "source tag" => "An edge source tag must be input, output, or carried.",
+                "destination tag" => "An edge destination tag must be output, input, or next.",
+                "operation" => "A node operation must be an array.",
+                "operation tag" => "A node operation must begin with a text operation tag.",
+                "wait topic" => "A wait topic must be text.",
+                "loop initializers" => "Loop initializers must be a map from carried value names to input names.",
+                "edge" => "An edge record must be a map.",
+                "node" => "A node record must be a map.",
+                "scope" => "A scope record must be a map.",
+                "nodes" => "Node declarations must be an array.",
+                "edges" => "Edge declarations must be an array.",
+                _ => "The graph record has an invalid shape.",
+            }),
+            Self::MissingField(field) => match *field {
+                "destination" | "guard" | "id" | "source" | "inputs" | "limits"
+                | "operation" | "outputs" | "postconditions" | "preconditions"
+                | "carried" | "edges" | "nodes" => write!(f, "The graph record is missing the required {field} field."),
+                _ => f.write_str("The graph record is missing a required field."),
+            },
+            Self::UnknownField(record) => f.write_str(match *record {
+                "edge" => "The edge record contains a field that is not permitted.",
+                "node" => "The node record contains a field that is not permitted.",
+                "scope" => "The scope record contains a field that is not permitted.",
+                _ => "The graph record contains a field that is not permitted.",
+            }),
+            Self::UnknownOperation => f.write_str("The operation tag is missing or is not a recognized canonical operation tag."),
+            Self::InvalidBound(field) => f.write_str(match *field {
+                "timeout_ms" => "The wait timeout must be an integer from 1 through 9223372036854775807 milliseconds.",
+                "max_iterations" => "The loop iteration maximum must be an integer from 1 through 9223372036854775807.",
+                _ => "The graph bound must be an integer from 1 through 9223372036854775807.",
+            }),
+            Self::ReservedNodeName => f.write_str("A node name must not use a reserved expression root or function name."),
+            Self::InvalidScopeRole => f.write_str("The scope's declarations, endpoints, limits, or contracts are incompatible with its use role."),
+            Self::DuplicateId(kind) => f.write_str(match *kind {
+                "node" => "Node declarations must have unique local IDs.",
+                "edge" => "Edge declarations must have unique local IDs.",
+                _ => "Graph declarations must have unique local IDs within their category.",
+            }),
+            Self::NonCanonicalOrder(kind) => f.write_str(match *kind {
+                "node" => "Node declarations must be sorted by their local IDs.",
+                "edge" => "Edge declarations must be sorted by their local IDs.",
+                _ => "Graph declarations must be sorted by their local IDs.",
+            }),
+            Self::UnknownEndpoint(site) => f.write_str(match *site {
+                "source node" => "The edge refers to an undeclared source node.",
+                "destination node" => "The edge refers to an undeclared destination node.",
+                "source output" => "The edge refers to an undeclared output on its source node.",
+                "destination input" => "The edge refers to an undeclared input on its destination node.",
+                "scope input" => "The edge refers to an undeclared scope input.",
+                "scope output" => "The edge refers to an undeclared scope output.",
+                "carried source" => "The edge source refers to an undeclared loop-carried value.",
+                "next destination" => "The edge's next-value destination refers to an undeclared loop-carried value.",
+                "loop initializer input" => "A loop initializer refers to an undeclared input on the loop node.",
+                _ => "A graph reference does not identify a declared local endpoint.",
+            }),
+            Self::InvalidPorts(site) => f.write_str(match *site {
+                "primitive value output" => "An Eval, MCP, or wait node must have exactly one output named value; MCP and wait nodes must declare it as required.",
+                "wait request input" => "A wait node must have exactly one input named request, declared as required JSON.",
+                "MCP arguments input" => "An MCP node must have no inputs or exactly one required input named arguments.",
+                _ => "The node's ports do not match its operation's requirements.",
+            }),
+            Self::LimitExceeded { limit: LimitKind::DocumentBytes, maximum } => write!(f, "The graph record exceeds the configured maximum of {maximum} bytes."),
+            Self::LimitExceeded { limit: LimitKind::Depth, maximum } => write!(f, "The graph record exceeds the configured maximum nesting depth of {maximum}."),
+            Self::AllocationFailed => f.write_str("Memory could not be allocated for the graph record."),
         }
     }
 }

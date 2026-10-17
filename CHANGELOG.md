@@ -46,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Graph-record diagnostics now explain representation, port-layout, ordering,
+  endpoint, scope-role, and resource failures in user-facing prose, with generic
+  fallbacks for unrecognized public descriptions. Structured errors, source chains,
+  validation precedence, and context-free model APIs are preserved. Refresh the
+  source-derived native implementation identities and fixture fingerprint; graph
+  wire bytes and record digests for unchanged data remain unchanged.
 - Type errors now explain schema shapes, canonicality, signature restrictions,
   and byte/depth ceilings in user-facing prose without exposing submitted data.
   Resource-limit classification is documented for both conversion and codec errors.

@@ -55,3 +55,9 @@ core, schema-validator, and URI-template implementation identities and therefore
 the envelope fingerprint. The regex identity, root-scope digest, policy, and graph
 contents remain unchanged. Graph record encodings and digests are independent of
 use-site roles; the existing wire-format goldens are retained.
+
+The graph-diagnostic prose cleanup refreshes this fixture through the same
+generator. Editing the graph model's diagnostic source changes the core,
+schema-validator, and URI-template implementation identities and the envelope
+fingerprint. The regex identity, root-scope digest, policy, graph wire bytes,
+and existing wire-format goldens remain unchanged.

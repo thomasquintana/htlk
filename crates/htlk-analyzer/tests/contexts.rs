@@ -198,7 +198,7 @@ fn local_endpoint_membership_is_checked_even_for_false_guards() {
             Edge::new(
                 "bad".parse().unwrap(),
                 EdgeSource::Output {
-                    node: "missing".parse().unwrap(),
+                    node: "secret_missing".parse().unwrap(),
                     port: "value".parse().unwrap(),
                 },
                 EdgeDestination::Output("q".parse().unwrap()),
@@ -207,10 +207,16 @@ fn local_endpoint_membership_is_checked_even_for_false_guards() {
         ],
         ..ScopeFields::default()
     };
-    assert!(matches!(
-        verify(bad, ScopeContext::Ordinary).unwrap_err().kind,
-        ScopeVerificationErrorKind::Graph(GraphRecordError::UnknownEndpoint("source node"))
-    ));
+    let error = verify(bad, ScopeContext::Ordinary).unwrap_err();
+    assert!(!format!("{error:?}").contains("secret_missing"));
+    let ScopeVerificationErrorKind::Graph(error) = error.kind else {
+        panic!()
+    };
+    assert_eq!(error, GraphRecordError::UnknownEndpoint("source node"));
+    assert_eq!(
+        error.to_string(),
+        "The edge refers to an undeclared source node."
+    );
     let mut node = NodeFields::new(
         "worker".parse().unwrap(),
         Operation::Eval(Expression::literal(ScalarLiteral::String("x".into()))),
@@ -246,12 +252,15 @@ fn loop_role_contracts_and_initializer_membership_are_semantic() {
         ..ScopeFields::default()
     };
     assert!(verify(body.clone(), ScopeContext::LoopBody).is_ok());
-    assert!(matches!(
-        verify(body.clone(), ScopeContext::Ordinary)
-            .unwrap_err()
-            .kind,
-        ScopeVerificationErrorKind::Graph(GraphRecordError::InvalidScopeRole)
-    ));
+    let error = verify(body.clone(), ScopeContext::Ordinary).unwrap_err();
+    let ScopeVerificationErrorKind::Graph(error) = error.kind else {
+        panic!()
+    };
+    assert_eq!(error, GraphRecordError::InvalidScopeRole);
+    assert_eq!(
+        error.to_string(),
+        "The scope's declarations, endpoints, limits, or contracts are incompatible with its use role."
+    );
     let mut bad = body.clone();
     bad.limits = ExecutionLimits::new().with_timeout_ms(1).unwrap();
     assert!(matches!(
