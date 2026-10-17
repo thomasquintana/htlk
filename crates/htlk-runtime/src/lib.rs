@@ -14,6 +14,7 @@ mod native_registry;
 pub mod records;
 mod runtime_type;
 mod schema_projection;
+pub mod store;
 mod uri_template;
 mod verified;
 

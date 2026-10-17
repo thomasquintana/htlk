@@ -19,8 +19,10 @@ the implemented `htlk-compiler`.
    configuration integration, typed runtime/content/artifact identities, immutable
    input manifests, trusted labels, lifecycle vocabulary and stable failure records.
    [Private record/hash contracts](runtime-records.md) document their boundaries.
-2. **Pending — Durable authority:** SQLite migrations, transactional records, fencing,
-   reconstructable journal, outbox, timers and idempotency receipts.
+2. **In progress — Durable authority:** SQLite identity/migration, WAL/FULL settings,
+   atomic run creation and fenced coordinator acquisition/renewal implemented.
+   General record transitions, journal/outbox delivery, reconstruction, timers and
+   receipts pending. [Storage boundary](runtime-storage.md) records current behavior.
 3. **Pending — Registration and runs:** immutable exact-byte registrations, trust,
    artifact ingress, input validation and atomic run creation.
 4. **Pending — Pure graph execution:** deterministic binding reduction, guard-first

@@ -19,8 +19,9 @@ the canonical prompt-template model. No scripting runtime is embedded.
 `htlk-analyzer` supplies shared semantic analysis and offline schema preparation.
 This crate owns `verify_executable`, `NativeRegistry`, native expression evaluation,
 callback dispatch, actual-value checks, runtime schema projections and enforcement
-of analyzer obligations. Registration transactions, deployment authorization,
-scheduling, persistence and live MCP I/O remain pending.
+of analyzer obligations. The `store` module supplies SQLite schema/ownership
+foundations with fenced leases, journal and outbox writes. Registration transactions,
+deployment authorization, scheduling and live MCP I/O remain pending.
 `htlk-executable::digest` supplies typed SHA-256 digests and hashing for future
 fingerprint checks and runtime identities, using consumer-defined preimages.
 Its `ExecutableEnvelope` API validates version-0.1 envelope fields, format,
@@ -37,6 +38,11 @@ are versioned and recheck frozen hashes against authoritative port declarations.
 `failure` supplies stable redacted error values and separate protected causes.
 The repository's `docs/runtime-records.md` defines private hash/checkpoint contracts.
 Transactional enforcement and artifact authorization remain coordinator work.
+
+`SqliteStore` is trusted infrastructure rather than the logical authenticated host
+API. File stores use WAL/FULL synchronization, reject incompatible databases, and
+commit run ownership with journal/outbox evidence. See `docs/runtime-storage.md`
+for the delivered storage boundary and its remaining coordinator integrations.
 
 ## Admission and checked execution
 

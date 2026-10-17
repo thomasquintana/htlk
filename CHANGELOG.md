@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add the trusted SQLite authority foundation with schema identity/version checks,
+  WAL/FULL durability, atomic run/journal/outbox creation and fenced coordinator leases.
 - Add immutable runtime input manifests and checked checkpoints, influence label
   sets, explicit host input variants, lifecycle/source states and stable failures.
   Input content hashes retain declarations and protection while excluding provenance.

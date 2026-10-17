@@ -86,3 +86,8 @@ Manifest/lifecycle and stable-failure records add `records.rs` and `failure.rs` 
 the core source coverage. Private input/request hashing is covered by `identity.rs`.
 The fixture is refreshed through the same generator; graph and policy records and
 the independent runtime identity vectors are unchanged.
+
+SQLite authority adds `store.rs` and `store.sql` to both explicit core source lists.
+The private schema is implementation data, not a portable executable graph table.
+Updating profile coverage changes core/regex/URI-template source digests; native
+schema, policy, root-scope bytes and runtime identity goldens are unchanged.
