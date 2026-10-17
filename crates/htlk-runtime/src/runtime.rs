@@ -88,6 +88,16 @@ pub enum Authorization<'a> {
         /// Normalized caller ceilings; an empty record inherits trusted defaults.
         limits: &'a htlk_executable::ExecutionLimits,
     },
+    /// Read protected data/control through a scope boundary, in addition to the
+    /// underlying artifact's independent authorization check.
+    ReadBoundary {
+        /// Actual target run.
+        run_id: &'a crate::identity::RunId,
+        /// Boundary instance, not an authored display path.
+        scope_instance_id: crate::identity::ScopeInstanceId,
+        /// Trusted conservative boundary/source protection.
+        labels: &'a SecurityLabels,
+    },
 }
 /// Trusted host policy. Implementations authenticate evidence and evaluate grants;
 /// ordinary graph data cannot implement or replace this policy. Registration trust

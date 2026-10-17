@@ -66,7 +66,8 @@ After ruling out an existing receipt:
 7. Reserve a unique run ID, prepare inline-input artifacts and freeze complete
    `InputManifest` entries. Artifact references retain their existing IDs/types.
 8. Evaluate the root precondition with the same checked evaluator and immutable
-   schemas/library registry. No child work or MCP request is started here.
+   schemas/library registry, through actual-read influence/boundary authorization.
+   No child work or MCP request is started here.
 9. Stage checked immutable inline bytes; staging alone accepts no value.
 10. In one transaction, recheck host idempotency and accepted input references,
     choose authoritative time, create run/root/input records, initialize usage and

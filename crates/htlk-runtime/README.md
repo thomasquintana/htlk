@@ -76,6 +76,11 @@ resolves a source for pending/conflicting/inactive groups. Decisions remain prop
 until coordinator authorization, type/contracts and transactional publication;
 `docs/runtime-binding.md` documents the boundary.
 
+`influence::InfluenceContext` traces actual value/outcome reads around checked
+evaluation, retains base/control/absence protection, authorizes boundaries lazily,
+and preserves native/callback/schema behavior. Root contracts use it now; denied
+reads are errors, never logical false. See `docs/runtime-influence.md`.
+
 `verify_executable` decodes authoritative canonical envelope bytes, checks the
 exact host-linked policy and library manifests, and recomputes whole-document
 semantic analysis. `VerifiedExecutable` retains that immutable analyzer result

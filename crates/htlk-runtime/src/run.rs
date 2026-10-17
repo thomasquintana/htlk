@@ -1,4 +1,5 @@
 //! Host run admission and immutable initial scope checkpoints.
+use crate::influence::{InfluenceContext, InfluenceEnvironment, ReferenceInfluence};
 use crate::{
     Authorization, EvaluationFrame, EvaluationValue, HostContext, Runtime, RuntimeError,
     artifact::{ArtifactInput, ArtifactMetadata, ArtifactProducer},
@@ -274,20 +275,40 @@ impl Runtime {
             influence,
             &self.config.limits,
         )?;
-        let failure =
-            match executable.evaluate(&ScopeUse::Root, &ExpressionSite::Preconditions, &frame) {
-                Ok(result) => match result.value {
-                    EvaluationValue::Present(Value::Bool(true)) => None,
-                    EvaluationValue::Present(Value::Bool(false)) => {
-                        Some(RuntimeFailure::new(FailureCode::Preconditions))
-                    }
-                    _ => Some(RuntimeFailure::new(FailureCode::Invariant)),
+        let environment = InfluenceEnvironment {
+            base: manifest.influence_labels().clone(),
+            references: preconditions
+                .references
+                .keys()
+                .map(|reference| (reference.clone(), ReferenceInfluence::default()))
+                .collect(),
+            outcomes: BTreeMap::new(),
+        };
+        let scope_id = ScopeInstanceId::root(&run_id, &self.config.limits)
+            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))?;
+        let authorize = |labels: &SecurityLabels| {
+            self.policy.authorize(
+                context,
+                Authorization::ReadBoundary {
+                    run_id: &run_id,
+                    scope_instance_id: scope_id,
+                    labels,
                 },
-                Err(error) => Some(RuntimeFailure::new(FailureCode::for_evaluation(
-                    &error,
-                    FailureBoundary::Expression,
-                ))),
-            };
+            )
+        };
+        let guarded = InfluenceContext::new(&frame, &environment, &authorize, &self.config.limits)?;
+        let evaluation =
+            guarded.evaluate(&executable, &ScopeUse::Root, &ExpressionSite::Preconditions)?;
+        let failure = match evaluation.result {
+            Ok(result) => match result.value {
+                EvaluationValue::Present(Value::Bool(true)) => None,
+                EvaluationValue::Present(Value::Bool(false)) => {
+                    Some(RuntimeFailure::new(FailureCode::Preconditions))
+                }
+                _ => Some(RuntimeFailure::new(FailureCode::Invariant)),
+            },
+            Err(error) => Some(RuntimeFailure::new(error.code())),
+        };
         for artifact in &artifacts {
             self.store.stage_artifact(artifact).await?;
         }

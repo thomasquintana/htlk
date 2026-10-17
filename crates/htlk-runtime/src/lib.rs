@@ -11,6 +11,7 @@ pub mod clock;
 mod evaluate;
 pub mod failure;
 pub mod identity;
+pub mod influence;
 mod mcp_protocol;
 mod native_profile;
 mod native_registry;

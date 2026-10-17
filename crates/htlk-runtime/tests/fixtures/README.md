@@ -119,3 +119,7 @@ The uniform binding/admission reducer adds `binding.rs` to both core source list
 The profile coverage edit refreshes core/regex/URI-template identities. Selection
 is not a new graph format; the empty graph and independent runtime ID vectors
 remain unchanged.
+
+Actual-read influence adds `influence.rs` to core coverage and boundary-protected
+root contracts. The profile-source edit refreshes core/regex/URI identities; the
+graph, policy, schema identity and independent runtime domain vectors are unchanged.

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add checked actual-read influence tracing and lazy boundary authorization for
+  values/outcomes, preserving protection through projection, errors and root contracts.
 - Add deterministic all-guard binding selection and guard-first input settlement,
   protected absence/causes and an independent exhaustive three-candidate oracle.
 - Add authenticated idempotent run admission, protected input/absence manifests,
