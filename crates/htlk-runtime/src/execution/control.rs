@@ -244,7 +244,7 @@ pub(super) async fn stop(
     } else {
         None
     };
-    if !writes.is_empty() {
+    if !writes.is_empty() || status.is_some() {
         step::commit(
             runtime,
             lease,

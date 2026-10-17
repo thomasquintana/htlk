@@ -7,7 +7,7 @@ Storage methods do not perform those application-level checks.
 
 ## Database identity and durability
 
-The private SQLite database uses application ID `0x48544c4b` and schema version 5.
+The private SQLite database uses application ID `0x48544c4b` and schema version 6.
 An empty database is initialized in an immediate transaction. Existing unrelated,
 nonempty or incompatible-version databases are rejected without relabeling them.
 File stores use WAL, synchronous FULL, foreign keys and a bounded busy timeout.
@@ -19,6 +19,8 @@ is upgraded without changing existing registered envelopes or execution records.
 Migration 4 adds durable host identity/time and authenticated receipt tables, plus
 a committed-time lookup index. Existing versions are upgraded transactionally.
 Migration 5 adds a non-authoritative, protected late-response inbox.
+Migration 6 marks the terminal receipt/tombstone and checked-recovery contracts;
+its table layout is unchanged, but older readers must not ignore expiry semantics.
 
 The initial layout has run authority headers, a version-0.1 journal, a transactional
 outbox, revisioned runtime-record families and internal command receipts. Graph

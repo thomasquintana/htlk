@@ -51,8 +51,10 @@ the implemented `htlk-compiler`.
 8. **Implemented foundation — Live MCP:** bounded stdio/HTTP JSON/SSE, exact descriptor
    drift checks, all four operations, durable intent/responses, replay-safe retry,
    verified deduplication contracts and non-authoritative late-response retention.
-9. **Pending — Recovery and replay:** higher-fence takeover, state reconstruction,
-   ambiguous-effect reconciliation and replay without external dispatch.
+9. **Implemented — Recovery and replay:** exact-origin/checkpoint/artifact verification,
+    producer-index reconstruction, higher-fence takeover, delivery-state reconciliation,
+    saved loop/wait resumption, explicit fatal/invariant outcomes and capability-free
+    journal reconstruction. [Recovery boundary](runtime-recovery.md).
 10. **Implemented — Additive extension:** compiler joins, exact preserved inputs and
      identity, either operand/renamed interfaces, repeated mounting, original budget/
      reservation adoption and atomic planning-wait closure. [Extension API](runtime-extension.md).

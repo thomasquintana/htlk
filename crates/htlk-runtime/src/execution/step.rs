@@ -209,7 +209,22 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
             return Ok(Progress::Changed);
         }
     }
-    Ok(Progress::Blocked)
+    if runtime.store.run_header(lease.run_id()).await?.sequence != header.sequence {
+        return Ok(Progress::Changed);
+    }
+    for wait in super::control::all(&runtime, &lease, RecordFamily::Wait).await? {
+        if !wait.final_record && string(&wait.payload, "state")? == "open" {
+            return Ok(Progress::Blocked);
+        }
+    }
+    for invocation in super::control::all(&runtime, &lease, RecordFamily::Invocation).await? {
+        if !invocation.final_record
+            && matches!(map(&invocation.payload)?.get("retry_at"),Some(Value::Integer(due))if *due>now)
+        {
+            return Ok(Progress::Blocked);
+        }
+    }
+    Err(RuntimeError::failure(FailureCode::Invariant))
 }
 pub(super) async fn commit(
     runtime: &Runtime,

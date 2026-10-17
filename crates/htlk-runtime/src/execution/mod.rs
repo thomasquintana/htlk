@@ -7,6 +7,7 @@ pub use extension::{CloseWait, ExtensionReceipt, ExtensionRequest};
 mod host;
 mod inspection;
 mod mcp;
+mod recovery;
 pub use inspection::{GraphView, NodeView, RunView, WaitView};
 mod waits;
 pub use host::{CancelReceipt, ReplyReceipt};
@@ -105,6 +106,7 @@ impl Actor for Worker {
 struct Work {
     runtime: Arc<Runtime>,
     lease: RunLease,
+    recovering: bool,
 }
 impl Message for Work {
     type Result = Result<step::Progress, RuntimeError>;
@@ -112,7 +114,7 @@ impl Message for Work {
 impl Handler<Work> for Worker {
     type Result = Result<step::Progress, RuntimeError>;
     fn handle(&mut self, msg: Work, _: &mut Self::Context) -> Self::Result {
-        System::new().block_on(step::tick(msg.runtime, msg.lease))
+        System::new().block_on(recovery::drive(msg.runtime, msg.lease, msg.recovering))
     }
 }
 pub(crate) struct Supervisor {
@@ -201,6 +203,7 @@ impl Handler<Poll> for Supervisor {
                             initial_time: now,
                             renew_after: now + actor.config.lease_ms / 3,
                             checking: false,
+                            recovered: false,
                         }
                         .start();
                         actor.active.insert(run, address);
@@ -224,6 +227,7 @@ impl Handler<Stop> for Supervisor {
     }
 }
 struct Coordinator {
+    recovered: bool,
     runtime: Arc<Runtime>,
     config: ExecutionConfig,
     run: RunId,
@@ -328,12 +332,16 @@ impl Handler<Pulse> for Coordinator {
                 .send(Work {
                     runtime: self.runtime.clone(),
                     lease,
+                    recovering: !self.recovered,
                 })
                 .into_actor(self)
                 .map(|result, actor, ctx| {
                     actor.busy = false;
                     match result {
-                        Ok(Ok(step::Progress::Changed)) => ctx.notify(Pulse),
+                        Ok(Ok(step::Progress::Changed)) => {
+                            actor.recovered = true;
+                            ctx.notify(Pulse)
+                        }
                         Ok(Ok(step::Progress::Blocked)) => {}
                         Ok(Ok(step::Progress::Terminal)) => ctx.stop(),
                         Ok(Err(RuntimeError::Storage(

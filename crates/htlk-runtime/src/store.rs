@@ -14,7 +14,7 @@ use htlk_executable::{
 use std::{fmt, path::Path, time::Duration};
 use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
@@ -142,6 +142,10 @@ impl SqliteStore {
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application == APPLICATION_ID && version == 4 {
                     tx.execute_batch(LATE_SCHEMA)?;
+                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                } else if application == APPLICATION_ID && version == 5 {
+                    // Compatibility marker: terminal receipts/tombstones and
+                    // checked recovery must not be ignored by older readers.
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
                     return Err(StoreError::Schema);

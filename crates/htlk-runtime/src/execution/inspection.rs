@@ -189,7 +189,9 @@ impl Runtime {
                         )
                     })
             });
-        let outputs = if string(&root.payload, "status")? == "succeeded" {
+        let outputs = if header.status == RunStatus::Succeeded
+            && string(&root.payload, "status")? == "succeeded"
+        {
             Some(field(&root.payload, "outputs")?.clone())
         } else {
             None

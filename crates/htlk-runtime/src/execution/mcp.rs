@@ -296,6 +296,15 @@ async fn operate_inner(
         }
     });
     let influence = labels(&record.payload, &runtime.config.limits)?;
+    let (expected_method, expected_params, expected_uri) =
+        request(runtime, scope, binding, record).await?;
+    if expected_method != string(&attempt.payload, "method")?
+        || expected_params != *field(&attempt.payload, "params")?
+        || expected_uri.map_or(Value::Null, Value::Text)
+            != *field(&attempt.payload, "requested_uri")?
+    {
+        return Err(RuntimeError::failure(FailureCode::Digest));
+    }
     let advertised = descriptor(
         runtime,
         binding,
@@ -329,7 +338,12 @@ async fn operate_inner(
         },
     )?;
     if !super::approval::gate(runtime, lease, scope, binding, node, record, &policy).await? {
-        return Ok(false);
+        return Ok(runtime
+            .store
+            .record(lease.run_id(), &record.key)
+            .await?
+            .revision
+            != record.revision);
     }
     let now = runtime
         .store
@@ -524,6 +538,13 @@ async fn request(
     } else {
         object([])?
     };
+    encode_request(binding, args, &runtime.config.limits)
+}
+pub(super) fn encode_request(
+    binding: &McpBinding,
+    args: Value,
+    limits: &htlk_executable::cbor::Limits,
+) -> Result<(String, Value, Option<String>), RuntimeError> {
     Ok(match binding.kind() {
         McpBindingKind::Tool { name, .. } => (
             "tools/call".into(),
@@ -541,8 +562,7 @@ async fn request(
             Some(uri.clone()),
         ),
         McpBindingKind::Template { uri_template } => {
-            let uri = crate::expand_uri_template(uri_template, &args, &runtime.config.limits)
-                .map_err(|_| err())?;
+            let uri = crate::expand_uri_template(uri_template, &args, limits).map_err(|_| err())?;
             (
                 "resources/read".into(),
                 object([("uri", Value::Text(uri.clone()))])?,

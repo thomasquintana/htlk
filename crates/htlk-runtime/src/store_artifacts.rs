@@ -211,6 +211,51 @@ pub(super) fn check_artifact_write(
     Ok(())
 }
 
+impl SqliteStore {
+    pub(crate) async fn recover_artifacts(
+        &self,
+        lease: &RunLease,
+        referenced: Vec<ArtifactId>,
+        observed: i64,
+    ) -> Result<(), StoreError> {
+        let limits = self.config.limits.clone();
+        cbor::encode(
+            &Value::Array(
+                referenced
+                    .iter()
+                    .map(|id| Value::Text(id.to_string()))
+                    .collect(),
+            ),
+            &limits,
+        )?;
+        let lease = lease.clone();
+        self.connection.call(move|db|->Result<(),StoreError>{
+            let tx=db.transaction_with_behavior(TransactionBehavior::Immediate)?;let header=load_header(&tx,lease.run_id())?;
+            check_authority(&header,&lease,observed.max(header.last_time_ms))?;
+            if header.status.is_terminal(){return Err(StoreError::Terminal)}
+            let mut ids=std::collections::BTreeSet::from_iter(referenced);
+            {let mut statement=tx.prepare("SELECT record_id FROM records WHERE run_id=?1 AND family='artifact'")?;let mut rows=statement.query([lease.run_id().as_str()])?;
+                while let Some(row)=rows.next()?{let id:String=row.get(0)?;ids.insert(id.parse().map_err(|_|StoreError::Corrupt)?);}}
+            // Producer-slot indexes are derived, never a substitute for canonical
+            // accepted metadata and the final producer/output crosslinks.
+            for id in ids {
+                let (run,final_record,raw):(String,bool,Vec<u8>)=tx.query_row("SELECT run_id,final,payload FROM records WHERE family='artifact' AND record_id=?1",[id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?.ok_or(StoreError::Corrupt)?;
+                if !final_record{return Err(StoreError::Corrupt)}
+                let run=RunId::new(run,&limits).map_err(|_|StoreError::Corrupt)?;
+                let value=cbor::decode(&raw,&limits).map_err(|_|StoreError::Corrupt)?;
+                let metadata=ArtifactMetadata::from_value(&value,&limits).map_err(|_|StoreError::Corrupt)?;
+                if metadata.artifact_id()!=id{return Err(StoreError::Corrupt)}
+                if retention::expired(&tx,id,&limits)?.is_some(){return Err(StoreError::Expired)}
+                let bytes:Vec<u8>=tx.query_row("SELECT value_bytes FROM value_blobs WHERE blob_digest=?1",[metadata.storage_reference().to_string()],|r|r.get(0)).optional()?.ok_or(StoreError::Corrupt)?;
+                metadata.verify_value(&bytes,&limits).map_err(|_|StoreError::Corrupt)?;
+                tx.execute("DELETE FROM artifact_producers WHERE artifact_id=?1",[id.to_string()])?;
+                check_artifact_write(&tx,&run,&RecordWrite{key:RecordKey{family:RecordFamily::Artifact,id:id.to_string()},expected_revision:None,final_record:true,payload:value},&limits)?;
+            }
+            tx.commit()?;Ok(())
+        }).await.map_err(StoreError::from_worker)
+    }
+}
+
 pub(super) fn check_output_publication(
     tx: &tokio_rusqlite::Transaction<'_>,
     run: &RunId,
@@ -409,6 +454,48 @@ mod tests {
                 Err(StoreError::Terminal)
             );
         });
+    }
+    #[test]
+    fn recovery_rebuilds_producer_slots_from_canonical_metadata_and_rejects_bad_bytes() {
+        actix::System::new().block_on(async {
+            let (store, artifact, lease) = setup().await;
+            store.stage_artifact(&artifact).await.unwrap();
+            store
+                .commit(&lease, transition("accept", vec![write(&artifact)]))
+                .await
+                .unwrap();
+            store
+                .connection
+                .call(|db| db.execute("DELETE FROM artifact_producers", []))
+                .await
+                .unwrap();
+            let before = store.run_header(lease.run_id()).await.unwrap();
+            store.recover_artifacts(&lease, vec![], 1).await.unwrap();
+            let port = store
+                .connection
+                .call(|db| {
+                    db.query_row("SELECT port FROM artifact_producers", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                })
+                .await
+                .unwrap();
+            assert_eq!(port, "seed");
+            assert_eq!(
+                store.run_header(lease.run_id()).await.unwrap(),
+                before,
+                "index rebuilding cannot replace committed history"
+            );
+            store
+                .connection
+                .call(|db| db.execute("UPDATE value_blobs SET value_bytes=x'00'", []))
+                .await
+                .unwrap();
+            assert_eq!(
+                store.recover_artifacts(&lease, vec![], 1).await,
+                Err(StoreError::Corrupt)
+            );
+        })
     }
     struct Policy(bool);
     impl RuntimePolicy for Policy {

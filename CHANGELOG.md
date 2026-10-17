@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add exact-origin startup recovery, immutable checkpoint/value/protection checks,
+  producer-index reconstruction, saved MCP-response and loop/wait resumption, and
+  explicit missing-implementation, corruption and no-progress failures.
 - Add persisted artifact audit promises, active/retained cross-run reference
   protection, immutable journaled expiry tombstones, distinct retention errors and
   bounded garbage collection preserving shared bytes and producer identities.
