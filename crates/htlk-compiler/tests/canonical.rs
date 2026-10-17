@@ -121,3 +121,112 @@ fn raw_catalog_duplicate_keys_are_not_discarded() {
         .is_err()
     );
 }
+
+#[test]
+fn standalone_preserves_native_numbers_and_reports_sorted_record_sources() {
+    let (compiler, _) = compiler();
+    let source = r#"ir_version = "0.1"
+      type Number = union(integer, float)
+      graph test.numbers {
+        inputs = {} outputs = { result = list(Number) }
+        nodes { values = eval(list(Number), [1, 1.0, -0, -0.0]) }
+        edges { edge result { from = values.outputs.value to = outputs.result } }
+      }"#;
+    let output = compiler.compile_source(source, &catalogs()).unwrap();
+    assert!(!output.source_map.is_empty());
+    let scope =
+        &output.canonical_document.fields().scopes[&output.canonical_document.fields().root_scope];
+    let Operation::Eval(e) = &scope.fields().nodes[0].fields().operation else {
+        panic!()
+    };
+    let ExpressionKind::List(values) = e.kind() else {
+        panic!()
+    };
+    assert!(matches!(
+        values[0].kind(),
+        ExpressionKind::Literal(ScalarLiteral::Integer(1))
+    ));
+    assert!(matches!(
+        values[1].kind(),
+        ExpressionKind::Literal(ScalarLiteral::Float(_))
+    ));
+}
+
+#[test]
+fn comments_declaration_order_and_unused_valid_definitions_preserve_bytes() {
+    let (compiler, _) = compiler();
+    let a = r#"ir_version = "0.1" graph test.empty {inputs={} outputs={} nodes{} edges{}}"#;
+    let b = r#"ir_version = "0.1" --[[ block comment ]]
+      type Unused = string
+      prompt unused = "hello {name}"
+      task unused_task { inputs={} outputs={} nodes{} edges{} }
+      graph test.empty { edges{} nodes{} outputs={} inputs={} description="documentation" }
+    "#;
+    let a = compiler.compile_source(a, &catalogs()).unwrap();
+    let b = compiler.compile_source(b, &catalogs()).unwrap();
+    assert_eq!(a.executable_bytes, b.executable_bytes);
+    assert_eq!(b.documentation.len(), 1);
+}
+
+#[test]
+fn invalid_unused_declarations_and_lazy_unknown_names_are_checked() {
+    let (compiler, _) = compiler();
+    for extra in [
+        "type Invalid = union(string,string)",
+        "type Recursive = list(Recursive)",
+        "task invalid { inputs={} outputs={x=string} nodes{} edges{} }",
+        "prompt invalid(x=string) = \"{y}\"",
+    ] {
+        let source = format!(
+            "ir_version = \"0.1\" {extra} graph test.empty {{inputs={{}} outputs={{}} nodes{{}} edges{{}}}}"
+        );
+        assert!(
+            compiler.compile_source(&source, &catalogs()).is_err(),
+            "{extra}"
+        );
+    }
+    let source = r#"ir_version="0.1" graph test.bad { inputs={} outputs={} nodes{} edges{} postconditions=false and status(@missing)=="failed" }"#;
+    assert!(compiler.compile_source(source, &catalogs()).is_err());
+}
+
+#[test]
+fn supplied_worked_program_compiles_with_exact_offline_catalogs() {
+    let (compiler, _) = compiler();
+    let catalogs = MCPCatalogInputs::from_json(
+        include_bytes!("../../../specs/examples/decision_brief.catalogs.json"),
+        &Limits::default(),
+    )
+    .unwrap();
+    let output = compiler
+        .compile_source(
+            include_str!("../../../specs/examples/decision_brief.htlk"),
+            &catalogs,
+        )
+        .unwrap();
+    let analyzed = analyzer::analyze_document(
+        output.canonical_document,
+        NativeSchemaOptions::default(),
+        &Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(analyzed.structural_summary().scope_depth(), 3);
+    assert_eq!(analyzed.structural_summary().expanded_nodes(), 34);
+}
+
+#[test]
+fn bounded_frontend_rejects_invalid_lexical_and_block_forms() {
+    let (compiler, _) = compiler();
+    for source in [
+        "\u{feff}ir_version=\"0.1\"",
+        "ir_version=\"0.1\" --[[ unterminated",
+        "ir_version=\"0.1\" prompt invalid=\"\\uD800\"",
+        "ir_version=\"0.1\" prompt invalid=\"unterminated",
+        "ir_version=\"0.1\" type Invalid=optional(string)",
+        "ir_version=\"0.1\" graph test.bad {inputs={} outputs={} nodes{} edges{} inputs={}}",
+    ] {
+        assert!(
+            compiler.compile_source(source, &catalogs()).is_err(),
+            "{source}"
+        );
+    }
+}
