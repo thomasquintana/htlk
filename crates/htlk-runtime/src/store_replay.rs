@@ -1,0 +1,270 @@
+//! Capability-free reconstruction of private journal transitions.
+use super::transitions::{command_digest, next_revision};
+use super::*;
+use std::collections::BTreeMap;
+
+/// Bounded journal reconstruction, with no database connection or dispatch
+/// capability. This is a verification/recovery aid, not compiler admission proof.
+/// Apply successive bounded pages rather than retaining the complete history.
+pub struct ReplayState {
+    header: RunHeader,
+    records: BTreeMap<RecordKey, (StoredRecord, usize)>,
+    commands: BTreeMap<String, (Digest, i64)>,
+    retained_bytes: usize,
+}
+impl ReplayState {
+    /// Starts reconstruction from sequence one's creation event.
+    ///
+    /// # Errors
+    /// Returns wrong version/schema/sequence or bounded-representation failures.
+    pub fn begin(entry: &JournalEntry, limits: &Limits) -> Result<Self, StoreError> {
+        if entry.sequence != 1
+            || entry.event != JournalEvent::RunCreated
+            || entry.record_version != "0.1"
+            || entry.command_id.is_some()
+        {
+            return Err(StoreError::Corrupt);
+        }
+        timestamp(entry.timestamp_ms).map_err(|_| StoreError::Corrupt)?;
+        let [fingerprint, root] = array::<2>(&entry.payload)?;
+        let fingerprint = string(fingerprint)?
+            .parse()
+            .map_err(|_| StoreError::Corrupt)?;
+        let root_scope = string(root)?.parse().map_err(|_| StoreError::Corrupt)?;
+        cbor::encode(&entry.payload, limits)?;
+        Ok(Self {
+            header: RunHeader {
+                run_id: entry.run_id.clone(),
+                fingerprint,
+                root_scope,
+                status: RunStatus::Running,
+                sequence: 1,
+                owner: None,
+                fence: 0,
+                expires_at_ms: None,
+                last_time_ms: entry.timestamp_ms,
+            },
+            records: BTreeMap::new(),
+            commands: BTreeMap::new(),
+            retained_bytes: 0,
+        })
+    }
+    /// Reconstructs one subsequent committed decision. No MCP operation is invoked.
+    /// Malformed events must be treated as failed recovery; discard the replay
+    /// state after an error rather than continuing from a partially checked event.
+    ///
+    /// # Errors
+    /// Returns gaps, altered ownership/revisions/final outcomes, wrong event schemas,
+    /// changed command identities or bounded state/payload limits.
+    pub fn apply(&mut self, entry: &JournalEntry, limits: &Limits) -> Result<(), StoreError> {
+        if entry.run_id != self.header.run_id
+            || entry.sequence
+                != self
+                    .header
+                    .sequence
+                    .checked_add(1)
+                    .ok_or(StoreError::Corrupt)?
+            || entry.record_version != "0.1"
+            || entry.timestamp_ms < self.header.last_time_ms
+        {
+            return Err(StoreError::Corrupt);
+        }
+        cbor::encode(&entry.payload, limits)?;
+        match entry.event {
+            JournalEvent::RunCreated => return Err(StoreError::Corrupt),
+            JournalEvent::OwnershipAcquired | JournalEvent::OwnershipRenewed => {
+                if self.header.status.is_terminal() || entry.command_id.is_some() {
+                    return Err(StoreError::Corrupt);
+                }
+                let [owner, fence, expiry] = array::<3>(&entry.payload)?;
+                let (owner, fence, expiry) = (string(owner)?, integer(fence)?, integer(expiry)?);
+                if owner != entry.actor || expiry <= entry.timestamp_ms {
+                    return Err(StoreError::Corrupt);
+                }
+                match entry.event {
+                    JournalEvent::OwnershipAcquired => {
+                        if fence
+                            != self
+                                .header
+                                .fence
+                                .checked_add(1)
+                                .ok_or(StoreError::Corrupt)?
+                            || (self.header.owner.is_some()
+                                && self
+                                    .header
+                                    .expires_at_ms
+                                    .is_some_and(|t| t > entry.timestamp_ms))
+                        {
+                            return Err(StoreError::Corrupt);
+                        }
+                    }
+                    JournalEvent::OwnershipRenewed => {
+                        let lease = RunLease {
+                            run_id: entry.run_id.clone(),
+                            owner: owner.into(),
+                            fence,
+                        };
+                        check_authority(&self.header, &lease, entry.timestamp_ms)
+                            .map_err(|_| StoreError::Corrupt)?;
+                        if self.header.expires_at_ms.is_some_and(|old| expiry < old) {
+                            return Err(StoreError::Corrupt);
+                        }
+                    }
+                    _ => return Err(StoreError::Corrupt),
+                }
+                self.header.owner = Some(owner.into());
+                self.header.fence = fence;
+                self.header.expires_at_ms = Some(expiry);
+            }
+            JournalEvent::RecordsCommitted => self.apply_records(entry, limits)?,
+        }
+        self.header.sequence = entry.sequence;
+        self.header.last_time_ms = entry.timestamp_ms;
+        Ok(())
+    }
+    fn apply_records(&mut self, entry: &JournalEntry, limits: &Limits) -> Result<(), StoreError> {
+        let [owner, fence, body] = array::<3>(&entry.payload)?;
+        let lease = RunLease {
+            run_id: entry.run_id.clone(),
+            owner: string(owner)?.into(),
+            fence: integer(fence)?,
+        };
+        check_authority(&self.header, &lease, entry.timestamp_ms)
+            .map_err(|_| StoreError::Corrupt)?;
+        if self.header.status.is_terminal() {
+            return Err(StoreError::Corrupt);
+        }
+        let command = entry.command_id.as_ref().ok_or(StoreError::Corrupt)?;
+        if self.commands.contains_key(command) {
+            return Err(StoreError::Corrupt);
+        }
+        let digest = command_digest(&entry.run_id, &entry.actor, &entry.causation, body, limits)?;
+        let [writes, status, root, expected] = array::<4>(body)?;
+        if !matches!(expected, Value::Null)
+            && string(expected)? != self.header.fingerprint.to_string()
+        {
+            return Err(StoreError::Corrupt);
+        }
+        let Value::Array(writes) = writes else {
+            return Err(StoreError::Corrupt);
+        };
+        let mut previous = None;
+        for write in writes {
+            let [family, id, expected, final_record, payload] = array::<5>(write)?;
+            let key = RecordKey {
+                family: RecordFamily::parse(string(family)?)?,
+                id: string(id)?.into(),
+            };
+            if previous.as_ref().is_some_and(|old| old >= &key) {
+                return Err(StoreError::Corrupt);
+            }
+            previous = Some(key.clone());
+            let expected = if matches!(expected, Value::Null) {
+                None
+            } else {
+                Some(integer(expected)?)
+            };
+            let Value::Bool(final_record) = final_record else {
+                return Err(StoreError::Corrupt);
+            };
+            let old = self.records.get(&key);
+            if old.is_some_and(|(r, _)| r.final_record) || old.map(|(r, _)| r.revision) != expected
+            {
+                return Err(StoreError::Corrupt);
+            }
+            let revision = next_revision(expected).map_err(|_| StoreError::Corrupt)?;
+            let bytes = cbor::encode(write, limits)?.len();
+            self.retained_bytes = self
+                .retained_bytes
+                .checked_sub(old.map_or(0, |(_, size)| *size))
+                .and_then(|n| n.checked_add(bytes))
+                .ok_or(StoreError::Invalid)?;
+            if self.retained_bytes > limits.max_document_bytes {
+                return Err(StoreError::Invalid);
+            }
+            self.records.insert(
+                key.clone(),
+                (
+                    StoredRecord {
+                        key,
+                        revision,
+                        final_record: *final_record,
+                        payload: payload.clone(),
+                    },
+                    bytes,
+                ),
+            );
+        }
+        if !matches!(status, Value::Null) {
+            let next = match string(status)? {
+                "succeeded" => RunStatus::Succeeded,
+                "failed" => RunStatus::Failed,
+                "cancelled" => RunStatus::Cancelled,
+                _ => return Err(StoreError::Corrupt),
+            };
+            if !self.header.status.can_transition_to(next) {
+                return Err(StoreError::Corrupt);
+            }
+            self.header.status = next;
+        }
+        if !matches!(root, Value::Null) {
+            let [fingerprint, root] = array::<2>(root)?;
+            self.header.fingerprint = string(fingerprint)?
+                .parse()
+                .map_err(|_| StoreError::Corrupt)?;
+            self.header.root_scope = string(root)?.parse().map_err(|_| StoreError::Corrupt)?;
+        }
+        self.retained_bytes = self
+            .retained_bytes
+            .checked_add(command.len() + 96)
+            .ok_or(StoreError::Invalid)?;
+        if self.retained_bytes > limits.max_document_bytes {
+            return Err(StoreError::Invalid);
+        }
+        self.commands
+            .insert(command.clone(), (digest, entry.sequence));
+        Ok(())
+    }
+    /// Reconstructed authority header, for comparison with committed rows.
+    pub fn header(&self) -> &RunHeader {
+        &self.header
+    }
+    /// Reconstructed authoritative record; derived indexes are not necessary.
+    pub fn record(&self, key: &RecordKey) -> Option<&StoredRecord> {
+        self.records.get(key).map(|(record, _)| record)
+    }
+    /// Reconstructed internal command receipt and its semantic request digest.
+    pub fn command(&self, key: &str) -> Option<(Digest, CommitReceipt)> {
+        self.commands.get(key).map(|(digest, sequence)| {
+            (
+                *digest,
+                CommitReceipt {
+                    sequence: *sequence,
+                },
+            )
+        })
+    }
+}
+fn array<const N: usize>(value: &Value) -> Result<&[Value; N], StoreError> {
+    let Value::Array(values) = value else {
+        return Err(StoreError::Corrupt);
+    };
+    values
+        .as_slice()
+        .try_into()
+        .map_err(|_| StoreError::Corrupt)
+}
+fn string(value: &Value) -> Result<&str, StoreError> {
+    if let Value::Text(text) = value {
+        Ok(text)
+    } else {
+        Err(StoreError::Corrupt)
+    }
+}
+fn integer(value: &Value) -> Result<i64, StoreError> {
+    if let Value::Integer(n) = value {
+        Ok(*n)
+    } else {
+        Err(StoreError::Corrupt)
+    }
+}

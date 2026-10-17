@@ -20,7 +20,8 @@ the canonical prompt-template model. No scripting runtime is embedded.
 This crate owns `verify_executable`, `NativeRegistry`, native expression evaluation,
 callback dispatch, actual-value checks, runtime schema projections and enforcement
 of analyzer obligations. The `store` module supplies SQLite schema/ownership
-foundations with fenced leases, journal and outbox writes. Registration transactions,
+foundations with fenced leases, atomic record transitions, internal command receipts,
+bounded journal/outbox delivery and capability-free replay. Registration transactions,
 deployment authorization, scheduling and live MCP I/O remain pending.
 `htlk-executable::digest` supplies typed SHA-256 digests and hashing for future
 fingerprint checks and runtime identities, using consumer-defined preimages.

@@ -52,13 +52,87 @@ causation and encoded payload bytes. Configuration, input and backend failures
 return structured `StoreError` categories without database paths, submitted payloads
 or raw SQLite diagnostics in Display/Debug.
 
+## Atomic record decisions
+
+`commit(lease, transition)` is the trusted coordinator's compare-and-swap boundary.
+Record keys are `(run, RecordFamily, opaque ID)`. An insertion expects no previous
+revision and creates revision one; an update requires the exact positive prior
+revision. A final record cannot change. The closed family enum covers scopes,
+invocations, guards, bindings, manifests, attempts/responses, waits/replies/approvals,
+reservations/usage, artifacts, cancellation, extension, loops, timers, observations
+and tombstones. Each consumer validates its own typed payload before this boundary.
+
+In one immediate transaction, storage checks the live owner/fence/expiry, command
+identity, run status, optional expected fingerprint, every record revision/finality,
+and terminal run transition. It writes the whole record set, optional active-root
+replacement and run outcome, complete journal event, outbox hint and command
+receipt together. Conflict or failure at any point rolls the entire decision back.
+Finalizing one record is useful for immutable binding decisions as well as outcomes.
+
+Internal command receipts are scoped by run and command key. The private semantic
+digest hashes `['htlk.store_command', '0.1', actor, causation, run_id, body]`.
+Timestamp and owner/fence are excluded, allowing a new fenced coordinator to retry
+the exact persisted command after takeover. The command key is the receipt lookup,
+not a semantic argument. Changed records, expected revisions, terminal/root choice,
+fingerprint, actor or causation conflict. A duplicate returns its original sequence
+without another journal entry, including after that command terminated the run.
+Authority is still checked before receipt lookup; stale owners cannot publish.
+
+These are internal coordinator receipts. Principal/method/target-scoped logical
+host API receipts are a separate service integration.
+
+## Journal schemas and replay
+
+Every row stores run, sequence, closed event type, `record_version='0.1'`, actor,
+nondecreasing timestamp, causation, optional command key and canonical payload.
+Private payload shapes are:
+
+```text
+run_created:        [fingerprint, root_scope_id]
+ownership_acquired: [owner, fence, expires_at_ms]
+ownership_renewed:  [owner, fence, expires_at_ms]
+records_committed:  [owner, fence, body]
+
+body = [writes, terminal_status_or_null, new_root_or_null, expected_fingerprint_or_null]
+new_root = [fingerprint, scope_instance_id]
+write = [family, record_id, expected_revision_or_null, final_boolean, canonical_payload]
+```
+
+Writes are sorted by the closed `RecordFamily` enum order then decoded UTF-8 ID;
+duplicates fail. The event records full changes, not only notification IDs. The
+coordinator's operation-specific records retain dispatch, scheduler, policy and
+acceptance evidence as their consumers are implemented.
+
+`journal` returns bounded pages with exclusive sequence cursors and aggregate
+private-row byte limits. `ReplayState::begin/apply` can consume those pages without
+database or external-operation capabilities. It checks version, contiguous sequence,
+run identity, time, owner/fence transitions, record revisions/finality, active-root
+expectations, terminal results and command uniqueness. It reconstructs current rows,
+authority header and command receipts. Retained reconstructed record/receipt data
+is bounded by the supplied logical byte allowance. Discard reconstruction after
+any error rather than continuing from a partially checked event.
+
+This reconstructs storage decisions; actual graph recovery additionally re-admits
+executables, checks referenced artifacts and reconciles dispatch state.
+
+## Outbox delivery
+
+Each journal insert adds one notice in the same transaction. `pending_outbox`
+returns bounded hints, redelivering until `acknowledge` succeeds. Acknowledgement
+is itself idempotent and changes neither graph state nor journal outcomes. Delivery
+workers have no acceptance authority merely because they receive a notice. The
+outbox makes notification delivery recoverable, not external effects transactional.
+
 ## Verification and delivery status
 
 Storage unit tests use actual SQLite connections, file reopen, concurrent owners
 and aborting triggers. They verify rollback of run/journal/outbox publication and
 ownership/fence/sequence/time as a unit, persistence, WAL/FULL/foreign-key settings,
 lease expiry, backwards clock observations, and foreign/future schema rejection.
+Transition tests additionally cover multi-record publication, final outcomes,
+stale/final record rollback, takeover receipts, concurrent revisions, bounded pages,
+duplicate outbox delivery, corrupt payloads, replay equivalence and altered history.
 
-General record transitions, command receipts, journal/outbox delivery APIs and
-reconstruction are the next storage slice. Registration, run-input publication and
-graph execution are subsequent consumers; this foundation is not a full runtime.
+Registration/artifact storage, atomic run-input publication and graph execution are
+subsequent consumers. Timer, reservation and other families are storage vocabulary;
+their execution semantics are not established merely by a generic record commit.

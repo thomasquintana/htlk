@@ -18,6 +18,16 @@ const SCHEMA_VERSION: i64 = 1;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 
+#[path = "store_replay.rs"]
+mod replay;
+#[path = "store_transitions.rs"]
+mod transitions;
+pub use replay::ReplayState;
+pub use transitions::{
+    CommitReceipt, JournalEntry, JournalEvent, OutboxNotice, RecordFamily, RecordKey, RecordWrite,
+    RootReplacement, StoredRecord, Transition, TransitionContext,
+};
+
 /// Trusted database settings. SQLite value data and journal payloads are bounded
 /// by these codec limits; queue/read page limits are independent and finite.
 #[derive(Clone, Debug)]
@@ -388,17 +398,7 @@ fn append_event(
 ) -> Result<(), StoreError> {
     // Journal rows are private records. Bound the complete logical row before it
     // becomes authoritative, including the opaque already-bounded payload bytes.
-    let representation = Value::Array(vec![
-        Value::Text(run.into()),
-        Value::Integer(sequence),
-        Value::Text(event.kind.into()),
-        Value::Text("0.1".into()),
-        Value::Text(event.actor.into()),
-        Value::Integer(event.timestamp),
-        Value::Text(event.causation.into()),
-        event.command.map_or(Value::Null, |s| Value::Text(s.into())),
-        Value::Bytes(payload.to_vec()),
-    ]);
+    let representation = event_value(run, sequence, &event, payload);
     htlk_executable::record_accounting::RecordAccounting::new(limits)?
         .value(&representation, 0)
         .map_err(|_| StoreError::Invalid)?;
@@ -408,6 +408,19 @@ fn append_event(
         params![run, sequence],
     )?;
     Ok(())
+}
+fn event_value(run: &str, sequence: i64, event: &EventMeta<'_>, payload: &[u8]) -> Value {
+    Value::Array(vec![
+        Value::Text(run.into()),
+        Value::Integer(sequence),
+        Value::Text(event.kind.into()),
+        Value::Text("0.1".into()),
+        Value::Text(event.actor.into()),
+        Value::Integer(event.timestamp),
+        Value::Text(event.causation.into()),
+        event.command.map_or(Value::Null, |s| Value::Text(s.into())),
+        Value::Bytes(payload.to_vec()),
+    ])
 }
 
 /// Storage failure categories. Display/Debug omit database paths, record contents
@@ -425,6 +438,8 @@ pub enum StoreError {
     Missing,
     /// Duplicate identity or stale expected revision.
     Conflict,
+    /// Internal command identity was reused for different semantic arguments.
+    IdempotencyConflict,
     /// Coordinator authority expired or was superseded.
     Fenced,
     /// Run or record already committed its terminal state.
@@ -442,6 +457,7 @@ impl StoreError {
             Self::Fenced => FailureCode::Fenced,
             Self::Corrupt => FailureCode::Digest,
             Self::Invalid => FailureCode::Input,
+            Self::IdempotencyConflict => FailureCode::IdempotencyConflict,
             _ => FailureCode::Invariant,
         }
     }
@@ -460,6 +476,7 @@ impl fmt::Display for StoreError {
             Self::Schema => "runtime database schema is incompatible",
             Self::Missing => "runtime record was not found",
             Self::Conflict => "runtime record conflicts with committed state",
+            Self::IdempotencyConflict => "runtime command identifies different semantic arguments",
             Self::Fenced => "runtime coordinator authority is stale",
             Self::Terminal => "runtime state is already terminal",
             Self::Invalid => "invalid runtime storage request",
@@ -536,6 +553,481 @@ mod tests {
             })
             .await
             .unwrap()
+    }
+
+    fn write(id: &str, revision: Option<i64>, final_record: bool, value: i64) -> RecordWrite {
+        RecordWrite {
+            key: RecordKey {
+                family: RecordFamily::Invocation,
+                id: id.into(),
+            },
+            expected_revision: revision,
+            final_record,
+            payload: Value::Integer(value),
+        }
+    }
+    fn transition(command: &str, writes: Vec<RecordWrite>, time: i64) -> Transition {
+        Transition {
+            context: TransitionContext {
+                command_id: command.into(),
+                actor: "principal".into(),
+                causation: "request".into(),
+                timestamp_ms: time,
+            },
+            writes,
+            next_status: None,
+            root: None,
+            expected_fingerprint: None,
+        }
+    }
+
+    #[test]
+    fn atomic_records_terminal_outcome_and_duplicate_receipts_share_one_commit() {
+        actix::System::new().block_on(async {
+            let store = SqliteStore::in_memory(StoreConfig::default())
+                .await
+                .unwrap();
+            let run = seed("run");
+            store.create_run(run.clone()).await.unwrap();
+            let lease = store
+                .acquire(&run.run_id, "owner".into(), 0, 100)
+                .await
+                .unwrap();
+            let mut proposed = transition(
+                "accept",
+                vec![
+                    write("node", None, true, 42),
+                    write("output", None, true, 7),
+                ],
+                1,
+            );
+            proposed.next_status = Some(RunStatus::Succeeded);
+            let receipt = store.commit(&lease, proposed.clone()).await.unwrap();
+            assert_eq!(receipt.sequence, 3);
+            let mut duplicate = proposed.clone();
+            duplicate.context.timestamp_ms = 2;
+            assert_eq!(store.commit(&lease, duplicate).await.unwrap(), receipt);
+            assert_eq!(counts(&store).await, (1, 3, 3));
+            assert_eq!(
+                store.run_header(&run.run_id).await.unwrap().status,
+                RunStatus::Succeeded
+            );
+            assert_eq!(
+                store
+                    .record(&run.run_id, &proposed.writes[0].key)
+                    .await
+                    .unwrap()
+                    .payload,
+                Value::Integer(42)
+            );
+            proposed.writes[0].payload = Value::Integer(99);
+            assert_eq!(
+                store.commit(&lease, proposed).await,
+                Err(StoreError::IdempotencyConflict)
+            );
+            assert_eq!(
+                store.commit(&lease, transition("late", vec![], 3)).await,
+                Err(StoreError::Terminal)
+            );
+        });
+    }
+
+    #[test]
+    fn stale_or_final_record_rolls_back_other_writes_and_creates_no_receipt() {
+        actix::System::new().block_on(async {
+            let store = SqliteStore::in_memory(StoreConfig::default())
+                .await
+                .unwrap();
+            let run = seed("run");
+            store.create_run(run.clone()).await.unwrap();
+            let lease = store
+                .acquire(&run.run_id, "owner".into(), 0, 100)
+                .await
+                .unwrap();
+            store
+                .commit(
+                    &lease,
+                    transition("initial", vec![write("z", None, false, 1)], 1),
+                )
+                .await
+                .unwrap();
+            let a = write("a", None, false, 2);
+            assert_eq!(
+                store
+                    .commit(
+                        &lease,
+                        transition("stale", vec![a.clone(), write("z", Some(99), false, 3)], 2)
+                    )
+                    .await,
+                Err(StoreError::Conflict)
+            );
+            assert_eq!(
+                store.record(&run.run_id, &a.key).await,
+                Err(StoreError::Missing)
+            );
+            assert_eq!(counts(&store).await, (1, 3, 3));
+            store
+                .commit(
+                    &lease,
+                    transition("finish", vec![write("z", Some(1), true, 4)], 3),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .commit(
+                        &lease,
+                        transition("revive", vec![a.clone(), write("z", Some(2), false, 5)], 4)
+                    )
+                    .await,
+                Err(StoreError::Terminal)
+            );
+            assert_eq!(
+                store.record(&run.run_id, &a.key).await,
+                Err(StoreError::Missing)
+            );
+        });
+    }
+
+    #[test]
+    fn late_old_owner_is_fenced_but_new_owner_can_retrieve_same_command_receipt() {
+        actix::System::new().block_on(async {
+            let store = SqliteStore::in_memory(StoreConfig::default())
+                .await
+                .unwrap();
+            let run = seed("run");
+            store.create_run(run.clone()).await.unwrap();
+            let old = store
+                .acquire(&run.run_id, "old".into(), 0, 10)
+                .await
+                .unwrap();
+            let original = transition("decision", vec![write("node", None, false, 1)], 1);
+            let receipt = store.commit(&old, original.clone()).await.unwrap();
+            let new = store
+                .acquire(&run.run_id, "new".into(), 10, 20)
+                .await
+                .unwrap();
+            let mut retry = original;
+            retry.context.timestamp_ms = 11;
+            assert_eq!(
+                store.commit(&old, retry.clone()).await,
+                Err(StoreError::Fenced)
+            );
+            assert_eq!(store.commit(&new, retry).await.unwrap(), receipt);
+            assert_eq!(counts(&store).await, (1, 4, 4));
+        });
+    }
+
+    #[test]
+    fn publication_failure_rolls_back_records_root_status_journal_and_receipt() {
+        actix::System::new().block_on(async {
+            let store=SqliteStore::in_memory(StoreConfig::default()).await.unwrap();
+            let run=seed("run");
+            store.create_run(run.clone()).await.unwrap();
+            let lease=store.acquire(&run.run_id,"owner".into(),0,100).await.unwrap();
+            let original=store.run_header(&run.run_id).await.unwrap();
+            store.connection.call(|db|db.execute_batch("CREATE TRIGGER fail_outbox BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT,'injected'); END;")).await.unwrap();
+            let record=write("node",None,true,1);
+            let mut proposal=transition("accept",vec![record.clone()],1);
+            proposal.next_status=Some(RunStatus::Succeeded);
+            proposal.root=Some(RootReplacement{fingerprint:Digest::from_bytes([3;32]),root_scope:ScopeInstanceId::extended_root(&run.run_id,1,&Limits::default()).unwrap()});
+            assert_eq!(store.commit(&lease,proposal.clone()).await,Err(StoreError::Database));
+            assert_eq!(store.run_header(&run.run_id).await.unwrap(),original);
+            assert_eq!(store.record(&run.run_id,&record.key).await,Err(StoreError::Missing));
+            assert_eq!(counts(&store).await,(1,2,2));
+            store.connection.call(|db|db.execute_batch("DROP TRIGGER fail_outbox;")).await.unwrap();
+            assert_eq!(store.commit(&lease,proposal).await.unwrap().sequence,3);
+        });
+    }
+
+    #[test]
+    fn bounded_journal_pages_replay_rows_and_receipts_without_storage_or_dispatch() {
+        actix::System::new().block_on(async {
+            let temporary = TempDb::new();
+            let store = SqliteStore::open(temporary.path(), StoreConfig::default())
+                .await
+                .unwrap();
+            let run = seed("run");
+            store.create_run(run.clone()).await.unwrap();
+            let lease = store
+                .acquire(&run.run_id, "owner".into(), 0, 100)
+                .await
+                .unwrap();
+            store
+                .commit(
+                    &lease,
+                    transition("admit", vec![write("node", None, false, 1)], 1),
+                )
+                .await
+                .unwrap();
+            store.renew(&lease, 2, 200).await.unwrap();
+            let mut finish = transition("accept", vec![write("node", Some(1), true, 42)], 3);
+            finish.next_status = Some(RunStatus::Succeeded);
+            let receipt = store.commit(&lease, finish).await.unwrap();
+            let first = store.journal(&run.run_id, 0, 2).await.unwrap();
+            let mut replay = ReplayState::begin(&first[0], &Limits::default()).unwrap();
+            replay.apply(&first[1], &Limits::default()).unwrap();
+            let mut after = 2;
+            loop {
+                let page = store.journal(&run.run_id, after, 2).await.unwrap();
+                if page.is_empty() {
+                    break;
+                }
+                for event in &page {
+                    replay.apply(event, &Limits::default()).unwrap();
+                    after = event.sequence;
+                }
+            }
+            assert_eq!(
+                replay.header(),
+                &store.run_header(&run.run_id).await.unwrap()
+            );
+            let key = write("node", None, false, 0).key;
+            assert_eq!(
+                replay.record(&key).unwrap(),
+                &store.record(&run.run_id, &key).await.unwrap()
+            );
+            assert_eq!(replay.command("accept").unwrap().1, receipt);
+            let recorded = store
+                .connection
+                .call(|db| {
+                    db.query_row(
+                        "SELECT request_digest FROM commands WHERE command_id='accept'",
+                        [],
+                        |r| r.get::<_, String>(0),
+                    )
+                })
+                .await
+                .unwrap();
+            assert_eq!(replay.command("accept").unwrap().0.to_string(), recorded);
+            let notices = store.pending_outbox(100).await.unwrap();
+            assert_eq!(notices.len(), 5);
+            assert_eq!(store.pending_outbox(100).await.unwrap(), notices);
+            for notice in &notices {
+                store.acknowledge(notice).await.unwrap();
+                store.acknowledge(notice).await.unwrap();
+            }
+            assert!(store.pending_outbox(100).await.unwrap().is_empty());
+            store.close().await.unwrap();
+            let reopened = SqliteStore::open(temporary.path(), StoreConfig::default())
+                .await
+                .unwrap();
+            assert_eq!(
+                reopened.run_header(&run.run_id).await.unwrap(),
+                *replay.header()
+            );
+            assert!(reopened.pending_outbox(100).await.unwrap().is_empty());
+            reopened.close().await.unwrap();
+        });
+    }
+
+    #[test]
+    fn replay_rejects_sequence_gaps_changed_fences_and_final_record_rewrites() {
+        actix::System::new().block_on(async {
+            let store = SqliteStore::in_memory(StoreConfig::default())
+                .await
+                .unwrap();
+            let run = seed("run");
+            store.create_run(run.clone()).await.unwrap();
+            let lease = store
+                .acquire(&run.run_id, "owner".into(), 0, 100)
+                .await
+                .unwrap();
+            store
+                .commit(
+                    &lease,
+                    transition("accept", vec![write("node", None, true, 42)], 1),
+                )
+                .await
+                .unwrap();
+            let events = store.journal(&run.run_id, 0, 10).await.unwrap();
+            let mut replay = ReplayState::begin(&events[0], &Limits::default()).unwrap();
+            assert_eq!(
+                replay.apply(&events[2], &Limits::default()),
+                Err(StoreError::Corrupt)
+            );
+            let mut changed = events[1].clone();
+            let Value::Array(ref mut values) = changed.payload else {
+                panic!()
+            };
+            values[1] = Value::Integer(99);
+            assert_eq!(
+                replay.apply(&changed, &Limits::default()),
+                Err(StoreError::Corrupt)
+            );
+            replay.apply(&events[1], &Limits::default()).unwrap();
+            replay.apply(&events[2], &Limits::default()).unwrap();
+            let mut rewrite = events[2].clone();
+            rewrite.sequence = 4;
+            rewrite.command_id = Some("rewrite".into());
+            let Value::Array(ref mut wrapper) = rewrite.payload else {
+                panic!()
+            };
+            let Value::Array(ref mut body) = wrapper[2] else {
+                panic!()
+            };
+            let Value::Array(ref mut writes) = body[0] else {
+                panic!()
+            };
+            let Value::Array(ref mut record) = writes[0] else {
+                panic!()
+            };
+            record[2] = Value::Integer(1);
+            assert_eq!(
+                replay.apply(&rewrite, &Limits::default()),
+                Err(StoreError::Corrupt)
+            );
+        });
+    }
+
+    #[test]
+    fn concurrent_expected_revision_acceptance_has_exactly_one_commit() {
+        actix::System::new().block_on(async {
+            let temporary = TempDb::new();
+            let first = SqliteStore::open(temporary.path(), StoreConfig::default())
+                .await
+                .unwrap();
+            let second = SqliteStore::open(temporary.path(), StoreConfig::default())
+                .await
+                .unwrap();
+            let run = seed("run");
+            first.create_run(run.clone()).await.unwrap();
+            let lease = first
+                .acquire(&run.run_id, "owner".into(), 0, 100)
+                .await
+                .unwrap();
+            first
+                .commit(
+                    &lease,
+                    transition("initial", vec![write("node", None, false, 0)], 1),
+                )
+                .await
+                .unwrap();
+            let lease_a = lease.clone();
+            let lease_b = lease.clone();
+            let a = first.clone();
+            let b = second.clone();
+            let a = actix::spawn(async move {
+                a.commit(
+                    &lease_a,
+                    transition("worker-a", vec![write("node", Some(1), false, 1)], 2),
+                )
+                .await
+            });
+            let b = actix::spawn(async move {
+                b.commit(
+                    &lease_b,
+                    transition("worker-b", vec![write("node", Some(1), false, 2)], 2),
+                )
+                .await
+            });
+            let (a, b) = (a.await.unwrap(), b.await.unwrap());
+            assert_ne!(a.is_ok(), b.is_ok());
+            assert_eq!(a.err().or(b.err()), Some(StoreError::Conflict));
+            let record = first
+                .record(&run.run_id, &write("node", None, false, 0).key)
+                .await
+                .unwrap();
+            assert_eq!(record.revision, 2);
+            assert_eq!(counts(&first).await, (1, 4, 4));
+            first.close().await.unwrap();
+            second.close().await.unwrap();
+        });
+    }
+
+    #[test]
+    fn aggregate_pages_limits_and_corrupt_record_reads_are_enforced() {
+        actix::System::new().block_on(async {
+            let mut config = StoreConfig::default();
+            config.limits.max_document_bytes = 512;
+            let store = SqliteStore::in_memory(config).await.unwrap();
+            let run = seed("run");
+            store.create_run(run.clone()).await.unwrap();
+            let lease = store
+                .acquire(&run.run_id, "owner".into(), 0, 100)
+                .await
+                .unwrap();
+            for index in 0..10 {
+                store
+                    .commit(
+                        &lease,
+                        transition(
+                            &format!("decision-{index}"),
+                            vec![write(
+                                "node",
+                                if index == 0 { None } else { Some(index) },
+                                false,
+                                index,
+                            )],
+                            index + 1,
+                        ),
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                store.journal(&run.run_id, 0, 0).await,
+                Err(StoreError::Invalid)
+            );
+            assert_eq!(
+                store.journal(&run.run_id, -1, 1).await,
+                Err(StoreError::Invalid)
+            );
+            assert_eq!(store.pending_outbox(4097).await, Err(StoreError::Invalid));
+            let mut total = 0;
+            let mut after = 0;
+            loop {
+                let page = store.journal(&run.run_id, after, 256).await.unwrap();
+                if page.is_empty() {
+                    break;
+                }
+                assert!(page.len() < 12);
+                total += page.len();
+                after = page.last().unwrap().sequence;
+            }
+            assert_eq!(total, 12);
+            let prior = store.run_header(&run.run_id).await.unwrap();
+            let mut oversized = transition("too-large", vec![write("large", None, false, 0)], 20);
+            oversized.writes[0].payload = Value::Bytes(vec![0; 512]);
+            assert_eq!(
+                store.commit(&lease, oversized).await,
+                Err(StoreError::Invalid)
+            );
+            assert_eq!(store.run_header(&run.run_id).await.unwrap(), prior);
+            store
+                .connection
+                .call(|db| {
+                    db.execute(
+                        "UPDATE records SET payload=x'ff' WHERE record_id='node'",
+                        [],
+                    )
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .record(&run.run_id, &write("node", None, false, 0).key)
+                    .await,
+                Err(StoreError::Corrupt)
+            );
+        });
+    }
+
+    #[test]
+    fn deferred_constraint_failure_at_commit_rolls_back_the_entire_decision() {
+        actix::System::new().block_on(async {
+            let store=SqliteStore::in_memory(StoreConfig::default()).await.unwrap();
+            let run=seed("run");store.create_run(run.clone()).await.unwrap();
+            let lease=store.acquire(&run.run_id,"owner".into(),0,100).await.unwrap();
+            store.connection.call(|db|db.execute_batch("CREATE TABLE injected_failure(run_id TEXT REFERENCES runs(run_id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_commit AFTER INSERT ON outbox BEGIN INSERT INTO injected_failure VALUES('missing-run'); END;")).await.unwrap();
+            let record=write("node",None,true,42);
+            let proposal=transition("accept",vec![record.clone()],1);
+            assert_eq!(store.commit(&lease,proposal.clone()).await,Err(StoreError::Database));
+            assert_eq!(counts(&store).await,(1,2,2));
+            assert_eq!(store.record(&run.run_id,&record.key).await,Err(StoreError::Missing));
+            store.connection.call(|db|db.execute_batch("DROP TRIGGER fail_commit; DROP TABLE injected_failure;")).await.unwrap();
+            assert_eq!(store.commit(&lease,proposal).await.unwrap().sequence,3);
+        });
     }
 
     #[test]

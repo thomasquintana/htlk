@@ -91,3 +91,8 @@ SQLite authority adds `store.rs` and `store.sql` to both explicit core source li
 The private schema is implementation data, not a portable executable graph table.
 Updating profile coverage changes core/regex/URI-template source digests; native
 schema, policy, root-scope bytes and runtime identity goldens are unchanged.
+
+Atomic record transitions/reconstruction extend the explicit source coverage with
+`store_transitions.rs` and `store_replay.rs`. Both contribute to the core digest;
+the profile-source edit also refreshes regex/URI-template identities. Regenerate
+and independently check the same native fixture after reviewing these modules.

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add atomic revisioned/final runtime record publication, takeover-safe internal
+  command receipts, bounded journal/outbox delivery and capability-free state replay.
 - Add the trusted SQLite authority foundation with schema identity/version checks,
   WAL/FULL durability, atomic run/journal/outbox creation and fenced coordinator leases.
 - Add immutable runtime input manifests and checked checkpoints, influence label
