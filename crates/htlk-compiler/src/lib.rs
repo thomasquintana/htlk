@@ -12,6 +12,8 @@ mod compiler;
 mod diagnostic;
 mod input_value;
 mod inspect;
+mod join;
+pub use join::{JoinEdge, JoinEndpoint, JoinInput, JoinOperand, JoinOutput, JoinSpec};
 mod lexer;
 mod lower;
 mod modules;

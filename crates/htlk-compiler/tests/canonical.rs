@@ -380,3 +380,146 @@ fn imports_enforce_visibility_and_defining_module_resolution() {
         "C_IMPORT_CYCLE"
     );
 }
+
+fn chain_join() -> JoinSpec {
+    JoinSpec {
+        id: "test.joined".into(),
+        left_alias: "left".into(),
+        right_alias: "right".into(),
+        edges: vec![JoinEdge {
+            id: "pipe".into(),
+            from: JoinEndpoint {
+                graph: JoinOperand::Left,
+                port: "value".into(),
+            },
+            to: JoinEndpoint {
+                graph: JoinOperand::Right,
+                port: "value".into(),
+            },
+        }],
+        inputs: vec![JoinInput {
+            name: "value".into(),
+            to: vec![JoinEndpoint {
+                graph: JoinOperand::Left,
+                port: "value".into(),
+            }],
+        }],
+        outputs: vec![JoinOutput {
+            name: "value".into(),
+            from: JoinEndpoint {
+                graph: JoinOperand::Right,
+                port: "value".into(),
+            },
+        }],
+    }
+}
+fn pass(compiler: &Compiler, optional: bool) -> CanonicalDocument {
+    let ty = if optional {
+        "optional(string)"
+    } else {
+        "string"
+    };
+    let source = format!(
+        "ir_version=\"0.1\" graph test.pass {{ inputs={{value={ty}}} outputs={{value={ty}}} nodes{{}} edges{{edge pass{{from=inputs.value to=outputs.value}}}} }}"
+    );
+    compiler
+        .compile_source(&source, &catalogs())
+        .unwrap()
+        .canonical_document
+}
+#[test]
+fn repeated_joins_preserve_operand_definitions_and_are_self_contained() {
+    let (compiler, _) = compiler();
+    let operand = pass(&compiler, false);
+    let root = operand.fields().root_scope;
+    let first = compiler
+        .join_graphs(&operand, &operand, &chain_join(), &catalogs())
+        .unwrap();
+    assert!(first.canonical_document.fields().scopes.contains_key(&root));
+    let second = compiler
+        .join_graphs(
+            &first.canonical_document,
+            &operand,
+            &chain_join(),
+            &catalogs(),
+        )
+        .unwrap();
+    assert!(
+        second
+            .canonical_document
+            .fields()
+            .scopes
+            .contains_key(&first.canonical_document.fields().root_scope)
+    );
+    let analysis = analyzer::analyze_document(
+        second.canonical_document,
+        NativeSchemaOptions::default(),
+        &Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(analysis.structural_summary().scope_depth(), 3);
+    assert_eq!(analysis.structural_summary().expanded_nodes(), 4);
+}
+#[test]
+fn joins_reject_generated_collisions_double_bindings_and_unobservable_operands() {
+    let (compiler, _) = compiler();
+    let operand = pass(&compiler, false);
+    let mut join = chain_join();
+    join.edges[0].id = "join_in_0".into();
+    assert_eq!(
+        compiler
+            .join_graphs(&operand, &operand, &join, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_JOIN"
+    );
+    let mut join = chain_join();
+    join.inputs[0].to.push(JoinEndpoint {
+        graph: JoinOperand::Right,
+        port: "value".into(),
+    });
+    assert!(
+        compiler
+            .join_graphs(&operand, &operand, &join, &catalogs())
+            .is_err()
+    );
+    let mut join = chain_join();
+    join.edges.clear();
+    join.outputs[0].from.graph = JoinOperand::Left;
+    let optional = pass(&compiler, true);
+    assert_eq!(
+        compiler
+            .join_graphs(&operand, &optional, &join, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_UNUSED_NODE"
+    );
+}
+#[test]
+fn join_fanout_requiredness_is_combined_and_request_json_is_closed() {
+    let (compiler, _) = compiler();
+    let left = pass(&compiler, true);
+    let right = pass(&compiler, false);
+    let mut join = chain_join();
+    join.edges.clear();
+    join.inputs[0].to.push(JoinEndpoint {
+        graph: JoinOperand::Right,
+        port: "value".into(),
+    });
+    join.outputs.push(JoinOutput {
+        name: "left_value".into(),
+        from: JoinEndpoint {
+            graph: JoinOperand::Left,
+            port: "value".into(),
+        },
+    });
+    let output = compiler
+        .join_graphs(&left, &right, &join, &catalogs())
+        .unwrap();
+    let root =
+        &output.canonical_document.fields().scopes[&output.canonical_document.fields().root_scope];
+    assert!(root.fields().inputs.get("value").unwrap().required());
+    assert!(JoinSpec::from_json(br#"{"id":"test.join","left_alias":"left","right_alias":"right","edges":[],"inputs":[],"outputs":[],"guard":true}"#,&Limits::default()).is_err());
+}
