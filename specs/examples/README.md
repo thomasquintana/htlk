@@ -48,7 +48,7 @@ There are two research calls, then at most three pairs of revision and review ca
 
 The root permits at most eight calls; the refinement loop permits six. These are ceilings, not promises of available capacity. Tighter ancestor or deployment limits can stop work earlier. The selected policy must provide finite deadlines, adequate value/expression limits, and supported execution capabilities.
 
-By source inspection, the graph has a maximum nesting depth of three scopes and an upper bound of 34 invocation occurrences, counting all guarded branches and three loop iterations under the compiler specification's counting rules. The configured structural limits must accommodate that bound. These counts have not been confirmed by an implemented HTLK compiler.
+The graph has a maximum nesting depth of three scopes and an upper bound of 34 invocation occurrences, counting all guarded branches and three loop iterations under the compiler specification's counting rules. The configured structural limits must accommodate that bound. The Rust compiler integration tests confirm these counts using shared semantic analysis.
 
 Model selection and sampling settings are deployment details of these illustrative tools. They are not special IR node options in this example.
 

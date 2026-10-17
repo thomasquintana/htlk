@@ -26,6 +26,8 @@ pub struct FrontendLimits {
     pub max_report_bytes: usize,
     /// Aggregate frontend traversal work.
     pub max_work: usize,
+    /// Cumulative normalized intermediate bytes, including expanded aliases.
+    pub max_intermediate_bytes: usize,
 }
 impl Default for FrontendLimits {
     fn default() -> Self {
@@ -37,6 +39,7 @@ impl Default for FrontendLimits {
             max_tokens: 1_000_000,
             max_report_bytes: 16 * 1024 * 1024,
             max_work: 10_000_000,
+            max_intermediate_bytes: 128 * 1024 * 1024,
         }
     }
 }
@@ -56,10 +59,21 @@ pub struct CompilerConfig {
     pub schema_options: NativeSchemaOptions,
     /// Source and report ceilings.
     pub frontend: FrontendLimits,
+    /// Trusted host support for hard token/cost ceilings.
+    pub capabilities: CompilerCapabilities,
+}
+
+/// Hard metering capabilities promised by the fixed host integration.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CompilerCapabilities {
+    /// Trusted token accounting can enforce a hard budget.
+    pub hard_token_limit: bool,
+    /// Trusted cost accounting can enforce a hard budget.
+    pub hard_cost_limit: bool,
 }
 
 /// Complete checked compiler output. Reports do not affect executable identity.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CompilationSuccess {
     /// Authoritative normalized executable document.
     pub canonical_document: CanonicalDocument,
@@ -73,6 +87,26 @@ pub struct CompilationSuccess {
     pub source_map: Vec<SourceMapEntry>,
     /// Retained authored descriptions keyed by canonical pointer.
     pub documentation: BTreeMap<String, String>,
+    analysis: std::sync::Arc<crate::analyzer::AnalyzedDocument>,
+}
+impl std::fmt::Debug for CompilationSuccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompilationSuccess")
+            .field("canonical_document", &self.canonical_document)
+            .field("fingerprint", &self.fingerprint)
+            .field("diagnostics", &self.diagnostics)
+            .field("source_map", &self.source_map)
+            .field("documentation", &self.documentation)
+            .finish_non_exhaustive()
+    }
+}
+impl CompilationSuccess {
+    /// Immutable semantic report for the exact document analyzed at compilation.
+    /// Includes inferred expressions, checked value boundaries, runtime obligations,
+    /// binding uniqueness plans and structural bounds. It is never serialized proof.
+    pub fn analysis(&self) -> &crate::analyzer::AnalyzedDocument {
+        &self.analysis
+    }
 }
 
 /// Reusable compiler with immutable trusted configuration; performs no I/O.
@@ -105,6 +139,10 @@ impl From<CanonicalDocument> for CompilationInput<'_> {
     }
 }
 impl Compiler {
+    /// Immutable fixed selections used by every request.
+    pub fn config(&self) -> &CompilerConfig {
+        &self.config
+    }
     /// Compiles source, a finite source bundle, or a canonical document.
     ///
     /// # Errors
@@ -126,6 +164,8 @@ impl Compiler {
     /// Rejects mismatched policy identities, invalid manifests/options or limits.
     pub fn new(config: CompilerConfig) -> Result<Self> {
         config.limits.validate().map_err(|e| fail("C_POLICY", e))?;
+        PolicyDocument::decode(config.policy.document().as_bytes(), &config.limits)
+            .map_err(|e| fail("C_POLICY", e))?;
         config
             .profile
             .to_value(&config.limits)
@@ -136,6 +176,7 @@ impl Compiler {
                 "profile does not select configured policy",
             ));
         }
+        check_capabilities(&config.policy.fields().defaults, config.capabilities)?;
         let f = &config.frontend;
         if [
             f.max_source_bytes,
@@ -145,6 +186,7 @@ impl Compiler {
             f.max_tokens,
             f.max_report_bytes,
             f.max_work,
+            f.max_intermediate_bytes,
             config.schema_options.max_pattern_bytes,
             config.schema_options.max_regex_compiled_bytes,
         ]
@@ -177,6 +219,10 @@ impl Compiler {
         catalogs: &MCPCatalogInputs,
     ) -> Result<CompilationSuccess> {
         let l = &self.config.limits;
+        catalogs.check_limits(l)?;
+        document
+            .to_value(l)
+            .map_err(|e| fail("C_SERIALIZATION", e))?;
         let f = document.fields();
         if f.profile != self.config.profile
             || f.documents.get(&self.config.policy.digest()) != Some(self.config.policy.document())
@@ -195,7 +241,19 @@ impl Compiler {
             }
         }
         for binding in f.bindings.values() {
-            catalogs.descriptor(binding, l)?;
+            let descriptor = catalogs.descriptor(binding, l)?;
+            if f.documents.get(&binding.descriptor()) != Some(descriptor) {
+                return Err(fail(
+                    "C_MCP",
+                    "selected descriptor bytes differ from supplied catalogs",
+                ));
+            }
+        }
+        for scope in f.scopes.values() {
+            check_capabilities(&scope.fields().limits, self.config.capabilities)?;
+            for node in &scope.fields().nodes {
+                check_capabilities(&node.fields().limits, self.config.capabilities)?;
+            }
         }
         for (uri, id) in &f.schema_uris {
             // Embedded schema roots are checked against descriptor subdocuments by
@@ -225,12 +283,19 @@ impl Compiler {
                 Err(cause) => fail("C_SERIALIZATION", cause),
             },
         )?;
-        let diagnostics = analyzed
+        let mut diagnostics = analyzed
             .diagnostics()
             .iter()
             .cloned()
             .map(analysis)
-            .collect();
+            .collect::<Vec<_>>();
+        crate::diagnostic::sort(&mut diagnostics);
+        let report_bytes = diagnostics.iter().fold(0usize, |n, d| {
+            n.saturating_add(crate::diagnostic::diagnostic_size(d))
+        });
+        if report_bytes > self.config.frontend.max_report_bytes {
+            return Err(fail("C_SOURCE_LIMIT", "diagnostic report limit exceeded"));
+        }
         let envelope = analyzed
             .document()
             .envelope(l)
@@ -243,6 +308,18 @@ impl Compiler {
             diagnostics,
             source_map: vec![],
             documentation: BTreeMap::new(),
+            analysis: std::sync::Arc::new(analyzed),
         })
     }
+}
+fn check_capabilities(limits: &ExecutionLimits, capabilities: CompilerCapabilities) -> Result<()> {
+    if (limits.max_tokens().is_some() && !capabilities.hard_token_limit)
+        || (limits.max_cost_units().is_some() && !capabilities.hard_cost_limit)
+    {
+        return Err(fail(
+            "C_POLICY",
+            "host does not support the requested hard token/cost budget",
+        ));
+    }
+    Ok(())
 }

@@ -175,8 +175,86 @@ impl Compiler {
                 d
             })
             .collect::<Vec<_>>();
-        diagnostics.sort_by(|a, b| a.location.cmp(&b.location).then(a.code.cmp(&b.code)));
-        diagnostics.dedup();
+        crate::diagnostic::sort(&mut diagnostics);
+        let l = &self.config.limits;
+        let mut report_bytes = available_exports.iter().fold(0usize, |n, e| {
+            n.saturating_add(e.name.len())
+                .saturating_add(size_of::<ExportIndexEntry>())
+        });
+        for summary in &exports {
+            let bytes = match summary {
+                ExportSummary::Type { name, value_type } => name.len().saturating_add(
+                    value_type
+                        .encode(TypeContext::Value, l)
+                        .map_err(|e| fail("C_SERIALIZATION", e))?
+                        .len(),
+                ),
+                ExportSummary::Prompt {
+                    name, parameters, ..
+                } => {
+                    let mut bytes = name.len();
+                    for (name, p) in parameters {
+                        bytes = bytes.saturating_add(name.as_str().len()).saturating_add(
+                            p.encode(TypeContext::Value, l)
+                                .map_err(|e| fail("C_SERIALIZATION", e))?
+                                .len(),
+                        );
+                    }
+                    bytes
+                }
+                ExportSummary::Task {
+                    name,
+                    description,
+                    inputs,
+                    outputs,
+                    preconditions,
+                    postconditions,
+                    limits,
+                    ..
+                } => name
+                    .len()
+                    .saturating_add(description.len())
+                    .saturating_add(
+                        inputs
+                            .encode(l)
+                            .map_err(|e| fail("C_SERIALIZATION", e))?
+                            .len(),
+                    )
+                    .saturating_add(
+                        outputs
+                            .encode(l)
+                            .map_err(|e| fail("C_SERIALIZATION", e))?
+                            .len(),
+                    )
+                    .saturating_add(
+                        preconditions
+                            .encode(l)
+                            .map_err(|e| fail("C_SERIALIZATION", e))?
+                            .len(),
+                    )
+                    .saturating_add(
+                        postconditions
+                            .encode(l)
+                            .map_err(|e| fail("C_SERIALIZATION", e))?
+                            .len(),
+                    )
+                    .saturating_add(
+                        limits
+                            .encode(l)
+                            .map_err(|e| fail("C_SERIALIZATION", e))?
+                            .len(),
+                    ),
+            };
+            report_bytes = report_bytes
+                .saturating_add(bytes)
+                .saturating_add(size_of::<ExportSummary>());
+        }
+        report_bytes = diagnostics.iter().fold(report_bytes, |n, d| {
+            n.saturating_add(crate::diagnostic::diagnostic_size(d))
+        });
+        if report_bytes > self.config.frontend.max_report_bytes {
+            return Err(fail("C_SOURCE_LIMIT", "interface report limit exceeded"));
+        }
         Ok(ModuleInspectionSuccess {
             interface_version: "0.1",
             module: module.clone(),

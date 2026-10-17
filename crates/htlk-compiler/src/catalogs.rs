@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 /// Validated, immutable snapshots of exactly three MCP catalogs.
 #[derive(Clone, Debug)]
 pub struct MCPCatalogInputs {
+    bytes: usize,
+    depth: usize,
     pub(crate) servers: BTreeMap<String, ServerIdentity>,
     pub(crate) entries: BTreeMap<(Digest, String, String), JsonDocument>,
     pub(crate) schemas: BTreeMap<String, JsonDocument>,
@@ -26,18 +28,26 @@ impl MCPCatalogInputs {
     /// protocol-invalid descriptors, invalid retrieval roots, pins and size limits.
     pub fn from_json(bytes: &[u8], limits: &Limits) -> Result<Self> {
         let json = JsonDocument::new(bytes, limits).map_err(|e| fail("C_MCP", e))?;
-        Self::from_value(json.value(), limits).map_err(|mut e| {
-            for d in &mut e.diagnostics {
-                if d.code == "C_SYNTAX" {
-                    d.code = "C_MCP".into();
+        Self::from_value(json.value(), limits)
+            .map(|mut result| {
+                result.bytes = json.as_bytes().len();
+                result.depth = value_depth(json.value());
+                result
+            })
+            .map_err(|mut e| {
+                for d in &mut e.diagnostics {
+                    if d.code == "C_SYNTAX" {
+                        d.code = "C_MCP".into();
+                    }
                 }
-            }
-            e
-        })
+                e
+            })
     }
     fn from_value(v: &Value, l: &Limits) -> Result<Self> {
         let root = closed(v, &["tools", "resources", "prompts"], &[])?;
         let mut result = Self {
+            bytes: 0,
+            depth: 0,
             servers: BTreeMap::new(),
             entries: BTreeMap::new(),
             schemas: BTreeMap::new(),
@@ -123,6 +133,15 @@ impl MCPCatalogInputs {
         }
         Ok(result)
     }
+    pub(crate) fn check_limits(&self, l: &Limits) -> Result<()> {
+        if self.bytes > l.max_document_bytes || self.depth > l.max_depth {
+            return Err(fail(
+                "C_SOURCE_LIMIT",
+                "catalog exceeds compiler input limits",
+            ));
+        }
+        Ok(())
+    }
     pub(crate) fn descriptor(&self, binding: &McpBinding, l: &Limits) -> Result<&JsonDocument> {
         let (category, selection) = match binding.kind() {
             McpBindingKind::Tool { name, .. } => ("tools", name),
@@ -144,5 +163,12 @@ impl MCPCatalogInputs {
                     "selected descriptor does not match supplied catalogs",
                 )
             })
+    }
+}
+fn value_depth(v: &Value) -> usize {
+    match v {
+        Value::Map(m) => m.iter().map(|(_, v)| 1 + value_depth(v)).max().unwrap_or(0),
+        Value::Array(v) => v.iter().map(|v| 1 + value_depth(v)).max().unwrap_or(0),
+        _ => 0,
     }
 }

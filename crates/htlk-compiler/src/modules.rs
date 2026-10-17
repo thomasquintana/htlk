@@ -23,6 +23,7 @@ pub(crate) fn session<'a>(
         indices: BTreeMap::new(),
         active: BTreeMap::new(),
         tokens: 0,
+        heights: vec![],
     };
     let root = traversal.visit(target, false, inspection, None)?;
     Ok((
@@ -38,6 +39,7 @@ struct Traversal<'a> {
     indices: BTreeMap<ModuleRef, usize>,
     active: BTreeMap<ModuleRef, Option<SourceSpan>>,
     tokens: usize,
+    heights: Vec<usize>,
 }
 impl Traversal<'_> {
     fn visit(
@@ -60,6 +62,10 @@ impl Traversal<'_> {
             return Err(e);
         }
         if let Some(i) = self.indices.get(r) {
+            if self.active.len().saturating_add(self.heights[*i]) > self.c.config.frontend.max_depth
+            {
+                return Err(fail("C_SOURCE_LIMIT", "module import depth exceeded"));
+            }
             if imported
                 && self.modules[*i]
                     .declarations
@@ -126,7 +132,16 @@ impl Traversal<'_> {
             result.map_err(|mut e|{for d in &mut e.diagnostics{if matches!(&d.location,DiagnosticLocation::CanonicalRecordPath(p) if p.is_empty()){d.location=DiagnosticLocation::SourceSpan(import.span.clone());}}e})?;
         }
         self.active.remove(r);
+        let height = 1 + imports
+            .values()
+            .map(|i| self.heights[*i])
+            .max()
+            .unwrap_or(0);
+        if height > self.c.config.frontend.max_depth {
+            return Err(fail("C_SOURCE_LIMIT", "module import depth exceeded"));
+        }
         let index = self.modules.len();
+        self.heights.push(height);
         self.modules.push(module);
         self.imports.push(imports);
         self.indices.insert(r.clone(), index);

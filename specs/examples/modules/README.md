@@ -28,7 +28,7 @@ For inspection, request the `find_evidence` export from the research package's `
 
 The module form retains the same root graph name, child node/edge IDs, tool selections, prompts, predicates, and loop bounds. Exported task names and import aliases resolve to the same underlying definitions. Its required acceptance test is byte-identical canonical output to the single-file program under the same catalogs and execution profile.
 
-The documentation checker parses all five files, checks imports/exports in this fixture, reconstructs the original single-file declarations for a token comparison, and recomputes the package-map digests using the supplied digest helper. It also compares every manifest and source in the JSON bundle with its disk counterpart. It does not compile these graphs or establish executable byte equivalence; that requires the eventual HTLK compiler.
+The documentation checker parses all five files, checks imports/exports in this fixture, reconstructs the original single-file declarations for a token comparison, and recomputes the package-map digests using the supplied digest helper. It also compares every manifest and source in the JSON bundle with its disk counterpart. The separate Rust compiler integration tests compile both forms and verify byte-identical canonical documents and executable envelopes under the same catalogs and profile.
 
 ## Editing the example
 

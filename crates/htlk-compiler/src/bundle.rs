@@ -59,6 +59,23 @@ impl SourcePackage {
     /// Returns bounded CBOR construction or encoding failures.
     pub fn digest(&self, l: &Limits) -> Result<Digest> {
         let m = &self.manifest;
+        let mut size = m
+            .package_name
+            .len()
+            .saturating_add(m.package_version.len())
+            .saturating_add(m.dependencies.len().saturating_mul(80));
+        for (k, v) in m.modules.iter().chain(self.sources.iter()) {
+            size = size
+                .saturating_add(k.len())
+                .saturating_add(v.len())
+                .saturating_add(2);
+        }
+        if size > l.max_document_bytes {
+            return Err(fail(
+                "C_SOURCE_LIMIT",
+                "source package exceeds digest construction limit",
+            ));
+        }
         let manifest = object([
             ("manifest_version".into(), Value::Text("0.1".into())),
             ("package_name".into(), Value::Text(m.package_name.clone())),
@@ -108,7 +125,8 @@ impl SourceBundle {
     /// # Errors
     /// Rejects duplicate/unknown fields, invalid versions and malformed record data.
     pub fn from_json(bytes: &[u8], l: &Limits) -> Result<Self> {
-        let doc = JsonDocument::new(bytes, l).map_err(|e| fail("C_SOURCE_BUNDLE", e))?;
+        let doc = JsonDocument::new(bytes, l)
+            .map_err(|e| bundle_error("C_SOURCE_BUNDLE", &e.to_string(), ""))?;
         Self::parse(doc.value()).map_err(|mut e| {
             for d in &mut e.diagnostics {
                 if d.code == "C_SYNTAX" {
@@ -269,7 +287,7 @@ impl SourceBundle {
             })?;
         }
         let mut active = BTreeSet::new();
-        let mut reached = BTreeSet::new();
+        let mut reached = BTreeMap::new();
         self.package_visit(self.entry.package_digest, 0, c, &mut active, &mut reached)?;
         if reached.len() != self.packages.len() {
             return Err(bundle_error(
@@ -287,8 +305,8 @@ impl SourceBundle {
         depth: usize,
         c: &Compiler,
         active: &mut BTreeSet<Digest>,
-        reached: &mut BTreeSet<Digest>,
-    ) -> Result<()> {
+        reached: &mut BTreeMap<Digest, usize>,
+    ) -> Result<usize> {
         if depth >= c.config.frontend.max_depth {
             return Err(bundle_error(
                 "C_SOURCE_LIMIT",
@@ -297,28 +315,53 @@ impl SourceBundle {
             ));
         }
         if active.contains(&pin) {
-            return Err(bundle_error(
+            let mut e = bundle_error(
                 "C_SOURCE_BUNDLE",
                 "package dependency cycle",
                 &format!("/packages/{pin}/manifest/dependencies"),
-            ));
+            );
+            e.diagnostics[0].related_locations = active
+                .iter()
+                .map(|pin| {
+                    DiagnosticLocation::SourceBundlePath(format!(
+                        "/packages/{pin}/manifest/dependencies"
+                    ))
+                })
+                .collect();
+            return Err(e);
         }
-        if !reached.insert(pin) {
-            return Ok(());
+        if let Some(height) = reached.get(&pin) {
+            if depth.saturating_add(*height) > c.config.frontend.max_depth {
+                return Err(bundle_error(
+                    "C_SOURCE_LIMIT",
+                    "package dependency depth exceeded",
+                    "/packages",
+                ));
+            }
+            return Ok(*height);
         }
         let p = self.packages.get(&pin).ok_or_else(|| {
             bundle_error(
                 "C_PACKAGE_PIN",
                 "missing selected package",
-                &format!("/packages/{pin}"),
+                "/entry/package_digest",
             )
         })?;
         active.insert(pin);
-        for next in p.manifest.dependencies.values() {
-            self.package_visit(*next, depth + 1, c, active, reached)?;
+        let mut height = 1;
+        for (alias, next) in &p.manifest.dependencies {
+            if !self.packages.contains_key(next) {
+                return Err(bundle_error(
+                    "C_PACKAGE_PIN",
+                    "missing selected dependency package",
+                    &format!("/packages/{pin}/manifest/dependencies/{alias}"),
+                ));
+            }
+            height = height.max(1 + self.package_visit(*next, depth + 1, c, active, reached)?);
         }
         active.remove(&pin);
-        Ok(())
+        reached.insert(pin, height);
+        Ok(height)
     }
     pub(crate) fn module(&self, r: &ModuleRef) -> Result<(&str, SourceLocation)> {
         let p = self

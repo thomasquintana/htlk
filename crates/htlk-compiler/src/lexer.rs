@@ -10,6 +10,7 @@ use crate::{
 pub(crate) enum Token {
     Word(String),
     String(String),
+    TripleString(String),
     Number(String),
     Regex(String, String),
     Symbol(String),
@@ -90,7 +91,6 @@ fn lex_inner(
                     match ch {
                         '\n' if triple => encoded.push_str("\\n"),
                         '\r' if triple => encoded.push_str("\\r"),
-                        '\t' if triple => encoded.push_str("\\t"),
                         '"' if triple => encoded.push_str("\\\""),
                         _ => encoded.push(ch),
                     }
@@ -103,7 +103,11 @@ fn lex_inner(
             let crate::executable::cbor::Value::Text(s) = doc.value() else {
                 unreachable!()
             };
-            Token::String(s.clone())
+            if triple {
+                Token::TripleString(s.clone())
+            } else {
+                Token::String(s.clone())
+            }
         } else if b[p] == b'/' {
             p += 1;
             let mut pattern = String::new();
@@ -146,7 +150,9 @@ fn lex_inner(
             if flags.chars().any(|c| !"ims".contains(c))
                 || flags.chars().any(|c| flags.matches(c).count() != 1)
             {
-                return Err(at("invalid or repeated regex flag", location, start, p));
+                let mut e = at("invalid or repeated regex flag", location, start, p);
+                e.diagnostics[0].code = "C_REGEX".into();
+                return Err(e);
             }
             Token::Regex(pattern, flags.into())
         } else if b[p].is_ascii_alphabetic() {
@@ -214,7 +220,9 @@ fn lex_inner(
             }
         };
         if result.len() == max_tokens {
-            return Err(at("token limit exceeded", location, start, p));
+            let mut e = at("token limit exceeded", location, start, p);
+            e.diagnostics[0].code = "C_SOURCE_LIMIT".into();
+            return Err(e);
         }
         result.push(Located {
             value: token,

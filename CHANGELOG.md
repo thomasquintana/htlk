@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Implement Draft 0.1 standalone, source-bundle, and canonical-document compilation
+  in `htlk-compiler`, with strict three-catalog ingestion, fixed profile/library
+  matching, bounded parsing/lowering, source diagnostics and deterministic output.
+- Add exact source-package hashing, import/export visibility and defining-module
+  resolution, implementation-checked module inspection, and binary public-port
+  graph joins with full shared reanalysis.
+- Expose immutable compiler analysis reports, including runtime boundary obligations.
+  Verify monolithic/modular worked-example byte equality and interoperability with
+  native runtime admission.
+
 ### Changed
 
 - Remove unused `ScopeContext` arguments from `Node` and `Scope` construction,

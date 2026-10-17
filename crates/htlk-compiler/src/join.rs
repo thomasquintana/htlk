@@ -171,6 +171,23 @@ impl Compiler {
         join: &JoinSpec,
         catalogs: &MCPCatalogInputs,
     ) -> Result<CompilationSuccess> {
+        let l = &self.config.limits;
+        let operand_bytes = left
+            .encode(l)
+            .map_err(|e| fail("C_SERIALIZATION", e))?
+            .len()
+            .saturating_add(
+                right
+                    .encode(l)
+                    .map_err(|e| fail("C_SERIALIZATION", e))?
+                    .len(),
+            );
+        if operand_bytes > self.config.frontend.max_intermediate_bytes {
+            return Err(fail(
+                "C_SOURCE_LIMIT",
+                "join operands exceed intermediate construction limit",
+            ));
+        }
         for (label, document) in [("left", left), ("right", right)] {
             self.compile_document(document.clone(), catalogs)
                 .map_err(|mut e| {

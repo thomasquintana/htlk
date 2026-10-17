@@ -9,19 +9,19 @@ The compiler is a source frontend and orchestration layer over
 
 ## Delivery sequence
 
-1. **Configuration and canonical compilation:** fixed profile/policy and complete
+1. **Implemented — Configuration and canonical compilation:** fixed profile/policy and complete
    linked manifests; bounded requests and reports; strict three-catalog inputs;
    exact canonical-input admission; shared analysis and envelope encoding.
-2. **Standalone source:** spanned lexical/syntax analysis, declaration resolution,
+2. **Implemented — Standalone source:** spanned lexical/syntax analysis, declaration resolution,
    all operation/type/expression/template lowering, unused-declaration validation,
    precise reachable closure, normalization-aware source maps and descriptions.
-3. **Source packages:** closed bundle validation, exact package digest calculation,
+3. **Implemented — Source packages:** closed bundle validation, exact package digest calculation,
    direct imports and visibility, defining-module resolution, module inspection,
    monolithic/modular executable equivalence.
-4. **Graph composition:** revalidated canonical operands, public-only bindings,
+4. **Implemented — Graph composition:** revalidated canonical operands, public-only bindings,
    deterministic generated edges, conflict-checked table union and whole-result
    verification.
-5. **Conformance:** worked fixtures, diagnostics/limits, deterministic identity,
+5. **Implemented — Conformance:** worked fixtures, diagnostics/limits, deterministic identity,
    runtime admission interoperability, documentation and workspace quality checks.
 
 ## Architectural requirements
@@ -49,3 +49,13 @@ The supplied single-file and modular decision-brief examples must produce equal
 canonical documents and executable bytes under the same catalogs/profile. Runtime
 admission must accept emitted bytes under the matching host registry. Invalid
 requests return neither a partial executable nor a purportedly verified interface.
+
+The compiler integration corpus checks these identities against the independent
+JavaScript package digest fixtures, validates the example's depth-three / 34-node
+structural bound, exercises all operation categories and generic callbacks, and
+passes emitted bytes to native runtime admission through the facade integration
+test. Compiler results expose immutable shared analysis for checked boundaries.
+
+The core reads finite snapshots only. Host filesystem collection and its symlink/
+stable-read rules, authoring/repair applications, optional compilation caches, and
+runtime graph scheduling/installation remain their respective consumers' work.

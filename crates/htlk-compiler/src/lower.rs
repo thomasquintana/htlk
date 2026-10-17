@@ -100,6 +100,7 @@ pub(crate) struct Session<'a> {
     pub diagnostics: Vec<crate::Diagnostic>,
     work: usize,
     depth: usize,
+    intermediate_bytes: usize,
 }
 impl<'a> Session<'a> {
     pub fn new(
@@ -108,6 +109,7 @@ impl<'a> Session<'a> {
         modules: Vec<Module>,
         imports: Vec<BTreeMap<String, usize>>,
     ) -> Result<Self> {
+        catalogs.check_limits(&compiler.config.limits)?;
         let mut symbols = vec![];
         for (i, m) in modules.iter().enumerate() {
             let mut names = BTreeMap::new();
@@ -118,9 +120,13 @@ impl<'a> Session<'a> {
                     _ => value_name(&d.name),
                 };
                 checked.map_err(|e| located(e, &d.span))?;
-                if names.insert(d.name.clone(), d.clone()).is_some() {
+                if let Some(previous) = names.insert(d.name.clone(), d.clone()) {
                     return Err(located(
-                        fail("C_DUPLICATE", "duplicate declaration"),
+                        crate::diagnostic::related(
+                            "C_DUPLICATE",
+                            "duplicate declaration",
+                            &previous.span,
+                        ),
                         &d.span,
                     ));
                 }
@@ -164,21 +170,61 @@ impl<'a> Session<'a> {
             diagnostics: Vec::new(),
             work: 0,
             depth: 0,
+            intermediate_bytes: 0,
         })
     }
     fn l(&self) -> &Limits {
         &self.compiler.config.limits
     }
     fn charge(&mut self) -> Result<()> {
+        self.charge_amount(1)
+    }
+    fn charge_amount(&mut self, amount: usize) -> Result<()> {
         self.work = self
             .work
-            .checked_add(1)
+            .checked_add(amount)
             .ok_or_else(|| fail("C_SOURCE_LIMIT", "work overflow"))?;
         if self.work > self.compiler.config.frontend.max_work {
             Err(fail("C_SOURCE_LIMIT", "frontend work limit exceeded"))
         } else {
             Ok(())
         }
+    }
+    fn account(&mut self, bytes: usize) -> Result<()> {
+        self.intermediate_bytes = self
+            .intermediate_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| fail("C_SOURCE_LIMIT", "intermediate size overflow"))?;
+        if self.intermediate_bytes > self.compiler.config.frontend.max_intermediate_bytes {
+            return Err(fail(
+                "C_SOURCE_LIMIT",
+                "intermediate construction byte limit exceeded",
+            ));
+        }
+        Ok(())
+    }
+    fn report_limit(&mut self) -> Result<()> {
+        self.charge_amount(
+            self.source_map
+                .len()
+                .saturating_add(self.documentation.len()),
+        )?;
+        let bytes = self
+            .source_map
+            .iter()
+            .fold(0usize, |n, e| {
+                n.saturating_add(crate::diagnostic::map_size(e))
+            })
+            .saturating_add(self.documentation.iter().fold(0usize, |n, (k, v)| {
+                n.saturating_add(k.len()).saturating_add(v.len())
+            }));
+        if bytes > self.compiler.config.frontend.max_report_bytes {
+            return Err(fail(
+                "C_SOURCE_LIMIT",
+                "compiler provenance/report limit exceeded",
+            ));
+        }
+        Ok(())
     }
     fn enter(&mut self) -> Result<()> {
         self.charge()?;
@@ -197,9 +243,10 @@ impl<'a> Session<'a> {
                 .get(rest)
                 .ok_or_else(|| fail("C_NAME", format!("unknown imported declaration {name}")))?;
             if !d.exported {
-                return Err(fail(
+                return Err(crate::diagnostic::related(
                     "C_VISIBILITY",
-                    format!("private imported declaration {name}"),
+                    &format!("private imported declaration {name}"),
+                    &d.span,
                 ));
             }
             return Ok((*target, d.clone()));
@@ -215,7 +262,7 @@ impl<'a> Session<'a> {
             let declarations = self.modules[module].declarations.clone();
             for d in declarations {
                 self.charge()?;
-                let result = match &d.kind {
+                let result = (|| match &d.kind {
                     DeclKind::Type(t) => self.ty(module, t).map(|_| ()),
                     DeclKind::Prompt(..) => self.prompt(module, &d.name).map(|_| ()),
                     DeclKind::Library(..) => self.library(module, &d.name).map(|_| ()),
@@ -226,8 +273,9 @@ impl<'a> Session<'a> {
                             .compile_document(doc, self.catalogs)
                             .map(|out| self.diagnostics.extend(out.diagnostics))
                     }
-                };
+                })();
                 result.map_err(|e| self.source_error(located(e, &d.span)))?;
+                self.report_limit()?;
             }
         }
         Ok(())
@@ -241,7 +289,11 @@ impl<'a> Session<'a> {
                 } else {
                     let (m, d) = self.resolve(module, n)?;
                     let DeclKind::Type(t) = d.kind else {
-                        return Err(fail("C_NAME", "expected type declaration"));
+                        return Err(crate::diagnostic::related(
+                            "C_NAME",
+                            "expected type declaration",
+                            &d.span,
+                        ));
                     };
                     let key = (m, d.name.clone());
                     if let Some(t) = self.types.get(&key) {
@@ -282,10 +334,17 @@ impl<'a> Session<'a> {
             }
         };
         self.depth -= 1;
+        if let Ok(t) = &result {
+            self.account(
+                t.encode(TypeContext::Value, self.l())
+                    .map_err(type_error)?
+                    .len(),
+            )?;
+        }
         result
     }
     fn make_type(&self, k: ValueTypeKind) -> Result<ValueType> {
-        ValueType::new(k, TypeContext::Value, self.l()).map_err(|e| fail("C_TYPE", e))
+        ValueType::new(k, TypeContext::Value, self.l()).map_err(type_error)
     }
     fn port(&mut self, m: usize, p: &PortTy) -> Result<Port> {
         Ok(Port::new(self.ty(m, &p.ty)?, p.required))
@@ -295,7 +354,7 @@ impl<'a> Session<'a> {
         for (n, p) in ports.into_iter().flatten() {
             out.push((identifier(n)?, self.port(m, p)?));
         }
-        PortTable::new(out, self.l()).map_err(|e| fail("C_TYPE", e))
+        PortTable::new(out, self.l()).map_err(graph_error)
     }
     fn library(&mut self, module: usize, alias: &str) -> Result<Library> {
         let (_, d) = self.resolve(module, alias)?;
@@ -377,8 +436,7 @@ impl<'a> Session<'a> {
                 ));
             }
         }
-        let template =
-            PromptTemplate::new(params, parts, self.l()).map_err(|e| fail("C_PROMPT", e))?;
+        let template = PromptTemplate::new(params, parts, self.l()).map_err(expression_error)?;
         crate::analyzer::check_prompt_template(&template, self.l())
             .map_err(|e| fail("C_PROMPT", e))?;
         let id = template.digest(self.l()).map_err(|e| fail("C_PROMPT", e))?;
@@ -389,6 +447,7 @@ impl<'a> Session<'a> {
             span: d.span,
             declaration_name: Some(d.name),
         });
+        self.report_limit()?;
         Ok(id)
     }
     fn function(&mut self, module: usize, name: &[String]) -> Result<FunctionId> {
@@ -414,6 +473,9 @@ impl<'a> Session<'a> {
             .expr_inner(m, e)
             .map_err(|error| located(error, &e.span));
         self.depth -= 1;
+        if let Ok(e) = &result {
+            self.account(e.encode(self.l()).map_err(expression_error)?.len())?;
+        }
         result
     }
     fn expr_inner(&mut self, m: usize, e: &Expr) -> Result<Expression> {
@@ -545,7 +607,7 @@ impl<'a> Session<'a> {
                 }
             }
         };
-        Expression::new(k, self.l()).map_err(|e| fail("C_TYPE", e))
+        Expression::new(k, self.l()).map_err(expression_error)
     }
     fn condition(&mut self, m: usize, e: Option<&Expr>) -> Result<Expression> {
         match e {
@@ -684,7 +746,7 @@ impl<'a> Session<'a> {
             },
             self.l(),
         )
-        .map_err(|e| fail("C_SCOPE", e))?;
+        .map_err(graph_error)?;
         let id = scope
             .digest(self.l())
             .map_err(|e| fail("C_SERIALIZATION", e))?;
@@ -703,7 +765,7 @@ impl<'a> Session<'a> {
             if let Some(d) = &source.value.options.description {
                 self.documentation.insert(path.clone(), d.clone());
             }
-            self.expression_sources(&path, &source.value);
+            self.expression_sources(&path, n.fields(), &source.value);
         }
         for (i, e) in scope.fields().edges.iter().enumerate() {
             let source = b
@@ -720,12 +782,13 @@ impl<'a> Session<'a> {
             if let Some(d) = &source.value.description {
                 self.documentation.insert(path.clone(), d.clone());
             }
-            if let Some(e) = &source.value.guard {
-                self.source_map.push(SourceMapEntry {
-                    canonical_path: format!("{path}/guard"),
-                    span: e.span.clone(),
-                    declaration_name: None,
-                });
+            if let Some(authored) = &source.value.guard {
+                crate::provenance::expression(
+                    &format!("{path}/guard"),
+                    e.guard(),
+                    authored,
+                    &mut self.source_map,
+                );
             }
         }
         for (name, e) in [
@@ -733,37 +796,66 @@ impl<'a> Session<'a> {
             ("postconditions", b.postconditions.as_ref()),
         ] {
             if let Some(e) = e {
-                self.source_map.push(SourceMapEntry {
-                    canonical_path: format!("/scopes/{id}/{name}"),
-                    span: e.span.clone(),
-                    declaration_name: None,
-                });
+                let normalized = if name == "preconditions" {
+                    &scope.fields().preconditions
+                } else {
+                    &scope.fields().postconditions
+                };
+                crate::provenance::expression(
+                    &format!("/scopes/{id}/{name}"),
+                    normalized,
+                    e,
+                    &mut self.source_map,
+                );
             }
         }
+        self.account(scope.encode(self.l()).map_err(graph_error)?.len())?;
         self.pool.scopes.insert(id, scope);
+        self.report_limit()?;
         Ok(id)
     }
-    fn expression_sources(&mut self, path: &str, n: &AstNode) {
-        for (suffix, e) in [
-            ("guard", n.options.guard.as_ref()),
-            ("preconditions", n.options.preconditions.as_ref()),
-            ("postconditions", n.options.postconditions.as_ref()),
-            ("operation/3", n.options.until.as_ref()),
+    fn expression_sources(&mut self, path: &str, normalized: &NodeFields, n: &AstNode) {
+        for (suffix, value, e) in [
+            ("guard", &normalized.guard, n.options.guard.as_ref()),
+            (
+                "preconditions",
+                &normalized.preconditions,
+                n.options.preconditions.as_ref(),
+            ),
+            (
+                "postconditions",
+                &normalized.postconditions,
+                n.options.postconditions.as_ref(),
+            ),
         ] {
             if let Some(e) = e {
-                self.source_map.push(SourceMapEntry {
-                    canonical_path: format!("{path}/{suffix}"),
-                    span: e.span.clone(),
-                    declaration_name: None,
-                });
+                crate::provenance::expression(
+                    &format!("{path}/{suffix}"),
+                    value,
+                    e,
+                    &mut self.source_map,
+                );
             }
         }
-        if let AstOperation::Eval(_, e) = &n.operation {
-            self.source_map.push(SourceMapEntry {
-                canonical_path: format!("{path}/operation/1"),
-                span: e.span.clone(),
-                declaration_name: None,
-            });
+        if let (AstOperation::Eval(_, source), Operation::Eval(value)) =
+            (&n.operation, &normalized.operation)
+        {
+            crate::provenance::expression(
+                &format!("{path}/operation/1"),
+                value,
+                source,
+                &mut self.source_map,
+            );
+        }
+        if let (Some(source), Operation::Loop { until, .. }) =
+            (&n.options.until, &normalized.operation)
+        {
+            crate::provenance::expression(
+                &format!("{path}/operation/3"),
+                until,
+                source,
+                &mut self.source_map,
+            );
         }
     }
     fn node(&mut self, m: usize, n: &Located<AstNode>) -> Result<Node> {
@@ -857,15 +949,26 @@ impl<'a> Session<'a> {
                 let (binding, inputs, outputs) =
                     self.mcp(category, server, selection, b.pin.as_deref())?;
                 let retry = if let Some(retry) = &b.retry {
-                    let mut values = vec![];
-                    for (name, e) in retry {
-                        values.push((name.clone(), literal_value(e)?));
-                    }
-                    RetryPolicy::from_value(
-                        &Value::Map(Map::try_from_entries(values).map_err(|e| fail("C_MCP", e))?),
-                        self.l(),
-                    )
-                    .map_err(|e| fail("C_MCP", e))?
+                    let count = literal_value(&retry["max_attempts"])?;
+                    let on = literal_value(&retry["on"])?;
+                    let backoff = literal_value(&retry["backoff_ms"])?;
+                    let number = |v: &Value| -> Result<u64> {
+                        match v {
+                            Value::Integer(n) => u64::try_from(*n)
+                                .map_err(|_| fail("C_MCP", "negative retry count/delay")),
+                            _ => Err(fail("C_MCP", "retry count/delays must be integers")),
+                        }
+                    };
+                    let codes = crate::input_value::array(&on)?
+                        .iter()
+                        .map(|v| crate::input_value::text(v).map(str::to_owned))
+                        .collect::<Result<Vec<_>>>()?;
+                    let delays = crate::input_value::array(&backoff)?
+                        .iter()
+                        .map(number)
+                        .collect::<Result<Vec<_>>>()?;
+                    RetryPolicy::new(number(&count)?, codes, delays, self.l())
+                        .map_err(|e| fail("C_MCP", e))?
                 } else {
                     RetryPolicy::no_retry()
                 };
@@ -879,7 +982,7 @@ impl<'a> Session<'a> {
         f.preconditions = self.condition(m, b.preconditions.as_ref())?;
         f.postconditions = self.condition(m, b.postconditions.as_ref())?;
         f.limits = self.limits(b)?;
-        Node::new(f, self.l()).map_err(|e| fail("C_SCOPE", e))
+        Node::new(f, self.l()).map_err(graph_error)
     }
     fn mcp(
         &mut self,
@@ -1013,7 +1116,8 @@ impl<'a> Session<'a> {
     }
     pub fn document(&mut self, name: &str, root: Digest) -> Result<CanonicalDocument> {
         self.charge()?;
-        let l = self.l();
+        let compiler = self.compiler;
+        let l = &compiler.config.limits;
         let mut out = DocumentFields::new(name.into(), self.compiler.config.profile.clone(), root);
         out.documents.insert(
             self.compiler.config.policy.digest(),
@@ -1022,6 +1126,7 @@ impl<'a> Session<'a> {
         let mut pending = BTreeSet::from([root]);
         let mut reached = BTreeSet::new();
         while let Some(id) = pending.pop_first() {
+            self.charge()?;
             if !reached.insert(id) {
                 continue;
             }
@@ -1161,16 +1266,26 @@ impl<'a> Session<'a> {
             })
             .map(|(p, d)| (p.clone(), d.clone()))
             .collect();
-        let bytes = success
-            .source_map
-            .iter()
-            .map(|e| e.canonical_path.len() + size_of::<SourceMapEntry>())
-            .sum::<usize>()
-            + success
-                .documentation
-                .iter()
-                .map(|(p, d)| p.len() + d.len())
-                .sum::<usize>();
+        success
+            .diagnostics
+            .extend(self.diagnostics.iter().cloned().map(|mut d| {
+                d.location = self.source_location(&d.location);
+                d.related_locations = d
+                    .related_locations
+                    .iter()
+                    .map(|l| self.source_location(l))
+                    .collect();
+                d
+            }));
+        crate::diagnostic::sort(&mut success.diagnostics);
+        let bytes = success.source_map.iter().fold(0usize, |n, e| {
+            n.saturating_add(crate::diagnostic::map_size(e))
+        }) + success.documentation.iter().fold(0usize, |n, (p, d)| {
+            n.saturating_add(p.len()).saturating_add(d.len())
+        });
+        let bytes = success.diagnostics.iter().fold(bytes, |n, d| {
+            n.saturating_add(crate::diagnostic::diagnostic_size(d))
+        });
         if bytes > self.compiler.config.frontend.max_report_bytes {
             return Err(fail("C_SOURCE_LIMIT", "compiler report limit exceeded"));
         }
@@ -1179,6 +1294,43 @@ impl<'a> Session<'a> {
 }
 fn one_port(name: &str, t: ValueType, l: &Limits) -> Result<PortTable> {
     PortTable::new(vec![(identifier(name)?, Port::new(t, true))], l).map_err(|e| fail("C_TYPE", e))
+}
+fn type_error(e: TypeError) -> crate::CompilationFailure {
+    let code = match &e {
+        TypeError::DuplicateEnumMember => "C_DUPLICATE",
+        TypeError::Codec(e) if matches!(e.kind(), cbor::ErrorKind::DuplicateMapKey) => {
+            "C_DUPLICATE"
+        }
+        _ => "C_TYPE",
+    };
+    fail(code, e)
+}
+fn expression_error(e: ExpressionError) -> crate::CompilationFailure {
+    let code = match &e {
+        ExpressionError::DuplicateField => "C_DUPLICATE",
+        ExpressionError::InvalidRegexFlags => "C_REGEX",
+        ExpressionError::InvalidTemplateParameter | ExpressionError::TemplateParameterMismatch => {
+            "C_PROMPT"
+        }
+        ExpressionError::Codec(e) if matches!(e.kind(), cbor::ErrorKind::DuplicateMapKey) => {
+            "C_DUPLICATE"
+        }
+        _ => "C_TYPE",
+    };
+    fail(code, e)
+}
+fn graph_error(e: GraphRecordError) -> crate::CompilationFailure {
+    match e {
+        GraphRecordError::Type(e) => type_error(e),
+        GraphRecordError::Expression(e) => expression_error(e),
+        GraphRecordError::DuplicateId(_) => fail("C_DUPLICATE", e),
+        GraphRecordError::InvalidBound("max_iterations") => fail("C_LOOP", e),
+        GraphRecordError::Options(_) => fail("C_POLICY", e),
+        GraphRecordError::Codec(ref c) if matches!(c.kind(), cbor::ErrorKind::DuplicateMapKey) => {
+            fail("C_DUPLICATE", e)
+        }
+        _ => fail("C_SCOPE", e),
+    }
 }
 fn scope_dependencies(scope: &Scope, out: &mut BTreeSet<Digest>) {
     let f = scope.fields();

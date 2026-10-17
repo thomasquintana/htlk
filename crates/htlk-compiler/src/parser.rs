@@ -79,7 +79,7 @@ pub(crate) fn parse(
                     None
                 };
                 p.expect("=")?;
-                DeclKind::Prompt(params, p.string()?)
+                DeclKind::Prompt(params, p.template()?)
             }
             "predicate_library" => {
                 p.expect("=")?;
@@ -157,6 +157,11 @@ impl Parser {
         let s = self.span();
         at(m, s.source, s.start_byte, s.end_byte)
     }
+    fn duplicate(&self, m: &str) -> crate::CompilationFailure {
+        let mut e = self.error(m);
+        e.diagnostics[0].code = "C_DUPLICATE".into();
+        e
+    }
     fn is(&self, s: &str) -> bool {
         matches!(self.tokens.get(self.pos).map(|t|&t.value),Some(Token::Word(w)|Token::Symbol(w)) if w==s)
     }
@@ -189,9 +194,16 @@ impl Parser {
         }
     }
     fn identifier(&mut self) -> Result<String> {
+        let span = self.span();
         let s = self.word()?;
-        s.parse::<crate::executable::Identifier>()
-            .map_err(|_| self.error("invalid identifier"))?;
+        s.parse::<crate::executable::Identifier>().map_err(|_| {
+            at(
+                "invalid identifier",
+                span.source,
+                span.start_byte,
+                span.end_byte,
+            )
+        })?;
         Ok(s)
     }
     fn name(&mut self) -> Result<String> {
@@ -230,6 +242,19 @@ impl Parser {
             Err(self.error("expected integer"))
         }
     }
+    fn template(&mut self) -> Result<String> {
+        if let Some(Located {
+            value: Token::TripleString(s),
+            ..
+        }) = self.tokens.get(self.pos)
+        {
+            let s = s.clone();
+            self.pos += 1;
+            Ok(s)
+        } else {
+            self.string()
+        }
+    }
     fn key(&mut self) -> Result<String> {
         if matches!(
             self.tokens.get(self.pos).map(|t| &t.value),
@@ -251,9 +276,13 @@ impl Parser {
     fn ports(&mut self) -> Result<Ports> {
         self.expect("{")?;
         let mut fields = vec![];
+        let mut names = BTreeSet::new();
         if !self.eat("}") {
             loop {
                 let k = self.key()?;
+                if !names.insert(k.clone()) {
+                    return Err(self.duplicate("duplicate decoded port/field name"));
+                }
                 self.expect("=")?;
                 fields.push((k, self.port_ty()?));
                 if self.eat("}") {
@@ -334,7 +363,7 @@ impl Parser {
         while !self.eat("}") {
             let key = self.word()?;
             if !seen.insert(key.clone()) {
-                return Err(self.error("duplicate block member"));
+                return Err(self.duplicate("duplicate block member"));
             }
             let legal = match role {
                 "scope" => matches!(
@@ -426,7 +455,7 @@ impl Parser {
                         self.expect("=")?;
                         let v = self.integer()?;
                         if m.insert(k, v).is_some() {
-                            return Err(self.error("duplicate limit"));
+                            return Err(self.duplicate("duplicate limit"));
                         }
                     }
                     b.limits = Some(m)
@@ -548,7 +577,7 @@ impl Parser {
                         while !self.eat("}") {
                             let k = self.word()?;
                             if !seen.insert(k.clone()) {
-                                return Err(self.error("duplicate edge member"));
+                                return Err(self.duplicate("duplicate edge member"));
                             }
                             self.expect("=")?;
                             match k.as_str() {
@@ -611,6 +640,7 @@ impl Parser {
             self.primary()?
         };
         let mut compared = false;
+        let mut chain = 0;
         loop {
             let op = if self.is("or") {
                 Some((1, Op::Or))
@@ -634,6 +664,18 @@ impl Parser {
             };
             if precedence < min {
                 break;
+            }
+            chain += 1;
+            if chain + self.depth > self.max_depth {
+                return Err(fail("C_SOURCE_LIMIT", "expression chain nesting exceeded"));
+            }
+            if precedence == 4
+                && self
+                    .tokens
+                    .get(self.pos + 1)
+                    .is_some_and(|t| matches!(&t.value,Token::Word(s) if s=="not"))
+            {
+                return Err(self.error("comparison operands must be primary expressions"));
             }
             if precedence == 4 && compared {
                 return Err(self.error("chained comparisons are not permitted"));
@@ -700,7 +742,9 @@ impl Parser {
                 .clone();
             self.pos += 1;
             match token {
-                Token::String(s) => ExprKind::Literal(ScalarLiteral::String(s)),
+                Token::String(s) | Token::TripleString(s) => {
+                    ExprKind::Literal(ScalarLiteral::String(s))
+                }
                 Token::Regex(p, f) => ExprKind::Regex(p, f),
                 Token::Number(n) => {
                     let lit = if n.contains(['.', 'e', 'E']) {
@@ -752,6 +796,7 @@ impl Parser {
             value,
             span: self.finish(start.clone()),
         };
+        let mut suffixes = 0;
         loop {
             let step = if self.eat(".") {
                 Some(PathStep::Field(self.identifier()?))
@@ -776,6 +821,10 @@ impl Parser {
             let Some(step) = step else {
                 break;
             };
+            suffixes += 1;
+            if suffixes + self.depth > self.max_depth {
+                return Err(fail("C_SOURCE_LIMIT", "projection chain nesting exceeded"));
+            }
             e = Located {
                 value: ExprKind::Get(Box::new(e), step),
                 span: self.finish(start.clone()),

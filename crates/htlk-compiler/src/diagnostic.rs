@@ -30,7 +30,7 @@ pub struct SourceSpan {
 }
 
 /// Stable report location. Structured pointers use RFC 6901 spelling.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiagnosticLocation {
     /// Authored text.
     SourceSpan(SourceSpan),
@@ -38,6 +38,78 @@ pub enum DiagnosticLocation {
     SourceBundlePath(String),
     /// Submitted or proposed canonical document.
     CanonicalRecordPath(String),
+}
+impl Ord for DiagnosticLocation {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let kind = |v: &Self| match v {
+            Self::CanonicalRecordPath(_) => 0,
+            Self::SourceBundlePath(_) => 1,
+            Self::SourceSpan(_) => 2,
+        };
+        kind(self)
+            .cmp(&kind(other))
+            .then_with(|| match (self, other) {
+                (Self::CanonicalRecordPath(a), Self::CanonicalRecordPath(b))
+                | (Self::SourceBundlePath(a), Self::SourceBundlePath(b)) => a.cmp(b),
+                (Self::SourceSpan(a), Self::SourceSpan(b)) => a.cmp(b),
+                _ => std::cmp::Ordering::Equal,
+            })
+    }
+}
+impl PartialOrd for DiagnosticLocation {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+pub(crate) fn sort(diagnostics: &mut Vec<Diagnostic>) {
+    diagnostics.sort_by(|a, b| {
+        a.location
+            .cmp(&b.location)
+            .then(a.code.cmp(&b.code))
+            .then(a.message.cmp(&b.message))
+            .then(a.related_locations.cmp(&b.related_locations))
+    });
+    diagnostics.dedup();
+}
+pub(crate) fn related(code: &str, message: &str, span: &SourceSpan) -> CompilationFailure {
+    let mut e = fail(code, message);
+    e.diagnostics[0]
+        .related_locations
+        .push(DiagnosticLocation::SourceSpan(span.clone()));
+    e
+}
+fn source_size(s: &SourceLocation) -> usize {
+    match s {
+        SourceLocation::Inline => 0,
+        SourceLocation::Module {
+            module_path,
+            source_path,
+            ..
+        } => module_path.len().saturating_add(source_path.len()),
+    }
+}
+pub(crate) fn map_size(e: &SourceMapEntry) -> usize {
+    size_of::<SourceMapEntry>()
+        .saturating_add(e.canonical_path.len())
+        .saturating_add(source_size(&e.span.source))
+        .saturating_add(e.declaration_name.as_ref().map_or(0, String::len))
+}
+pub(crate) fn diagnostic_size(d: &Diagnostic) -> usize {
+    let location = |l: &DiagnosticLocation| match l {
+        DiagnosticLocation::SourceSpan(s) => {
+            size_of::<SourceSpan>().saturating_add(source_size(&s.source))
+        }
+        DiagnosticLocation::CanonicalRecordPath(p) | DiagnosticLocation::SourceBundlePath(p) => {
+            p.len()
+        }
+    };
+    d.related_locations.iter().fold(
+        size_of::<Diagnostic>()
+            .saturating_add(d.code.len())
+            .saturating_add(d.message.len())
+            .saturating_add(location(&d.location)),
+        |n, l| n.saturating_add(location(l)),
+    )
 }
 
 /// Structured compilation error or warning.

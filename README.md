@@ -8,7 +8,7 @@
 Harness Toolkit (`htlk`) is a Rust workspace for compiling and running
 harnesses. The root crate is a facade over two focused libraries:
 
-- [`htlk-compiler`](https://crates.io/crates/htlk-compiler) provides foundations for compiling HTLK IR into executable graphs.
+- [`htlk-compiler`](https://crates.io/crates/htlk-compiler) compiles HTLK IR and source bundles into executable graphs, inspects module interfaces, and composes canonical graphs.
 - [`htlk-runtime`](https://crates.io/crates/htlk-runtime) provides foundations for native Rust graph execution with actors, LLMs, SQLite, and MCP servers.
 
 Both components share [`htlk-executable`](crates/htlk-executable/README.md) for
@@ -20,8 +20,9 @@ The analyzer depends on the model and on neither compiler nor runtime.
 
 `htlk_runtime::verify_executable` performs exact host-policy/implementation admission and
 recomputes semantic analysis from authoritative canonical bytes. Runtime owns
-evaluation, callback dispatch and actual-value enforcement. Compiler production,
-agent repair loops and runtime registration transactions remain future work.
+evaluation, callback dispatch and actual-value enforcement. The compiler uses the
+same analysis for source lowering and canonical-input checking. Agent repair loops
+and runtime registration transactions remain future work.
 
 ## Installation
 
@@ -37,6 +38,8 @@ directly.
 ## Documentation
 
 - [Draft 0.1 specifications and IR grammar](specs/README.md)
+- [Compiler API and source package compilation](crates/htlk-compiler/README.md)
+- [Compiler implementation and conformance roadmap](docs/htlk-compiler-roadmap.md)
 - [Canonical executable model and digests](crates/htlk-executable/README.md)
 - [Deterministic CBOR profile and API](crates/htlk-executable/src/cbor/README.md)
 - [Shared semantic analysis](crates/htlk-analyzer/README.md)
