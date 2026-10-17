@@ -64,7 +64,9 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
         scopes.extend(page);
     }
     for record in scopes {
-        if record.final_record {
+        if record.final_record
+            || map(&record.payload)?.get("status") == Some(&Value::Text("pending".into()))
+        {
             continue;
         }
         let id: ScopeInstanceId = record.key.id.parse().map_err(|_| err())?;
@@ -1118,7 +1120,7 @@ pub(super) async fn finish_failure(
     )
     .await
 }
-async fn finish_node(
+pub(super) async fn finish_node(
     runtime: &Runtime,
     lease: &RunLease,
     record: &StoredRecord,

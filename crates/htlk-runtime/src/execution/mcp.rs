@@ -740,7 +740,20 @@ async fn reserve(
     attempt: &str,
 ) -> Result<Vec<crate::store::RecordWrite>, RuntimeError> {
     let mut keys = vec![("run".to_string(), None)];
-    let mut current = Some(scope.record.clone());
+    let mut current = Some(
+        runtime
+            .store
+            .record(lease.run_id(), &scope.record.key)
+            .await?,
+    );
+    let mut authority_checks = vec![update(
+        node,
+        replace(
+            &node.payload,
+            [("reason", Value::Text("possibly_sent".into()))],
+        )?,
+        false,
+    )];
     let mut seen = BTreeSet::new();
     keys.push((
         format!("node:{}", node.key.id),
@@ -750,6 +763,9 @@ async fn reserve(
         if !seen.insert(record.key.id.clone()) {
             return Err(err());
         }
+        // Scope mounting and descendant stops revise these records. The dispatch
+        // transaction must conflict with a stale ancestry or cancellation snapshot.
+        authority_checks.push(update(&record, record.payload.clone(), false));
         keys.push((
             format!("scope:{}", record.key.id),
             Some(field(&record.payload, "effective_limits")?.clone()),
@@ -779,7 +795,7 @@ async fn reserve(
             current = None
         }
     }
-    let mut writes = Vec::new();
+    let mut writes = authority_checks;
     let mut reserved_keys = Vec::new();
     for (id, limits) in keys {
         let old = runtime

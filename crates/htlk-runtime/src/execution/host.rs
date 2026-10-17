@@ -32,6 +32,9 @@ pub struct CancelReceipt {
     pub status: RunStatus,
 }
 pub(crate) enum Operation {
+    Extend {
+        request: super::extension::ExtensionRequest,
+    },
     Approval {
         wait: WaitId,
         request: Digest,
@@ -97,7 +100,10 @@ fn receipt_key(
     .map_err(|_| err())?
     .to_string())
 }
-async fn recorded(runtime: &Runtime, command: &Command) -> Result<Option<Value>, RuntimeError> {
+pub(super) async fn recorded(
+    runtime: &Runtime,
+    command: &Command,
+) -> Result<Option<Value>, RuntimeError> {
     let id = receipt_key(
         &command.context,
         &command.method,
@@ -120,7 +126,7 @@ async fn recorded(runtime: &Runtime, command: &Command) -> Result<Option<Value>,
         Err(error) => Err(error.into()),
     }
 }
-fn receipt(
+pub(super) fn receipt(
     runtime: &Runtime,
     command: &Command,
     response: Value,
@@ -144,7 +150,7 @@ fn receipt(
         true,
     ))
 }
-async fn route(runtime: &Runtime, command: Command) -> Result<Value, RuntimeError> {
+pub(super) async fn route(runtime: &Runtime, command: Command) -> Result<Value, RuntimeError> {
     if let Some(response) = recorded(runtime, &command).await? {
         return Ok(response);
     }
@@ -371,6 +377,9 @@ async fn apply(
         return Ok(response);
     }
     match &command.operation {
+        Operation::Extend { request } => {
+            super::extension::install(&runtime, &lease, &command, request).await
+        }
         Operation::Approval {
             wait: id,
             request,
@@ -453,94 +462,120 @@ async fn apply(
             Ok(response)
         }
         Operation::Reply { wait: id, value } => {
-            let record = runtime
-                .store
-                .record(lease.run_id(), &key(RecordFamily::Wait, id))
-                .await?;
-            if string(&record.payload, "purpose")? != "input" {
-                return Err(RuntimeError::failure(FailureCode::Policy));
-            }
-            let encoded = cbor::encode(value, &runtime.config.limits)?;
-            let digest = crate::identity::ValueDigest::new(
-                &ValueType::from_value(
-                    field(&record.payload, "response_type")?,
-                    TypeContext::Value,
-                    &runtime.config.limits,
-                )
-                .map_err(|_| err())?,
-                value,
-                &runtime.config.limits,
-            )
-            .map_err(|_| err())?;
-            let response = object([("disposition", Value::Text("accepted".into()))])?;
-            if string(&record.payload, "state")? == "accepted" {
-                if string(&record.payload, "accepted_reply_digest")? == digest.to_string() {
-                    return Ok(response);
-                }
-                return Err(RuntimeError::failure(FailureCode::IdempotencyConflict));
-            }
-            let header = runtime.store.run_header(lease.run_id()).await?;
-            if header.status.is_terminal() || record.final_record {
-                return Err(RuntimeError::failure(FailureCode::Cancelled));
-            }
-            let scope = runtime
-                .store
-                .record(
-                    lease.run_id(),
-                    &key(
-                        RecordFamily::Scope,
-                        string(&record.payload, "scope_instance_id")?,
-                    ),
+            let (response, writes) = reply_writes(&runtime, &lease, &command, *id, value).await?;
+            if !writes.is_empty() {
+                step::commit(
+                    &runtime,
+                    &lease,
+                    format!("reply:{id}:{}", command.digest),
+                    writes,
+                    None,
                 )
                 .await?;
-            let executable = runtime.admitted(digest_value(&scope.payload)?).await?;
-            let ty = ValueType::from_value(
-                field(&record.payload, "response_type")?,
-                TypeContext::Value,
-                &runtime.config.limits,
-            )
-            .map_err(|_| err())?;
-            crate::validate_typed_value(
-                value,
-                &ty,
-                Some(executable.schemas()),
-                &runtime.config.limits,
-                &executable.policy().fields().evaluator_limits,
-            )
-            .map_err(|_| RuntimeError::failure(FailureCode::Input))?;
-            let now = runtime
-                .store
-                .coordinator_time(runtime.clock.now_ms()?)
-                .await?;
-            if now >= number(&record.payload, "expires_at")? {
-                return Err(RuntimeError::failure(FailureCode::WaitExpired));
             }
-            let payload = replace(
-                &record.payload,
-                [
-                    ("state", Value::Text("accepted".into())),
-                    ("accepted_reply_digest", Value::Text(digest.to_string())),
-                    ("reply_value", Value::Bytes(encoded)),
-                    (
-                        "reply_principal",
-                        Value::Text(command.context.principal().into()),
-                    ),
-                ],
-            )?;
-            step::commit(
-                &runtime,
-                &lease,
-                format!("reply:{}:{}", id, record.revision),
-                vec![
-                    update(&record, payload, true),
-                    receipt(&runtime, &command, response.clone())?,
-                ],
-                None,
-            )
-            .await?;
             Ok(response)
         }
     }
+}
+pub(super) async fn reply_writes(
+    runtime: &Runtime,
+    lease: &RunLease,
+    command: &Command,
+    id: WaitId,
+    value: &Value,
+) -> Result<(Value, Vec<RecordWrite>), RuntimeError> {
+    if let Some(response) = recorded(runtime, command).await? {
+        return Ok((response, vec![]));
+    }
+    let record = runtime
+        .store
+        .record(lease.run_id(), &key(RecordFamily::Wait, id))
+        .await?;
+    if string(&record.payload, "purpose")? != "input" {
+        return Err(RuntimeError::failure(FailureCode::Policy));
+    }
+    runtime.policy.authorize(
+        &command.context,
+        Authorization::SubmitReply {
+            run_id: lease.run_id(),
+            wait_id: id,
+            labels: &labels(&record.payload, &runtime.config.limits)?,
+        },
+    )?;
+    let encoded = cbor::encode(value, &runtime.config.limits)?;
+    let digest = crate::identity::ValueDigest::new(
+        &ValueType::from_value(
+            field(&record.payload, "response_type")?,
+            TypeContext::Value,
+            &runtime.config.limits,
+        )
+        .map_err(|_| err())?,
+        value,
+        &runtime.config.limits,
+    )
+    .map_err(|_| err())?;
+    let response = object([("disposition", Value::Text("accepted".into()))])?;
+    if string(&record.payload, "state")? == "accepted" {
+        if string(&record.payload, "accepted_reply_digest")? == digest.to_string() {
+            return Ok((response, vec![]));
+        }
+        return Err(RuntimeError::failure(FailureCode::IdempotencyConflict));
+    }
+    let header = runtime.store.run_header(lease.run_id()).await?;
+    if header.status.is_terminal() || record.final_record {
+        return Err(RuntimeError::failure(FailureCode::Cancelled));
+    }
+    let scope = runtime
+        .store
+        .record(
+            lease.run_id(),
+            &key(
+                RecordFamily::Scope,
+                string(&record.payload, "scope_instance_id")?,
+            ),
+        )
+        .await?;
+    let executable = runtime.admitted(digest_value(&scope.payload)?).await?;
+    let ty = ValueType::from_value(
+        field(&record.payload, "response_type")?,
+        TypeContext::Value,
+        &runtime.config.limits,
+    )
+    .map_err(|_| err())?;
+    crate::validate_typed_value(
+        value,
+        &ty,
+        Some(executable.schemas()),
+        &runtime.config.limits,
+        &executable.policy().fields().evaluator_limits,
+    )
+    .map_err(|_| RuntimeError::failure(FailureCode::Input))?;
+    let now = runtime
+        .store
+        .coordinator_time(runtime.clock.now_ms()?)
+        .await?;
+    if now >= number(&record.payload, "expires_at")? {
+        return Err(RuntimeError::failure(FailureCode::WaitExpired));
+    }
+    let payload = replace(
+        &record.payload,
+        [
+            ("state", Value::Text("accepted".into())),
+            ("accepted_reply_digest", Value::Text(digest.to_string())),
+            ("reply_value", Value::Bytes(encoded)),
+            (
+                "reply_principal",
+                Value::Text(command.context.principal().into()),
+            ),
+        ],
+    )?;
+    Ok((
+        response.clone(),
+        vec![
+            update(&record, payload, true),
+            receipt(runtime, command, response)?,
+        ],
+    ))
 }
 fn digest_value(value: &Value) -> Result<Digest, RuntimeError> {
     digest(value, "origin_executable")

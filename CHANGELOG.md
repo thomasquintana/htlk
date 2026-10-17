@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add compiler-backed additive live extension with unchanged scope/attempt/input
+  identities, adopted aggregate usage/reservations, stale-graph checks, historical
+  installation receipts and atomic typed planning-wait closure.
 - Add bounded native MCP stdio/Streamable HTTP JSON/SSE, pinned discovery and all
   operation results, durable dispatch/response checkpoints, safe retry and verified
   deduplication contracts, ancestor call/concurrency accounting, exact-action approval

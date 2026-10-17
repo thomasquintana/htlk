@@ -53,8 +53,9 @@ the implemented `htlk-compiler`.
    verified deduplication contracts and non-authoritative late-response retention.
 9. **Pending — Recovery and replay:** higher-fence takeover, state reconstruction,
    ambiguous-effect reconciliation and replay without external dispatch.
-10. **Pending — Additive extension:** compiler joins, exact preserved inputs/identity,
-    scope mounting and atomic planning-wait closure.
+10. **Implemented — Additive extension:** compiler joins, exact preserved inputs and
+     identity, either operand/renamed interfaces, repeated mounting, original budget/
+     reservation adoption and atomic planning-wait closure. [Extension API](runtime-extension.md).
 11. **Pending — Operational API:** authorized inspection, source sidecars, retention,
     backpressure, startup/shutdown and host examples.
 12. **Pending — Conformance:** runtime §17 matrix, compiled worked-example execution,

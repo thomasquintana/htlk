@@ -64,6 +64,15 @@ impl fmt::Debug for Attestation {
 /// An action requested of current deployment authorization.
 #[non_exhaustive]
 pub enum Authorization<'a> {
+    /// Install a registered additive graph around existing work.
+    ExtendRun {
+        /// Target run.
+        run_id: &'a crate::identity::RunId,
+        /// Expected current executable.
+        expected_fingerprint: Digest,
+        /// Proposed registered executable.
+        composed_fingerprint: Digest,
+    },
     /// Store a fully structurally verified executable after checking producer trust.
     RegisterGraph {
         /// Exact admitted document/profile. No node executes during registration.

@@ -379,7 +379,7 @@ fn charge_input(
         .and_then(|()| accounting.value(value, 2))
         .map_err(|_| RuntimeError::failure(FailureCode::Input))
 }
-fn reject_unsupported(limits: &ExecutionLimits) -> Result<(), RuntimeError> {
+pub(crate) fn reject_unsupported(limits: &ExecutionLimits) -> Result<(), RuntimeError> {
     if limits.max_tokens().is_some() || limits.max_cost_units().is_some() {
         return Err(RuntimeError::failure(FailureCode::BudgetUnsupported));
     }

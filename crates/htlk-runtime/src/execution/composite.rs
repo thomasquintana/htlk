@@ -77,7 +77,42 @@ pub(super) async fn operate(
         let pre =
             input_frame.evaluate(&parent.executable, &site, &ExpressionSite::Preconditions)?;
         if let Some(error) = step::condition_error(&pre, FailureCode::Preconditions) {
-            step::finish_failure(runtime, lease, record, error.code(), pre.influence).await?;
+            let mut writes = vec![];
+            match runtime
+                .store
+                .record(lease.run_id(), &key(RecordFamily::Scope, id))
+                .await
+            {
+                Ok(pending) if string(&pending.payload, "status")? == "pending" => {
+                    writes.push(update(
+                        &pending,
+                        replace(
+                            &pending.payload,
+                            [
+                                ("status", Value::Text("failed".into())),
+                                (
+                                    "failure",
+                                    error.to_value(&runtime.config.limits).map_err(|_| err())?,
+                                ),
+                            ],
+                        )?,
+                        true,
+                    ))
+                }
+                Err(crate::store::StoreError::Missing) => {}
+                Ok(_) => return Err(err()),
+                Err(error) => return Err(error.into()),
+            }
+            step::finish_node(
+                runtime,
+                lease,
+                record,
+                "failed",
+                Some(error),
+                pre.influence,
+                writes,
+            )
+            .await?;
             return Ok(true);
         }
         let inherited = htlk_executable::ExecutionLimits::from_value(
@@ -176,14 +211,25 @@ pub(super) async fn operate(
                 ),
             ],
         )?;
+        let child_write = match runtime
+            .store
+            .record(lease.run_id(), &key(RecordFamily::Scope, id))
+            .await
+        {
+            Ok(pending) if string(&pending.payload, "status")? == "pending" => {
+                update(&pending, payload, false)
+            }
+            Err(crate::store::StoreError::Missing) => {
+                insert(RecordFamily::Scope, id, payload, false)
+            }
+            Ok(_) => return Err(err()),
+            Err(error) => return Err(error.into()),
+        };
         step::commit(
             runtime,
             lease,
             format!("open-scope:{}:{}", record.key.id, record.revision),
-            vec![
-                insert(RecordFamily::Scope, id, payload, false),
-                update(record, node_payload, false),
-            ],
+            vec![child_write, update(record, node_payload, false)],
             None,
         )
         .await?;

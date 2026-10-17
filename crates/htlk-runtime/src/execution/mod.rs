@@ -2,6 +2,8 @@
 mod approval;
 mod composite;
 mod control;
+mod extension;
+pub use extension::{CloseWait, ExtensionReceipt, ExtensionRequest};
 mod host;
 mod inspection;
 mod mcp;
