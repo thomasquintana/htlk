@@ -385,7 +385,7 @@ fn reject_unsupported(limits: &ExecutionLimits) -> Result<(), RuntimeError> {
     }
     Ok(())
 }
-fn min_limits(layers: &[&ExecutionLimits]) -> Result<ExecutionLimits, RuntimeError> {
+pub(crate) fn min_limits(layers: &[&ExecutionLimits]) -> Result<ExecutionLimits, RuntimeError> {
     let mut result = ExecutionLimits::new();
     macro_rules! field {
         ($get:ident,$set:ident) => {

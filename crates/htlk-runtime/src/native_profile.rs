@@ -49,6 +49,13 @@ pub fn native_profile(
         include_bytes!("store_runs.sql"),
         include_bytes!("binding.rs"),
         include_bytes!("influence.rs"),
+        include_bytes!("store_execution.rs"),
+        include_bytes!("execution/mod.rs"),
+        include_bytes!("execution/model.rs"),
+        include_bytes!("execution/frame.rs"),
+        include_bytes!("execution/step.rs"),
+        include_bytes!("execution/composite.rs"),
+        include_bytes!("execution/control.rs"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);

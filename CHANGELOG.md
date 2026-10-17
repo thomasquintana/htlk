@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add fenced Actix run supervision, lazy immutable execution frames, durable
+  guards/admission, atomic pure publication, task boundaries and loop checkpoints.
 - Add checked actual-read influence tracing and lazy boundary authorization for
   values/outcomes, preserving protection through projection, errors and root contracts.
 - Add deterministic all-guard binding selection and guard-first input settlement,

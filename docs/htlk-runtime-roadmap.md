@@ -36,9 +36,9 @@ the implemented `htlk-compiler`.
 4. **In progress — Pure graph execution:** deterministic binding selection and
    guard-first input settlement implemented with an independent state oracle.
    Actual-read influence/boundary authorization wraps checked contexts and root
-   contracts. Durable node/binding decisions, actor scheduling and execution
-   publication pending. [Reducers](runtime-binding.md) · [Influence](runtime-influence.md).
-5. **Pending — Scopes and loops:** complete child settlement, conjunctive contracts,
+   contracts. Fenced actor execution and atomic pure publication implemented.
+   [Execution](runtime-execution.md) · [Reducers](runtime-binding.md) · [Influence](runtime-influence.md).
+5. **Implemented foundation — Scopes and loops:** complete child settlement, conjunctive contracts,
    output precedence, explicit feedback and durable iteration checkpoints.
 6. **Pending — Policy and limits:** authorization, effective deadlines, reservations,
    supported hard budgets and fenced cancellation.

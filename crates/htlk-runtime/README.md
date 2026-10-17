@@ -24,7 +24,8 @@ foundations with fenced leases, atomic record transitions, internal command rece
 bounded journal/outbox delivery and capability-free replay. `Runtime` supplies
 policy-gated immutable graph registration, independent admitted reload and atomic
 typed run admission with authenticated host receipts.
-Run coordination, dispatch authorization, scheduling and live MCP I/O remain pending.
+Explicit Actix execution now drives pure/task/loop graphs. Dispatch authorization,
+wait/MCP execution and live transport integrations remain in progress.
 `htlk-executable::digest` supplies typed SHA-256 digests and hashing for future
 fingerprint checks and runtime identities, using consumer-defined preimages.
 Its `ExecutableEnvelope` API validates version-0.1 envelope fields, format,
@@ -69,6 +70,11 @@ be injected through `with_clock`. `docs/runtime-runs.md` documents the admission
 boundary. Scheduling and child execution are the next coordinator integration.
 
 ## Admission and checked execution
+
+`execution::ExecutionEngine::launch(Arc<Runtime>, ExecutionConfig)` starts bounded
+fenced run supervision. Durable node/guard/input checkpoints drive native pure
+execution, complete scope boundaries and explicit loop transitions. See
+`docs/runtime-execution.md` for the delivered execution boundary.
 
 `binding` supplies canonical all-guard destination selection and guard-first input
 presence/error reduction, retaining protected absence and causal failures. It never

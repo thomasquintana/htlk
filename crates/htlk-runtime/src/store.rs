@@ -21,6 +21,9 @@ const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
 const ARTIFACT_SCHEMA: &str = include_str!("store_artifacts.sql");
 const RUN_SCHEMA: &str = include_str!("store_runs.sql");
 
+#[path = "store_execution.rs"]
+mod execution;
+
 #[path = "store_runs.rs"]
 pub(crate) mod runs;
 

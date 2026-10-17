@@ -5,6 +5,7 @@ use htlk_executable::{
     PolicyFields, Scope, ScopeFields,
 };
 use htlk_runtime::{NativeRegistry, verify_executable};
+use std::fmt::Write as _;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = Limits::default();
     let policy = PolicyDocument::new(
@@ -41,13 +42,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .envelope(&limits)?
         .encode(&limits)?;
     let verified = verify_executable(&bytes, &registry, &limits)?;
-    println!("fingerprint={}", verified.fingerprint());
-    println!("root_scope={root}");
+    let mut output = format!(
+        "fingerprint={}\nroot_scope={root}\n",
+        verified.fingerprint()
+    );
     for chunk in bytes.chunks(32) {
         for byte in chunk {
-            print!("{byte:02x}");
+            write!(&mut output, "{byte:02x}")?;
         }
-        println!();
+        output.push('\n');
+    }
+    if std::env::args().nth(1).as_deref() == Some("--write") {
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/native-empty.hex"
+            ),
+            output,
+        )?;
+    } else {
+        print!("{output}");
     }
     Ok(())
 }

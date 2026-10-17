@@ -9,6 +9,7 @@ pub mod binding;
 mod checked_evaluate;
 pub mod clock;
 mod evaluate;
+pub mod execution;
 pub mod failure;
 pub mod identity;
 pub mod influence;
