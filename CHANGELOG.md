@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Remove unused `ScopeContext` arguments from `Node` and `Scope` construction,
+  conversion, codecs, and digests, and from `Edge` conversion/codecs (an intentional
+  Rust API break). Graph models retain bounded canonical representation and local
+  invariants; the analyzer still validates every actual scope role, endpoint, and
+  expression use. Refresh source-derived native implementation identities and the
+  native fixture fingerprint without changing graph encodings or record digests.
+
 - Remove the unused `ExpressionContext` argument from `Expression::new`,
   `to_value`, `from_value`, `encode`, and `decode` (an intentional Rust API break).
   Construction normalizes representation and canonical ingress validates it;

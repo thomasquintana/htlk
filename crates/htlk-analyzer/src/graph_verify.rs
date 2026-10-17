@@ -459,9 +459,7 @@ pub fn verify_scope_graph(
     limits: &Limits,
 ) -> Result<ScopeGraphPlan, ScopeVerificationError> {
     use ScopeVerificationErrorKind as K;
-    scope
-        .to_value(role, limits)
-        .map_err(|e| error(K::Graph(e)))?;
+    scope.to_value(limits).map_err(|e| error(K::Graph(e)))?;
     crate::context::scope(scope, role).map_err(|e| error(K::Graph(e)))?;
     if (role == ScopeContext::LoopBody) != until.is_some() {
         return Err(error(K::UseContext));

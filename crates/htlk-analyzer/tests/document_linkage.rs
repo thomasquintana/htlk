@@ -8,7 +8,7 @@ use htlk_executable::{
     ExecutionLimits, ExecutionProfile, Expression, ExpressionKind, FunctionId, FunctionSignature,
     JsonDocument, Library, McpBinding, McpBindingKind, McpTransport, Node, NodeFields, Operation,
     PolicyDocument, PolicyFields, Port, PortTable, PromptTemplate, RetryPolicy, ScalarLiteral,
-    Scope, ScopeContext as C, ScopeFields, ServerIdentity, ValueType,
+    Scope, ScopeFields, ServerIdentity, ValueType,
 };
 
 fn d(n: u8) -> Digest {
@@ -49,12 +49,8 @@ fn base(l: &Limits) -> DocumentFields {
         l,
     )
     .unwrap();
-    let scope = Scope::new(ScopeFields::default(), C::Ordinary, l).unwrap();
-    let mut f = DocumentFields::new(
-        "test.entry".into(),
-        profile,
-        scope.digest(C::Ordinary, l).unwrap(),
-    );
+    let scope = Scope::new(ScopeFields::default(), l).unwrap();
+    let mut f = DocumentFields::new("test.entry".into(), profile, scope.digest(l).unwrap());
     f.scopes.insert(f.root_scope, scope);
     f.documents
         .insert(policy.digest(), policy.document().clone());
@@ -84,8 +80,8 @@ fn ports(name: &str, l: &Limits) -> PortTable {
 }
 fn root(f: &mut DocumentFields, fields: ScopeFields, l: &Limits) {
     f.scopes.remove(&f.root_scope);
-    let scope = Scope::new(fields, C::Ordinary, l).unwrap();
-    f.root_scope = scope.digest(C::Ordinary, l).unwrap();
+    let scope = Scope::new(fields, l).unwrap();
+    f.root_scope = scope.digest(l).unwrap();
     f.scopes.insert(f.root_scope, scope);
 }
 fn eval(f: &mut DocumentFields, kind: ExpressionKind, l: &Limits) {
@@ -95,7 +91,7 @@ fn eval(f: &mut DocumentFields, kind: ExpressionKind, l: &Limits) {
     root(
         f,
         ScopeFields {
-            nodes: vec![Node::new(n, C::Ordinary, l).unwrap()],
+            nodes: vec![Node::new(n, l).unwrap()],
             ..ScopeFields::default()
         },
         l,
@@ -125,11 +121,10 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
             inputs: ports("arg", &l),
             ..ScopeFields::default()
         },
-        C::Ordinary,
         &l,
     )
     .unwrap();
-    let id = child.digest(C::Ordinary, &l).unwrap();
+    let id = child.digest(&l).unwrap();
     f.scopes.insert(id, child);
     assert_eq!(
         Doc::new(f.clone(), &l).unwrap_err(),
@@ -140,7 +135,7 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
     root(
         &mut f,
         ScopeFields {
-            nodes: vec![Node::new(n.clone(), C::Ordinary, &l).unwrap()],
+            nodes: vec![Node::new(n.clone(), &l).unwrap()],
             ..ScopeFields::default()
         },
         &l,
@@ -151,7 +146,7 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
     root(
         &mut f,
         ScopeFields {
-            nodes: vec![Node::new(n, C::Ordinary, &l).unwrap()],
+            nodes: vec![Node::new(n, &l).unwrap()],
             ..ScopeFields::default()
         },
         &l,
@@ -164,7 +159,6 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
     f.root_scope = d(7);
     let n = Node::new(
         NodeFields::new("again".parse().unwrap(), Operation::Scope(d(7))),
-        C::Ordinary,
         &l,
     )
     .unwrap();
@@ -175,7 +169,6 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
                 nodes: vec![n],
                 ..ScopeFields::default()
             },
-            C::Ordinary,
             &l,
         )
         .unwrap(),
@@ -193,11 +186,10 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
             carried: ports("state", &l),
             ..ScopeFields::default()
         },
-        C::LoopBody,
         &l,
     )
     .unwrap();
-    let id = body.digest(C::LoopBody, &l).unwrap();
+    let id = body.digest(&l).unwrap();
     f.scopes.insert(id, body);
     let mut n = NodeFields::new(
         "repeat".parse().unwrap(),
@@ -212,7 +204,7 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
     root(
         &mut f,
         ScopeFields {
-            nodes: vec![Node::new(n.clone(), C::Ordinary, &l).unwrap()],
+            nodes: vec![Node::new(n.clone(), &l).unwrap()],
             ..ScopeFields::default()
         },
         &l,
@@ -223,12 +215,86 @@ fn scope_closure_roles_cycles_and_interfaces_are_checked() {
     root(
         &mut f,
         ScopeFields {
-            nodes: vec![Node::new(n, C::Ordinary, &l).unwrap()],
+            nodes: vec![Node::new(n, &l).unwrap()],
             ..ScopeFields::default()
         },
         &l,
     );
     assert!(matches!(Doc::new(f, &l), Err(Error::Graph(_))));
+}
+
+#[test]
+fn reused_scope_roles_and_loop_initializer_coverage_are_checked_at_linkage() {
+    let l = Limits::default();
+    let mut f = base(&l);
+    let body = Scope::new(
+        ScopeFields {
+            inputs: ports("seed", &l),
+            carried: ports("state", &l),
+            ..ScopeFields::default()
+        },
+        &l,
+    )
+    .unwrap();
+    let id = body.digest(&l).unwrap();
+    f.scopes.insert(id, body);
+    let mut repeat = NodeFields::new(
+        "repeat".parse().unwrap(),
+        Operation::Loop {
+            body: id,
+            initializers: vec![("state".parse().unwrap(), "seed".parse().unwrap())],
+            until: Expression::literal(ScalarLiteral::Boolean(true)),
+            max_iterations: 2,
+        },
+    );
+    repeat.inputs = ports("seed", &l);
+    root(
+        &mut f,
+        ScopeFields {
+            nodes: vec![Node::new(repeat.clone(), &l).unwrap()],
+            ..ScopeFields::default()
+        },
+        &l,
+    );
+    Doc::new(f.clone(), &l).unwrap();
+
+    let mut both = f.clone();
+    let mut ordinary = NodeFields::new("task".parse().unwrap(), Operation::Scope(id));
+    ordinary.inputs = ports("seed", &l);
+    root(
+        &mut both,
+        ScopeFields {
+            nodes: vec![
+                Node::new(repeat.clone(), &l).unwrap(),
+                Node::new(ordinary, &l).unwrap(),
+            ],
+            ..ScopeFields::default()
+        },
+        &l,
+    );
+    // One definition is reached through both roles; its valid loop use cannot
+    // hide the invalid ordinary use. Canonical document ingress still accepts it.
+    let model = htlk_executable::CanonicalDocument::new(both, &l).unwrap();
+    assert!(matches!(
+        Doc::decode(&model.encode(&l).unwrap(), &l),
+        Err(Error::Graph(
+            htlk_executable::GraphRecordError::InvalidScopeRole
+        ))
+    ));
+
+    let Operation::Loop { initializers, .. } = &mut repeat.operation else {
+        panic!()
+    };
+    initializers.clear();
+    root(
+        &mut f,
+        ScopeFields {
+            nodes: vec![Node::new(repeat, &l).unwrap()],
+            ..ScopeFields::default()
+        },
+        &l,
+    );
+    assert_eq!(Doc::new(f, &l).unwrap_err(), Error::ScopeInterfaceMismatch);
 }
 
 #[test]
@@ -371,7 +437,7 @@ fn binding_and_schema_references_require_document_identities() {
     );
     n.inputs = schema_ports("arguments", jd, &l);
     n.outputs = schema_ports("value", jd, &l);
-    let n = Node::new(n, C::Ordinary, &l).unwrap();
+    let n = Node::new(n, &l).unwrap();
     root(
         &mut f,
         ScopeFields {
@@ -451,7 +517,7 @@ fn wrap(f: &mut DocumentFields, copies: usize, iterations: Option<u64>, l: &Limi
             // All guarded branches and all bounded iterations count, even though
             // this guard is false and each loop's until is literal true.
             fields.guard = Expression::literal(ScalarLiteral::Boolean(false));
-            Node::new(fields, C::Ordinary, l).unwrap()
+            Node::new(fields, l).unwrap()
         })
         .collect();
     root(
@@ -691,7 +757,7 @@ fn select_binding(f: &mut DocumentFields, binding: McpBinding, l: &Limits) {
     root(
         f,
         ScopeFields {
-            nodes: vec![Node::new(n, C::Ordinary, l).unwrap()],
+            nodes: vec![Node::new(n, l).unwrap()],
             ..ScopeFields::default()
         },
         l,
@@ -762,7 +828,7 @@ fn expect_integrity_failure(f: DocumentFields, expected: Error, l: &Limits) {
             Map::try_from_entries(
                 f.scopes
                     .iter()
-                    .map(|(d, s)| (d.to_string(), s.to_value(C::Ordinary, l).unwrap())),
+                    .map(|(d, s)| (d.to_string(), s.to_value(l).unwrap())),
             )
             .unwrap(),
         ),
@@ -941,7 +1007,7 @@ fn tool_ports_require_exact_schema_identity_and_required_presence() {
         root(
             &mut bad,
             ScopeFields {
-                nodes: vec![Node::new(n, C::Ordinary, &l).unwrap()],
+                nodes: vec![Node::new(n, &l).unwrap()],
                 ..ScopeFields::default()
             },
             &l,
@@ -954,7 +1020,7 @@ fn tool_ports_require_exact_schema_identity_and_required_presence() {
     root(
         &mut bad,
         ScopeFields {
-            nodes: vec![Node::new(n, C::Ordinary, &l).unwrap()],
+            nodes: vec![Node::new(n, &l).unwrap()],
             ..ScopeFields::default()
         },
         &l,
@@ -1041,7 +1107,7 @@ fn schema_root_checks_cover_unused_functions_in_reached_manifests() {
     let mut node = NodeFields::new("worker".parse().unwrap(), Operation::Eval(call));
     node.outputs = ports("value", &l);
     let mut fields = f.scopes[&f.root_scope].fields().clone();
-    fields.nodes.push(Node::new(node, C::Ordinary, &l).unwrap());
+    fields.nodes.push(Node::new(node, &l).unwrap());
     root(&mut f, fields, &l);
     expect_integrity_failure(f, Error::UnreachedSchemaType, &l);
 }
@@ -1103,7 +1169,7 @@ fn set_prompt_inputs(f: &mut DocumentFields, inputs: PortTable, l: &Limits) {
     let mut fields = f.scopes[&f.root_scope].fields().clone();
     let mut node = fields.nodes[0].fields().clone();
     node.inputs = inputs;
-    fields.nodes[0] = Node::new(node, C::Ordinary, l).unwrap();
+    fields.nodes[0] = Node::new(node, l).unwrap();
     root(f, fields, l);
 }
 
@@ -1211,7 +1277,7 @@ fn fixed_resource_and_prompt_outputs_have_exact_protocol_types() {
         let mut fields = f.scopes[&f.root_scope].fields().clone();
         let mut node = fields.nodes[0].fields().clone();
         node.outputs = ports("value", &l);
-        fields.nodes[0] = Node::new(node, C::Ordinary, &l).unwrap();
+        fields.nodes[0] = Node::new(node, &l).unwrap();
         root(&mut f, fields, &l);
         expect_integrity_failure(f, Error::McpInterfaceMismatch, &l);
     }
@@ -1283,7 +1349,7 @@ fn resource_templates_require_exact_distinct_variables_with_level_four_syntax() 
     let mut fields = f.scopes[&f.root_scope].fields().clone();
     let mut node = fields.nodes[0].fields().clone();
     node.outputs = ports("value", &l);
-    fields.nodes[0] = Node::new(node, C::Ordinary, &l).unwrap();
+    fields.nodes[0] = Node::new(node, &l).unwrap();
     let mut bad = f;
     root(&mut bad, fields, &l);
     expect_integrity_failure(bad, Error::McpInterfaceMismatch, &l);
@@ -1585,9 +1651,7 @@ fn executable_mcp_stage_rejects_conflicting_pinned_selections() {
         binding: id,
         retry: RetryPolicy::no_retry(),
     };
-    fields
-        .nodes
-        .push(Node::new(second, C::Ordinary, &l).unwrap());
+    fields.nodes.push(Node::new(second, &l).unwrap());
     root(&mut f, fields, &l);
     assert_eq!(
         Doc::new(f, &l)

@@ -6,8 +6,8 @@ use htlk_executable::digest::{Digest, RecordKind, record_digest};
 use htlk_executable::{
     BuiltinType as P, Edge, EdgeDestination as D, EdgeSource as S, ExecutionLimits,
     Expression as E, ExpressionKind as EK, GraphRecordError as Error, Node, NodeFields,
-    Operation as O, Port, PortTable, RetryPolicy, ScalarLiteral as L, Scope, ScopeContext as C,
-    ScopeFields, ValueReference, ValueType,
+    Operation as O, Port, PortTable, RetryPolicy, ScalarLiteral as L, Scope, ScopeFields,
+    ValueReference, ValueType,
 };
 use std::error::Error as _;
 
@@ -30,7 +30,7 @@ fn node(id: &str) -> Node {
         O::Eval(E::literal(L::String("x".into()))),
     );
     f.outputs = table(&["value"], P::String);
-    Node::new(f, C::Ordinary, &Limits::default()).unwrap()
+    Node::new(f, &Limits::default()).unwrap()
 }
 fn replace(value: &Value, key: &str, replacement: Option<Value>) -> Value {
     let Value::Map(map) = value else { panic!() };
@@ -46,20 +46,15 @@ fn replace(value: &Value, key: &str, replacement: Option<Value>) -> Value {
 }
 
 #[test]
-fn empty_scope_has_golden_bytes_and_context_independent_identity() {
+fn empty_scope_has_golden_bytes_and_record_identity() {
     let l = Limits::default();
-    let scope = Scope::new(ScopeFields::default(), C::Ordinary, &l).unwrap();
+    let scope = Scope::new(ScopeFields::default(), &l).unwrap();
     let bytes = b"\xa8\x65edges\x80\x65nodes\x80\x66inputs\xa0\x66limits\xa0\x67carried\xa0\x67outputs\xa0\x6dpreconditions\x82\x67literal\xf5\x6epostconditions\x82\x67literal\xf5";
-    assert_eq!(scope.encode(C::Ordinary, &l).unwrap(), bytes);
-    assert_eq!(Scope::decode(bytes, C::Ordinary, &l).unwrap(), scope);
-    assert_eq!(Scope::decode(bytes, C::LoopBody, &l).unwrap(), scope);
-    assert_eq!(
-        scope.digest(C::Ordinary, &l).unwrap(),
-        scope.digest(C::LoopBody, &l).unwrap()
-    );
+    assert_eq!(scope.encode(&l).unwrap(), bytes);
+    assert_eq!(Scope::decode(bytes, &l).unwrap(), scope);
     // Independent Python hashlib vector over the literal bytes above.
     assert_eq!(
-        scope.digest(C::Ordinary, &l).unwrap().to_string(),
+        scope.digest(&l).unwrap().to_string(),
         "sha256:a0a913309d437ba674343e89eaeda42314773a4bcb14debced7148df89b0f221"
     );
 }
@@ -83,10 +78,10 @@ fn node_edge_arrays_normalize_by_ascii_id_not_encoded_key_order() {
         outputs: table(&["result"], P::String),
         ..ScopeFields::default()
     };
-    let scope = Scope::new(fields, C::Ordinary, &l).unwrap();
+    let scope = Scope::new(fields, &l).unwrap();
     assert_eq!(scope.fields().nodes[0].id().as_str(), "aa");
     assert_eq!(scope.fields().edges[0].id().as_str(), "aa");
-    let value = scope.to_value(C::Ordinary, &l).unwrap();
+    let value = scope.to_value(&l).unwrap();
     for key in ["nodes", "edges"] {
         let Value::Map(map) = &value else { panic!() };
         let Some(Value::Array(items)) = map.get(key) else {
@@ -96,12 +91,12 @@ fn node_edge_arrays_normalize_by_ascii_id_not_encoded_key_order() {
         items.reverse();
         let bad = replace(&value, key, Some(Value::Array(items)));
         assert!(matches!(
-            Scope::from_value(&bad, C::Ordinary, &l),
+            Scope::from_value(&bad, &l),
             Err(Error::NonCanonicalOrder(_))
         ));
     }
     assert_eq!(
-        Scope::decode(&scope.encode(C::Ordinary, &l).unwrap(), C::Ordinary, &l).unwrap(),
+        Scope::decode(&scope.encode(&l).unwrap(), &l).unwrap(),
         scope
     );
     // Node and edge IDs are separate namespaces, so the matching names above are valid.
@@ -109,10 +104,7 @@ fn node_edge_arrays_normalize_by_ascii_id_not_encoded_key_order() {
         nodes: vec![node("x"), node("x")],
         ..ScopeFields::default()
     };
-    assert_eq!(
-        Scope::new(bad, C::Ordinary, &l).unwrap_err(),
-        Error::DuplicateId("node")
-    );
+    assert_eq!(Scope::new(bad, &l).unwrap_err(), Error::DuplicateId("node"));
     let e = Edge::new(
         "x".parse().unwrap(),
         S::Input("q".parse().unwrap()),
@@ -124,10 +116,7 @@ fn node_edge_arrays_normalize_by_ascii_id_not_encoded_key_order() {
         edges: vec![e.clone(), e],
         ..ScopeFields::default()
     };
-    assert_eq!(
-        Scope::new(bad, C::Ordinary, &l).unwrap_err(),
-        Error::DuplicateId("edge")
-    );
+    assert_eq!(Scope::new(bad, &l).unwrap_err(), Error::DuplicateId("edge"));
 }
 
 #[test]
@@ -275,18 +264,12 @@ fn primitive_layouts_reserved_names_and_context_free_representation() {
     ] {
         let mut fields = base.fields().clone();
         fields.id = name.parse().unwrap();
-        assert_eq!(
-            Node::new(fields, C::Ordinary, &l).unwrap_err(),
-            Error::ReservedNodeName
-        );
+        assert_eq!(Node::new(fields, &l).unwrap_err(), Error::ReservedNodeName);
     }
     assert_eq!(node("graph").id().as_str(), "graph");
     let mut f = base.fields().clone();
     f.outputs = PortTable::default();
-    assert!(matches!(
-        Node::new(f, C::Ordinary, &l),
-        Err(Error::InvalidPorts(_))
-    ));
+    assert!(matches!(Node::new(f, &l), Err(Error::InvalidPorts(_))));
     let mut f = base.fields().clone();
     f.outputs = PortTable::new(
         vec![(
@@ -296,69 +279,55 @@ fn primitive_layouts_reserved_names_and_context_free_representation() {
         &l,
     )
     .unwrap();
-    assert!(Node::new(f.clone(), C::Ordinary, &l).is_ok()); // eval may return absence
+    assert!(Node::new(f.clone(), &l).is_ok()); // eval may return absence
     f.operation = O::Mcp {
         binding: Digest::from_bytes([0; 32]),
         retry: RetryPolicy::default(),
     };
-    assert!(matches!(
-        Node::new(f, C::Ordinary, &l),
-        Err(Error::InvalidPorts(_))
-    ));
+    assert!(matches!(Node::new(f, &l), Err(Error::InvalidPorts(_))));
     let mut f = base.fields().clone();
     f.operation = O::Wait {
         topic: "".into(),
         timeout_ms: 1,
     };
     assert!(matches!(
-        Node::new(f.clone(), C::Ordinary, &l),
+        Node::new(f.clone(), &l),
         Err(Error::InvalidPorts(_))
     ));
     f.inputs = table(&["request"], P::Json);
-    assert!(Node::new(f, C::Ordinary, &l).is_ok());
+    assert!(Node::new(f, &l).is_ok());
     let status = E::new(EK::Status("worker".parse().unwrap()), &l).unwrap();
     let mut f = base.fields().clone();
     f.preconditions = status.clone();
-    assert!(Node::new(f, C::Ordinary, &l).is_ok());
+    assert!(Node::new(f, &l).is_ok());
     let mut f = base.fields().clone();
     f.operation = O::Scope(Digest::from_bytes([0; 32]));
     f.postconditions = status;
-    assert!(Node::new(f, C::Ordinary, &l).is_ok());
+    assert!(Node::new(f, &l).is_ok());
 }
 
 #[test]
-fn loop_contexts_do_not_become_serialized_role_labels() {
+fn loop_metadata_and_role_invalid_contracts_remain_representable() {
     let l = Limits::default();
     let e = Edge::new(
         "advance".parse().unwrap(),
         S::Carried("x".parse().unwrap()),
         D::Next("x".parse().unwrap()),
     );
-    assert_eq!(
-        e.encode(C::Ordinary, &l).unwrap(),
-        e.encode(C::LoopBody, &l).unwrap()
-    );
-    assert_eq!(
-        Edge::decode(&e.encode(C::LoopBody, &l).unwrap(), C::LoopBody, &l).unwrap(),
-        e
-    );
+    assert_eq!(Edge::decode(&e.encode(&l).unwrap(), &l).unwrap(), e);
     let fields = ScopeFields {
         carried: table(&["x"], P::String),
         edges: vec![e],
         ..ScopeFields::default()
     };
-    let body = Scope::new(fields.clone(), C::LoopBody, &l).unwrap();
-    assert!(Scope::new(fields.clone(), C::Ordinary, &l).is_ok());
-    assert_eq!(
-        Scope::decode(&body.encode(C::LoopBody, &l).unwrap(), C::LoopBody, &l).unwrap(),
-        body
-    );
+    let body = Scope::new(fields.clone(), &l).unwrap();
+    assert_eq!(Scope::decode(&body.encode(&l).unwrap(), &l).unwrap(), body);
     let mut bad = fields.clone();
     bad.limits = ExecutionLimits::new().with_timeout_ms(1).unwrap();
-    assert!(Scope::new(bad, C::LoopBody, &l).is_ok());
+    assert!(Scope::new(bad, &l).is_ok());
     let mut bad = fields;
     bad.postconditions = E::new(EK::Not(Box::new(E::literal(L::Boolean(false)))), &l).unwrap();
-    assert!(Scope::new(bad, C::LoopBody, &l).is_ok());
+    assert!(Scope::new(bad, &l).is_ok());
     let mut f = node("worker").fields().clone();
     f.guard = E::new(
         EK::Ref {
@@ -368,11 +337,8 @@ fn loop_contexts_do_not_become_serialized_role_labels() {
         &l,
     )
     .unwrap();
-    let n = Node::new(f, C::LoopBody, &l).unwrap();
-    assert_eq!(
-        n.encode(C::Ordinary, &l).unwrap(),
-        n.encode(C::LoopBody, &l).unwrap()
-    );
+    let n = Node::new(f, &l).unwrap();
+    assert_eq!(Node::decode(&n.encode(&l).unwrap(), &l).unwrap(), n);
 }
 
 #[test]
@@ -387,13 +353,10 @@ fn initializer_names_are_preserved_for_later_semantic_linkage() {
             max_iterations: 1,
         },
     );
-    assert!(Node::new(f.clone(), C::Ordinary, &l).is_ok());
+    assert!(Node::new(f.clone(), &l).is_ok());
     f.inputs = table(&["seed"], P::String);
-    let n = Node::new(f, C::Ordinary, &l).unwrap();
-    assert_eq!(
-        Node::decode(&n.encode(C::Ordinary, &l).unwrap(), C::Ordinary, &l).unwrap(),
-        n
-    );
+    let n = Node::new(f, &l).unwrap();
+    assert_eq!(Node::decode(&n.encode(&l).unwrap(), &l).unwrap(), n);
     // The referenced digest does not need to exist until document linkage.
 }
 
@@ -401,7 +364,7 @@ fn initializer_names_are_preserved_for_later_semantic_linkage() {
 fn closed_records_never_infer_missing_canonical_fields() {
     let l = Limits::default();
     let n = node("worker");
-    let value = n.to_value(C::Ordinary, &l).unwrap();
+    let value = n.to_value(&l).unwrap();
     for field in [
         "id",
         "inputs",
@@ -413,22 +376,17 @@ fn closed_records_never_infer_missing_canonical_fields() {
         "operation",
     ] {
         assert_eq!(
-            Node::from_value(&replace(&value, field, None), C::Ordinary, &l).unwrap_err(),
+            Node::from_value(&replace(&value, field, None), &l).unwrap_err(),
             Error::MissingField(field)
         );
     }
     assert_eq!(
-        Node::from_value(
-            &replace(&value, "unknown", Some(Value::Null)),
-            C::Ordinary,
-            &l
-        )
-        .unwrap_err(),
+        Node::from_value(&replace(&value, "unknown", Some(Value::Null)), &l).unwrap_err(),
         Error::UnknownField("node")
     );
-    let s = Scope::new(ScopeFields::default(), C::Ordinary, &l)
+    let s = Scope::new(ScopeFields::default(), &l)
         .unwrap()
-        .to_value(C::Ordinary, &l)
+        .to_value(&l)
         .unwrap();
     for field in [
         "inputs",
@@ -441,7 +399,7 @@ fn closed_records_never_infer_missing_canonical_fields() {
         "limits",
     ] {
         assert_eq!(
-            Scope::from_value(&replace(&s, field, None), C::Ordinary, &l).unwrap_err(),
+            Scope::from_value(&replace(&s, field, None), &l).unwrap_err(),
             Error::MissingField(field)
         );
     }
@@ -450,15 +408,15 @@ fn closed_records_never_infer_missing_canonical_fields() {
         S::Input("x".parse().unwrap()),
         D::Output("x".parse().unwrap()),
     )
-    .to_value(C::Ordinary, &l)
+    .to_value(&l)
     .unwrap();
     assert_eq!(
-        Edge::from_value(&replace(&e, "guard", None), C::Ordinary, &l).unwrap_err(),
+        Edge::from_value(&replace(&e, "guard", None), &l).unwrap_err(),
         Error::MissingField("guard")
     );
-    let mut trailing = n.encode(C::Ordinary, &l).unwrap();
+    let mut trailing = n.encode(&l).unwrap();
     trailing.push(0);
-    let error = Node::decode(&trailing, C::Ordinary, &l).unwrap_err();
+    let error = Node::decode(&trailing, &l).unwrap_err();
     assert!(matches!(error, Error::Codec(_)));
     assert!(error.source().is_some());
 }
@@ -497,11 +455,8 @@ fn all_record_domains_use_exact_prefixes_and_node_content_matters() {
     let a = node("worker");
     let mut f = a.fields().clone();
     f.limits = ExecutionLimits::new().with_max_mcp_calls(0).unwrap();
-    let b = Node::new(f, C::Ordinary, &l).unwrap();
-    assert_ne!(
-        a.digest(C::Ordinary, &l).unwrap(),
-        b.digest(C::Ordinary, &l).unwrap()
-    );
+    let b = Node::new(f, &l).unwrap();
+    assert_ne!(a.digest(&l).unwrap(), b.digest(&l).unwrap());
 }
 
 #[test]
@@ -510,8 +465,8 @@ fn whole_scope_conversion_and_codec_limits_are_enforced() {
         max_document_bytes: 98,
         max_depth: 2,
     };
-    let s = Scope::new(ScopeFields::default(), C::Ordinary, &l).unwrap();
-    let bytes = s.encode(C::Ordinary, &l).unwrap();
+    let s = Scope::new(ScopeFields::default(), &l).unwrap();
+    let bytes = s.encode(&l).unwrap();
     assert_eq!(bytes.len(), 98);
     type Case = (LimitKind, usize, fn(&mut Limits));
     let cases: [Case; 2] = [
@@ -522,16 +477,16 @@ fn whole_scope_conversion_and_codec_limits_are_enforced() {
         let mut tight = l.clone();
         adjust(&mut tight);
         assert_eq!(
-            s.to_value(C::Ordinary, &tight).unwrap_err(),
+            s.to_value(&tight).unwrap_err(),
             Error::LimitExceeded { limit, maximum }
         );
         assert!(matches!(
-            Scope::decode(&bytes, C::Ordinary, &tight),
+            Scope::decode(&bytes, &tight),
             Err(Error::Codec(_))
         ));
     }
     for end in 0..bytes.len() {
-        let Error::Codec(error) = Scope::decode(&bytes[..end], C::Ordinary, &l).unwrap_err() else {
+        let Error::Codec(error) = Scope::decode(&bytes[..end], &l).unwrap_err() else {
             panic!()
         };
         assert_eq!(error.offset(), Some(end));

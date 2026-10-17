@@ -249,12 +249,7 @@ impl<'a> Builder<'a> {
         }
         Ok(Value::Map(Map::try_from_entries(fields)?))
     }
-    fn source(
-        &mut self,
-        source: &EdgeSource,
-        _c: ScopeContext,
-        d: usize,
-    ) -> Result<Value, GraphRecordError> {
+    fn source(&mut self, source: &EdgeSource, d: usize) -> Result<Value, GraphRecordError> {
         match source {
             EdgeSource::Input(n) | EdgeSource::Carried(n) => {
                 let mut v = self.tag(
@@ -280,7 +275,6 @@ impl<'a> Builder<'a> {
     fn destination(
         &mut self,
         destination: &EdgeDestination,
-        _c: ScopeContext,
         d: usize,
     ) -> Result<Value, GraphRecordError> {
         match destination {
@@ -305,14 +299,14 @@ impl<'a> Builder<'a> {
             }
         }
     }
-    fn edge(&mut self, edge: &Edge, c: ScopeContext, d: usize) -> Result<Value, GraphRecordError> {
+    fn edge(&mut self, edge: &Edge, d: usize) -> Result<Value, GraphRecordError> {
         self.accounting.collection(4, d)?;
         let id_key = self.string("id", d + 1)?;
         let id = self.text(edge.id.as_str(), d + 1)?;
         let source_key = self.string("source", d + 1)?;
-        let source = self.source(&edge.source, c, d + 1)?;
+        let source = self.source(&edge.source, d + 1)?;
         let target_key = self.string("destination", d + 1)?;
-        let target = self.destination(&edge.destination, c, d + 1)?;
+        let target = self.destination(&edge.destination, d + 1)?;
         let guard_key = self.string("guard", d + 1)?;
         let guard = self.expression(&edge.guard, d + 1)?;
         Ok(Value::Map(Map::try_from_entries([
@@ -379,12 +373,7 @@ impl<'a> Builder<'a> {
         push(&mut v, Value::Integer(n))?;
         Ok(Value::Array(v))
     }
-    fn node(
-        &mut self,
-        f: &NodeFields,
-        _c: ScopeContext,
-        d: usize,
-    ) -> Result<Value, GraphRecordError> {
+    fn node(&mut self, f: &NodeFields, d: usize) -> Result<Value, GraphRecordError> {
         validate_node(f)?;
         self.accounting.collection(8, d)?;
         let mut pairs = Vec::new();
@@ -411,7 +400,7 @@ impl<'a> Builder<'a> {
         push(&mut pairs, (key, self.operation(&f.operation, d + 1)?))?;
         Ok(Value::Map(Map::try_from_entries(pairs)?))
     }
-    fn scope(&mut self, f: &ScopeFields, c: ScopeContext) -> Result<Value, GraphRecordError> {
+    fn scope(&mut self, f: &ScopeFields) -> Result<Value, GraphRecordError> {
         self.accounting.collection(8, 0)?;
         let mut pairs = Vec::new();
         for (key, table) in [
@@ -426,14 +415,14 @@ impl<'a> Builder<'a> {
         self.accounting.collection(f.nodes.len(), 1)?;
         let mut nodes = Vec::new();
         for node in &f.nodes {
-            push(&mut nodes, self.node(&node.fields, c, 2)?)?;
+            push(&mut nodes, self.node(&node.fields, 2)?)?;
         }
         push(&mut pairs, (key, Value::Array(nodes)))?;
         let key = self.string("edges", 1)?;
         self.accounting.collection(f.edges.len(), 1)?;
         let mut edges = Vec::new();
         for edge in &f.edges {
-            push(&mut edges, self.edge(edge, c, 2)?)?;
+            push(&mut edges, self.edge(edge, 2)?)?;
         }
         push(&mut pairs, (key, Value::Array(edges)))?;
         for (key, expr) in [
@@ -455,21 +444,17 @@ impl<'a> Builder<'a> {
 pub(super) fn ports(entries: &[(Identifier, Port)], l: &Limits) -> Result<Value, GraphRecordError> {
     Builder::new(l)?.ports(entries, 0)
 }
-pub(super) fn edge(e: &Edge, c: ScopeContext, l: &Limits) -> Result<Value, GraphRecordError> {
-    Builder::new(l)?.edge(e, c, 0)
+pub(super) fn edge(e: &Edge, l: &Limits) -> Result<Value, GraphRecordError> {
+    Builder::new(l)?.edge(e, 0)
 }
 pub(super) fn operation(o: &Operation, l: &Limits) -> Result<Value, GraphRecordError> {
     Builder::new(l)?.operation(o, 0)
 }
-pub(super) fn node(n: &NodeFields, c: ScopeContext, l: &Limits) -> Result<Value, GraphRecordError> {
-    Builder::new(l)?.node(n, c, 0)
+pub(super) fn node(n: &NodeFields, l: &Limits) -> Result<Value, GraphRecordError> {
+    Builder::new(l)?.node(n, 0)
 }
-pub(super) fn scope(
-    s: &ScopeFields,
-    c: ScopeContext,
-    l: &Limits,
-) -> Result<Value, GraphRecordError> {
-    Builder::new(l)?.scope(s, c)
+pub(super) fn scope(s: &ScopeFields, l: &Limits) -> Result<Value, GraphRecordError> {
+    Builder::new(l)?.scope(s)
 }
 
 pub(super) fn parse_ports(v: &Value, l: &Limits) -> Result<PortTable, GraphRecordError> {
@@ -489,7 +474,7 @@ pub(super) fn parse_ports(v: &Value, l: &Limits) -> Result<PortTable, GraphRecor
     entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     Ok(PortTable { entries })
 }
-fn parse_source(v: &Value, _c: ScopeContext) -> Result<EdgeSource, GraphRecordError> {
+fn parse_source(v: &Value) -> Result<EdgeSource, GraphRecordError> {
     let v = array(v, "source")?;
     let tag = text(
         v.first().ok_or(GraphRecordError::InvalidShape("source"))?,
@@ -506,7 +491,7 @@ fn parse_source(v: &Value, _c: ScopeContext) -> Result<EdgeSource, GraphRecordEr
         _ => Err(GraphRecordError::InvalidShape("source tag")),
     }
 }
-fn parse_destination(v: &Value, _c: ScopeContext) -> Result<EdgeDestination, GraphRecordError> {
+fn parse_destination(v: &Value) -> Result<EdgeDestination, GraphRecordError> {
     let v = array(v, "destination")?;
     let tag = text(
         v.first()
@@ -524,12 +509,12 @@ fn parse_destination(v: &Value, _c: ScopeContext) -> Result<EdgeDestination, Gra
         _ => Err(GraphRecordError::InvalidShape("destination tag")),
     }
 }
-pub(super) fn parse_edge(v: &Value, c: ScopeContext, l: &Limits) -> Result<Edge, GraphRecordError> {
+pub(super) fn parse_edge(v: &Value, l: &Limits) -> Result<Edge, GraphRecordError> {
     let m = closed(v, "edge", &["destination", "guard", "id", "source"])?;
     Ok(Edge {
         id: id(field(m, "id"))?,
-        source: parse_source(field(m, "source"), c)?,
-        destination: parse_destination(field(m, "destination"), c)?,
+        source: parse_source(field(m, "source"))?,
+        destination: parse_destination(field(m, "destination"))?,
         guard: Expression::from_value(field(m, "guard"), l)?,
     })
 }
@@ -577,11 +562,7 @@ pub(super) fn parse_operation(v: &Value, l: &Limits) -> Result<Operation, GraphR
         _ => unreachable!("tag checked above"),
     }
 }
-pub(super) fn parse_node(
-    v: &Value,
-    _c: ScopeContext,
-    l: &Limits,
-) -> Result<Node, GraphRecordError> {
+pub(super) fn parse_node(v: &Value, l: &Limits) -> Result<Node, GraphRecordError> {
     let m = closed(
         v,
         "node",
@@ -614,7 +595,6 @@ pub(super) fn parse_node(
 }
 pub(super) fn parse_scope(
     v: &Value,
-    c: ScopeContext,
     l: &Limits,
     normalize: bool,
 ) -> Result<Scope, GraphRecordError> {
@@ -634,11 +614,11 @@ pub(super) fn parse_scope(
     )?;
     let mut nodes = Vec::new();
     for v in array(field(m, "nodes"), "nodes")? {
-        push(&mut nodes, parse_node(v, c, l)?)?;
+        push(&mut nodes, parse_node(v, l)?)?;
     }
     let mut edges = Vec::new();
     for v in array(field(m, "edges"), "edges")? {
-        push(&mut edges, parse_edge(v, c, l)?)?;
+        push(&mut edges, parse_edge(v, l)?)?;
     }
     if normalize {
         nodes.sort_unstable_by(|a, b| a.id().cmp(b.id()));

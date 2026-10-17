@@ -508,7 +508,6 @@ mod tests {
             ExecutionProfile::new(id, engine.clone(), engine.clone(), engine, id, &limits).unwrap();
         let node = Node::new(
             NodeFields::new("again".parse().unwrap(), Operation::Scope(id)),
-            ScopeContext::Ordinary,
             &limits,
         )
         .unwrap();
@@ -517,7 +516,6 @@ mod tests {
                 nodes: vec![node],
                 ..ScopeFields::default()
             },
-            ScopeContext::Ordinary,
             &limits,
         )
         .unwrap();

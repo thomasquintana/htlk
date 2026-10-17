@@ -5,7 +5,7 @@ use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     BuiltinType as P, Edge, EdgeDestination as D, EdgeSource as S, Expression as E,
     GraphRecordError as Error, Node, NodeFields, Operation, Port, PortTable, ScalarLiteral, Scope,
-    ScopeContext as C, ScopeFields, ValueType,
+    ScopeFields, ValueType,
 };
 
 fn fields(depth: usize, limits: &Limits) -> ScopeFields {
@@ -28,7 +28,7 @@ fn fields(depth: usize, limits: &Limits) -> ScopeFields {
     );
     f.outputs = ports("value");
     f.guard = expr;
-    let node = Node::new(f, C::Ordinary, limits).unwrap();
+    let node = Node::new(f, limits).unwrap();
     ScopeFields {
         nodes: vec![node],
         outputs: ports("result"),
@@ -49,18 +49,18 @@ fn exercise() {
         ..Limits::default()
     };
     // Scope map -> nodes array -> node map -> guard expression: offset three.
-    let scope = Scope::new(fields(124, &limits), C::Ordinary, &limits).unwrap();
-    let bytes = scope.encode(C::Ordinary, &limits).unwrap();
-    assert_eq!(Scope::decode(&bytes, C::Ordinary, &limits).unwrap(), scope);
+    let scope = Scope::new(fields(124, &limits), &limits).unwrap();
+    let bytes = scope.encode(&limits).unwrap();
+    assert_eq!(Scope::decode(&bytes, &limits).unwrap(), scope);
     assert_eq!(scope.clone(), scope);
     assert!(matches!(
-        Scope::new(fields(125, &limits), C::Ordinary, &limits),
+        Scope::new(fields(125, &limits), &limits),
         Err(Error::LimitExceeded { .. })
     ));
     let mut trailing = bytes;
     trailing.push(0);
     assert!(matches!(
-        Scope::decode(&trailing, C::Ordinary, &limits),
+        Scope::decode(&trailing, &limits),
         Err(Error::Codec(_))
     ));
 }

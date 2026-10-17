@@ -159,38 +159,30 @@ impl Edge {
     ///
     /// # Errors
     /// Returns expression representation or resource failures.
-    pub fn to_value(
-        &self,
-        context: ScopeContext,
-        limits: &Limits,
-    ) -> Result<Value, GraphRecordError> {
-        wire::edge(self, context, limits)
+    pub fn to_value(&self, limits: &Limits) -> Result<Value, GraphRecordError> {
+        wire::edge(self, limits)
     }
     /// Parses a complete canonical edge record; missing guard is not defaulted.
     ///
     /// # Errors
     /// Returns record-shape, identifier, or codec failures.
-    pub fn from_value(
-        v: &Value,
-        context: ScopeContext,
-        limits: &Limits,
-    ) -> Result<Self, GraphRecordError> {
+    pub fn from_value(v: &Value, limits: &Limits) -> Result<Self, GraphRecordError> {
         htlk_cbor::encode(v, limits)?;
-        wire::parse_edge(v, context, limits)
+        wire::parse_edge(v, limits)
     }
     /// Encodes exactly one canonical edge.
     ///
     /// # Errors
     /// Returns representation or resource failures.
-    pub fn encode(&self, c: ScopeContext, l: &Limits) -> Result<Vec<u8>, GraphRecordError> {
-        Ok(htlk_cbor::encode(&self.to_value(c, l)?, l)?)
+    pub fn encode(&self, l: &Limits) -> Result<Vec<u8>, GraphRecordError> {
+        Ok(htlk_cbor::encode(&self.to_value(l)?, l)?)
     }
     /// Decodes exactly one canonical edge.
     ///
     /// # Errors
     /// Returns record-shape or codec failures.
-    pub fn decode(bytes: &[u8], c: ScopeContext, l: &Limits) -> Result<Self, GraphRecordError> {
-        wire::parse_edge(&htlk_cbor::decode(bytes, l)?, c, l)
+    pub fn decode(bytes: &[u8], l: &Limits) -> Result<Self, GraphRecordError> {
+        wire::parse_edge(&htlk_cbor::decode(bytes, l)?, l)
     }
 }
 
@@ -308,9 +300,9 @@ impl Node {
     ///
     /// # Errors
     /// Returns local record-shape, port-layout, or resource failures.
-    pub fn new(fields: NodeFields, c: ScopeContext, l: &Limits) -> Result<Self, GraphRecordError> {
-        let v = wire::node(&fields, c, l)?;
-        wire::parse_node(&v, c, l)
+    pub fn new(fields: NodeFields, l: &Limits) -> Result<Self, GraphRecordError> {
+        let v = wire::node(&fields, l)?;
+        wire::parse_node(&v, l)
     }
     /// Borrows all immutable definition fields.
     pub fn fields(&self) -> &NodeFields {
@@ -324,37 +316,38 @@ impl Node {
     ///
     /// # Errors
     /// Returns representation or resource failures.
-    pub fn to_value(&self, c: ScopeContext, l: &Limits) -> Result<Value, GraphRecordError> {
-        wire::node(&self.fields, c, l)
+    pub fn to_value(&self, l: &Limits) -> Result<Value, GraphRecordError> {
+        wire::node(&self.fields, l)
     }
     /// Parses all required fields from canonical data.
     ///
     /// # Errors
     /// Returns record-shape or codec failures.
-    pub fn from_value(v: &Value, c: ScopeContext, l: &Limits) -> Result<Self, GraphRecordError> {
+    pub fn from_value(v: &Value, l: &Limits) -> Result<Self, GraphRecordError> {
         htlk_cbor::encode(v, l)?;
-        wire::parse_node(v, c, l)
+        wire::parse_node(v, l)
     }
     /// Encodes one complete node.
     ///
     /// # Errors
     /// Returns validation/resource failures.
-    pub fn encode(&self, c: ScopeContext, l: &Limits) -> Result<Vec<u8>, GraphRecordError> {
-        Ok(htlk_cbor::encode(&self.to_value(c, l)?, l)?)
+    pub fn encode(&self, l: &Limits) -> Result<Vec<u8>, GraphRecordError> {
+        Ok(htlk_cbor::encode(&self.to_value(l)?, l)?)
     }
     /// Decodes one complete node.
     ///
     /// # Errors
     /// Returns record-shape or codec failures.
-    pub fn decode(bytes: &[u8], c: ScopeContext, l: &Limits) -> Result<Self, GraphRecordError> {
-        wire::parse_node(&htlk_cbor::decode(bytes, l)?, c, l)
+    pub fn decode(bytes: &[u8], l: &Limits) -> Result<Self, GraphRecordError> {
+        wire::parse_node(&htlk_cbor::decode(bytes, l)?, l)
     }
-    /// Computes the digest of the complete canonical node record.
+    /// Computes the identity of the complete canonical node record, independent
+    /// of its containing scope's use-site role.
     ///
     /// # Errors
     /// Returns validation/resource failures.
-    pub fn digest(&self, c: ScopeContext, l: &Limits) -> Result<Digest, GraphRecordError> {
-        Ok(record_digest(RecordKind::Node, &self.to_value(c, l)?, l)?)
+    pub fn digest(&self, l: &Limits) -> Result<Digest, GraphRecordError> {
+        Ok(record_digest(RecordKind::Node, &self.to_value(l)?, l)?)
     }
 }
 
@@ -393,10 +386,12 @@ impl Default for ScopeFields {
     }
 }
 
-/// Immutable canonical scope with bounded representation and normalized IDs.
-/// No scope-role label is serialized. Graph cycles, observability, required
-/// binding coverage, expression names/types, and referenced definitions are
-/// checked by verify_scope_graph and the composed verifier before registration.
+/// Reusable canonical scope definition with bounded representation and normalized IDs.
+/// Its ordinary or loop-body role is determined by each use site, never a serialized
+/// label. Successful construction does not establish endpoint membership, binding
+/// coverage, dependency validity, or use-role legality. The analyzer checks these,
+/// expression permissions/names/types, and referenced definitions at actual uses
+/// through scope-graph verification and composed admission.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scope {
     fields: Box<ScopeFields>,
@@ -407,50 +402,51 @@ impl Scope {
     ///
     /// # Errors
     /// Returns duplicate/order, record-shape, or resource failures.
-    pub fn new(fields: ScopeFields, c: ScopeContext, l: &Limits) -> Result<Self, GraphRecordError> {
-        let v = wire::scope(&fields, c, l)?;
-        wire::parse_scope(&v, c, l, true)
+    pub fn new(fields: ScopeFields, l: &Limits) -> Result<Self, GraphRecordError> {
+        let v = wire::scope(&fields, l)?;
+        wire::parse_scope(&v, l, true)
     }
     /// Borrows all immutable scope fields.
     pub fn fields(&self) -> &ScopeFields {
         &self.fields
     }
-    /// Produces canonical data. The context argument does not establish semantic
-    /// validity; ordinary and loop-body use roles are analyzed separately.
+    /// Produces canonical data with bounded representation and local record checks.
+    /// Ordinary and loop-body use roles are analyzed separately.
     ///
     /// # Errors
-    /// Returns scope-role, expression, or resource failures.
-    pub fn to_value(&self, c: ScopeContext, l: &Limits) -> Result<Value, GraphRecordError> {
-        wire::scope(&self.fields, c, l)
+    /// Returns local record, expression, type, or resource failures.
+    pub fn to_value(&self, l: &Limits) -> Result<Value, GraphRecordError> {
+        wire::scope(&self.fields, l)
     }
     /// Parses canonical data without repairing node/edge order.
     ///
     /// # Errors
     /// Returns record shape, ordering, or resource failures.
-    pub fn from_value(v: &Value, c: ScopeContext, l: &Limits) -> Result<Self, GraphRecordError> {
+    pub fn from_value(v: &Value, l: &Limits) -> Result<Self, GraphRecordError> {
         htlk_cbor::encode(v, l)?;
-        wire::parse_scope(v, c, l, false)
+        wire::parse_scope(v, l, false)
     }
     /// Encodes one complete scope record.
     ///
     /// # Errors
     /// Returns validation/resource failures.
-    pub fn encode(&self, c: ScopeContext, l: &Limits) -> Result<Vec<u8>, GraphRecordError> {
-        Ok(htlk_cbor::encode(&self.to_value(c, l)?, l)?)
+    pub fn encode(&self, l: &Limits) -> Result<Vec<u8>, GraphRecordError> {
+        Ok(htlk_cbor::encode(&self.to_value(l)?, l)?)
     }
     /// Decodes one complete canonical scope.
     ///
     /// # Errors
     /// Returns record shape, ordering, or resource failures.
-    pub fn decode(bytes: &[u8], c: ScopeContext, l: &Limits) -> Result<Self, GraphRecordError> {
-        wire::parse_scope(&htlk_cbor::decode(bytes, l)?, c, l, false)
+    pub fn decode(bytes: &[u8], l: &Limits) -> Result<Self, GraphRecordError> {
+        wire::parse_scope(&htlk_cbor::decode(bytes, l)?, l, false)
     }
-    /// Computes the context-independent digest of the valid canonical record.
+    /// Computes the identity of the complete canonical scope record, independent
+    /// of use-site role or semantic admission.
     ///
     /// # Errors
-    /// Returns representation or resource failures; context is not added to the hash.
-    pub fn digest(&self, c: ScopeContext, l: &Limits) -> Result<Digest, GraphRecordError> {
-        Ok(record_digest(RecordKind::Scope, &self.to_value(c, l)?, l)?)
+    /// Returns representation or resource failures.
+    pub fn digest(&self, l: &Limits) -> Result<Digest, GraphRecordError> {
+        Ok(record_digest(RecordKind::Scope, &self.to_value(l)?, l)?)
     }
 }
 

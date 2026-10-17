@@ -1,7 +1,6 @@
 //! Canonical document representation, identities, limits and controlled-stack depth.
 use CanonicalDocument as Doc;
 use DocumentError as Error;
-use ScopeContext as C;
 use htlk_executable::{
     cbor::{LimitKind, Limits, Map, Value},
     digest::Digest,
@@ -45,12 +44,8 @@ fn base(l: &Limits) -> DocumentFields {
         l,
     )
     .unwrap();
-    let scope = Scope::new(ScopeFields::default(), C::Ordinary, l).unwrap();
-    let mut f = DocumentFields::new(
-        "test.entry".into(),
-        profile,
-        scope.digest(C::Ordinary, l).unwrap(),
-    );
+    let scope = Scope::new(ScopeFields::default(), l).unwrap();
+    let mut f = DocumentFields::new("test.entry".into(), profile, scope.digest(l).unwrap());
     f.scopes.insert(f.root_scope, scope);
     f.documents
         .insert(policy.digest(), policy.document().clone());
@@ -241,11 +236,10 @@ fn depth_exercise() {
             preconditions: pre,
             ..ScopeFields::default()
         },
-        C::Ordinary,
         &l,
     )
     .unwrap();
-    f.root_scope = scope.digest(C::Ordinary, &l).unwrap();
+    f.root_scope = scope.digest(&l).unwrap();
     f.scopes.insert(f.root_scope, scope);
     let doc = Doc::new(f, &l).unwrap();
     let bytes = doc.encode(&l).unwrap();

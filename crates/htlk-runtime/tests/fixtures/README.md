@@ -48,3 +48,10 @@ also changes the regex identity because that adapter source contributes to its
 hash. These four source-based identity changes alter the envelope fingerprint,
 not the expression wire format. The root scope, policy, and graph contents remain
 unchanged, as do the existing expression/template exact-byte and digest goldens.
+
+Removing unused graph-model `ScopeContext` arguments refreshes the fixture through
+the same generator. Graph/document model and analyzer source changes affect the
+core, schema-validator, and URI-template implementation identities and therefore
+the envelope fingerprint. The regex identity, root-scope digest, policy, and graph
+contents remain unchanged. Graph record encodings and digests are independent of
+use-site roles; the existing wire-format goldens are retained.

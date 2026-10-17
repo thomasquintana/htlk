@@ -6,8 +6,8 @@ use htlk_executable::{
     BuiltinType as P, CanonicalDocument, DocumentFields, Edge, EdgeDestination as D,
     EdgeSource as S, EvaluatorLimits, ExecutableEnvelope, ExecutionLimits, ExecutionProfile,
     Expression, ExpressionKind as E, Node, NodeFields, Operation, PolicyDocument, PolicyFields,
-    Port, PortTable, ScalarLiteral as L, Scope, ScopeContext as Role, ScopeFields, ValueReference,
-    ValueType, digest::Digest,
+    Port, PortTable, ScalarLiteral as L, Scope, ScopeFields, ValueReference, ValueType,
+    digest::Digest,
 };
 use htlk_runtime::{
     EvaluationError, EvaluationFrame, EvaluationValue, ExecutableVerificationError as Error,
@@ -81,7 +81,7 @@ fn scope() -> Scope {
         ScopeFields {
             inputs: ports(&["seed"]),
             outputs: ports(&["result"]),
-            nodes: vec![Node::new(node, Role::Ordinary, &limits).unwrap()],
+            nodes: vec![Node::new(node, &limits).unwrap()],
             edges: vec![
                 Edge::new(
                     "input".parse().unwrap(),
@@ -102,7 +102,6 @@ fn scope() -> Scope {
             ],
             ..ScopeFields::default()
         },
-        Role::Ordinary,
         &limits,
     )
     .unwrap()
@@ -110,7 +109,7 @@ fn scope() -> Scope {
 fn fields(root: Scope) -> DocumentFields {
     let limits = Limits::default();
     let policy = policy();
-    let root_id = root.digest(Role::Ordinary, &limits).unwrap();
+    let root_id = root.digest(&limits).unwrap();
     let mut fields = DocumentFields::new(
         "test.graph".into(),
         native_profile(&policy, &limits).unwrap(),
@@ -234,7 +233,7 @@ fn valid_record_assembly_is_not_sufficient_for_graph_admission() {
     let registry = registry();
     let mut root = scope().fields().clone();
     root.edges.remove(0);
-    let root = Scope::new(root, Role::Ordinary, &limits).unwrap();
+    let root = Scope::new(root, &limits).unwrap();
     let result = verify_executable(&bytes(fields(root)), &registry, &limits);
     let Err(Error::Analysis(error)) = result else {
         panic!("missing required candidate admitted");
@@ -260,7 +259,7 @@ fn repeated_task_uses_share_plans_and_preserve_use_locations() {
     let leaf = Scope::new(
         ScopeFields {
             outputs: ports(&["value"]),
-            nodes: vec![Node::new(leaf_node, Role::Ordinary, &limits).unwrap()],
+            nodes: vec![Node::new(leaf_node, &limits).unwrap()],
             edges: vec![Edge::new(
                 "value".parse().unwrap(),
                 S::Output {
@@ -271,11 +270,10 @@ fn repeated_task_uses_share_plans_and_preserve_use_locations() {
             )],
             ..ScopeFields::default()
         },
-        Role::Ordinary,
         &limits,
     )
     .unwrap();
-    let leaf_id = leaf.digest(Role::Ordinary, &limits).unwrap();
+    let leaf_id = leaf.digest(&limits).unwrap();
     let mut root = ScopeFields {
         outputs: ports(&["a", "b"]),
         ..ScopeFields::default()
@@ -283,8 +281,7 @@ fn repeated_task_uses_share_plans_and_preserve_use_locations() {
     for name in ["a", "b"] {
         let mut node = NodeFields::new(name.parse().unwrap(), Operation::Scope(leaf_id));
         node.outputs = ports(&["value"]);
-        root.nodes
-            .push(Node::new(node, Role::Ordinary, &limits).unwrap());
+        root.nodes.push(Node::new(node, &limits).unwrap());
         root.edges.push(Edge::new(
             name.parse().unwrap(),
             S::Output {
@@ -294,7 +291,7 @@ fn repeated_task_uses_share_plans_and_preserve_use_locations() {
             D::Output(name.parse().unwrap()),
         ));
     }
-    let root = Scope::new(root, Role::Ordinary, &limits).unwrap();
+    let root = Scope::new(root, &limits).unwrap();
     let mut f = fields(root);
     let root_id = f.root_scope;
     f.scopes.insert(leaf_id, leaf);
@@ -344,7 +341,7 @@ fn waits_and_loop_boundaries_are_admitted_and_until_uses_the_body_context() {
         ScopeFields {
             inputs: PortTable::new(vec![("request".parse().unwrap(), json)], &limits).unwrap(),
             outputs: ports(&["result"]),
-            nodes: vec![Node::new(wait, Role::Ordinary, &limits).unwrap()],
+            nodes: vec![Node::new(wait, &limits).unwrap()],
             edges: vec![
                 Edge::new(
                     "request".parse().unwrap(),
@@ -365,7 +362,6 @@ fn waits_and_loop_boundaries_are_admitted_and_until_uses_the_body_context() {
             ],
             ..ScopeFields::default()
         },
-        Role::Ordinary,
         &limits,
     )
     .unwrap();
@@ -389,11 +385,10 @@ fn waits_and_loop_boundaries_are_admitted_and_until_uses_the_body_context() {
             ],
             ..ScopeFields::default()
         },
-        Role::LoopBody,
         &limits,
     )
     .unwrap();
-    let body_id = body.digest(Role::LoopBody, &limits).unwrap();
+    let body_id = body.digest(&limits).unwrap();
     let until = Expression::new(
         E::Ref {
             source: ValueReference::Next("state".parse().unwrap()),
@@ -417,7 +412,7 @@ fn waits_and_loop_boundaries_are_admitted_and_until_uses_the_body_context() {
         ScopeFields {
             inputs: ports(&["seed"]),
             outputs: ports(&["result"]),
-            nodes: vec![Node::new(repeat, Role::Ordinary, &limits).unwrap()],
+            nodes: vec![Node::new(repeat, &limits).unwrap()],
             edges: vec![
                 Edge::new(
                     "seed".parse().unwrap(),
@@ -438,7 +433,6 @@ fn waits_and_loop_boundaries_are_admitted_and_until_uses_the_body_context() {
             ],
             ..ScopeFields::default()
         },
-        Role::Ordinary,
         &limits,
     )
     .unwrap();
@@ -616,8 +610,7 @@ fn all_mcp_binding_kinds_pass_the_complete_offline_admission_boundary() {
                 },
             ));
         }
-        root.nodes
-            .push(Node::new(n, Role::Ordinary, &limits).unwrap());
+        root.nodes.push(Node::new(n, &limits).unwrap());
         root.edges.push(Edge::new(
             "result".parse().unwrap(),
             S::Output {
@@ -626,7 +619,7 @@ fn all_mcp_binding_kinds_pass_the_complete_offline_admission_boundary() {
             },
             D::Output("result".parse().unwrap()),
         ));
-        let root = Scope::new(root, Role::Ordinary, &limits).unwrap();
+        let root = Scope::new(root, &limits).unwrap();
         let mut f = fields(root);
         f.bindings.insert(binding_id, binding);
         f.documents.insert(descriptor.digest(), descriptor);
@@ -688,7 +681,7 @@ fn composed_verification_and_execution_on_controlled_stacks() {
                 let scope = Scope::new(
                     ScopeFields {
                         outputs: ports(&["result"]),
-                        nodes: vec![Node::new(n, Role::Ordinary, &limits).unwrap()],
+                        nodes: vec![Node::new(n, &limits).unwrap()],
                         edges: vec![Edge::new(
                             "result".parse().unwrap(),
                             S::Output {
@@ -699,11 +692,10 @@ fn composed_verification_and_execution_on_controlled_stacks() {
                         )],
                         ..ScopeFields::default()
                     },
-                    Role::Ordinary,
                     &limits,
                 )
                 .unwrap();
-                let root = scope.digest(Role::Ordinary, &limits).unwrap();
+                let root = scope.digest(&limits).unwrap();
                 let mut f = DocumentFields::new("depth".into(), profile, root);
                 f.scopes.insert(root, scope);
                 f.documents
@@ -808,7 +800,7 @@ fn canonical_construction_order_is_irrelevant_and_unused_documents_are_rejected(
     let first = scope();
     let mut reversed = first.fields().clone();
     reversed.edges.reverse();
-    let second = Scope::new(reversed, Role::Ordinary, &limits).unwrap();
+    let second = Scope::new(reversed, &limits).unwrap();
     let original = bytes(fields(first));
     assert_eq!(original, bytes(fields(second)));
     let mut extra = fields(scope());

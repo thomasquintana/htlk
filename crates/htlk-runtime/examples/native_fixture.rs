@@ -2,7 +2,7 @@
 use htlk_executable::cbor::Limits;
 use htlk_executable::{
     CanonicalDocument, DocumentFields, EvaluatorLimits, ExecutionLimits, PolicyDocument,
-    PolicyFields, Scope, ScopeContext, ScopeFields,
+    PolicyFields, Scope, ScopeFields,
 };
 use htlk_runtime::{NativeRegistry, verify_executable};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,8 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut registry = NativeRegistry::new(&limits)?;
     let profile = registry.link_policy(&policy)?;
-    let scope = Scope::new(ScopeFields::default(), ScopeContext::Ordinary, &limits)?;
-    let root = scope.digest(ScopeContext::Ordinary, &limits)?;
+    let scope = Scope::new(ScopeFields::default(), &limits)?;
+    let root = scope.digest(&limits)?;
     let mut fields = DocumentFields::new("fixture.empty".into(), profile, root);
     fields.scopes.insert(root, scope);
     fields

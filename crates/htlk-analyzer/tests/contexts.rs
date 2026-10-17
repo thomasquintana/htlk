@@ -25,7 +25,14 @@ fn verify(
     role: ScopeContext,
 ) -> Result<ScopeGraphPlan, ScopeVerificationError> {
     let l = Limits::default();
-    let scope = Scope::new(fields, role, &l).unwrap();
+    let scope = Scope::new(fields, &l).unwrap();
+    verify_definition(&scope, role)
+}
+fn verify_definition(
+    scope: &Scope,
+    role: ScopeContext,
+) -> Result<ScopeGraphPlan, ScopeVerificationError> {
+    let l = Limits::default();
     let schemas = NativeSchemas::compile(
         &SchemaCatalog::new(vec![], &l).unwrap(),
         NativeSchemaOptions::default(),
@@ -34,7 +41,7 @@ fn verify(
     .unwrap();
     let until = truth();
     verify_scope_graph(
-        &scope,
+        scope,
         role,
         (role == ScopeContext::LoopBody).then_some(&until),
         &Default::default(),
@@ -211,7 +218,7 @@ fn local_endpoint_membership_is_checked_even_for_false_guards() {
     node.outputs = ports("value");
     let bad = ScopeFields {
         inputs: ports("q"),
-        nodes: vec![Node::new(node, ScopeContext::Ordinary, &Limits::default()).unwrap()],
+        nodes: vec![Node::new(node, &Limits::default()).unwrap()],
         edges: vec![Edge::new(
             "feed".parse().unwrap(),
             EdgeSource::Input("q".parse().unwrap()),
@@ -251,14 +258,21 @@ fn loop_role_contracts_and_initializer_membership_are_semantic() {
         verify(bad, ScopeContext::LoopBody).unwrap_err().kind,
         ScopeVerificationErrorKind::Graph(GraphRecordError::InvalidScopeRole)
     ));
-    let mut bad = body;
-    bad.postconditions = make(K::Not(Box::new(Expression::literal(
-        ScalarLiteral::Boolean(false),
-    ))));
-    assert!(matches!(
-        verify(bad, ScopeContext::LoopBody).unwrap_err().kind,
-        ScopeVerificationErrorKind::Graph(GraphRecordError::InvalidScopeRole)
-    ));
+    for post in [false, true] {
+        let mut bad = body.clone();
+        let contract = make(K::Not(Box::new(Expression::literal(
+            ScalarLiteral::Boolean(false),
+        ))));
+        if post {
+            bad.postconditions = contract;
+        } else {
+            bad.preconditions = contract;
+        }
+        assert!(matches!(
+            verify(bad, ScopeContext::LoopBody).unwrap_err().kind,
+            ScopeVerificationErrorKind::Graph(GraphRecordError::InvalidScopeRole)
+        ));
+    }
     let node = NodeFields::new(
         "loop_node".parse().unwrap(),
         Operation::Loop {
@@ -269,7 +283,7 @@ fn loop_role_contracts_and_initializer_membership_are_semantic() {
         },
     );
     let bad = ScopeFields {
-        nodes: vec![Node::new(node, ScopeContext::Ordinary, &Limits::default()).unwrap()],
+        nodes: vec![Node::new(node, &Limits::default()).unwrap()],
         ..ScopeFields::default()
     };
     assert!(matches!(
@@ -278,6 +292,81 @@ fn loop_role_contracts_and_initializer_membership_are_semantic() {
             "loop initializer input"
         ))
     ));
+}
+#[test]
+fn one_definition_has_stable_bytes_and_identity_across_role_analysis() {
+    let limits = Limits::default();
+    for fields in [
+        ScopeFields::default(),
+        ScopeFields {
+            carried: ports("x"),
+            edges: vec![Edge::new(
+                "advance".parse().unwrap(),
+                EdgeSource::Carried("x".parse().unwrap()),
+                EdgeDestination::Next("x".parse().unwrap()),
+            )],
+            ..ScopeFields::default()
+        },
+    ] {
+        let scope = Scope::new(fields, &limits).unwrap();
+        let bytes = scope.encode(&limits).unwrap();
+        let digest = scope.digest(&limits).unwrap();
+        let scope = Scope::decode(&bytes, &limits).unwrap();
+        for role in [ScopeContext::Ordinary, ScopeContext::LoopBody] {
+            let result = verify_definition(&scope, role);
+            if role == ScopeContext::Ordinary && !scope.fields().carried.is_empty() {
+                assert!(matches!(
+                    result.unwrap_err().kind,
+                    ScopeVerificationErrorKind::Graph(GraphRecordError::InvalidScopeRole)
+                ));
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(scope.encode(&limits).unwrap(), bytes);
+            assert_eq!(scope.digest(&limits).unwrap(), digest);
+        }
+    }
+}
+
+#[test]
+fn carried_and_next_endpoints_check_role_before_declared_membership() {
+    // No carried declarations: ordinary use must reject each endpoint category
+    // independently of the earlier ordinary-scope carried-table check.
+    for (source, destination, missing) in [
+        (
+            EdgeSource::Carried("missing".parse().unwrap()),
+            EdgeDestination::Output("x".parse().unwrap()),
+            "carried source",
+        ),
+        (
+            EdgeSource::Input("x".parse().unwrap()),
+            EdgeDestination::Next("missing".parse().unwrap()),
+            "next destination",
+        ),
+    ] {
+        let scope = Scope::new(
+            ScopeFields {
+                inputs: ports("x"),
+                outputs: ports("x"),
+                edges: vec![Edge::new("edge".parse().unwrap(), source, destination)],
+                ..ScopeFields::default()
+            },
+            &Limits::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_definition(&scope, ScopeContext::Ordinary)
+                .unwrap_err()
+                .kind,
+            ScopeVerificationErrorKind::Graph(GraphRecordError::InvalidScopeRole)
+        ));
+        assert_eq!(
+            verify_definition(&scope, ScopeContext::LoopBody)
+                .unwrap_err()
+                .kind,
+            ScopeVerificationErrorKind::Graph(GraphRecordError::UnknownEndpoint(missing))
+        );
+    }
 }
 #[test]
 fn node_contract_contexts_are_analyzed_at_their_actual_site() {
@@ -305,7 +394,7 @@ fn node_contract_contexts_are_analyzed_at_their_actual_site() {
             node.preconditions = make(K::Status("worker".parse().unwrap()));
         }
         let fields = ScopeFields {
-            nodes: vec![Node::new(node, ScopeContext::Ordinary, &l).unwrap()],
+            nodes: vec![Node::new(node, &l).unwrap()],
             ..ScopeFields::default()
         };
         let error = verify(fields, ScopeContext::Ordinary).unwrap_err();

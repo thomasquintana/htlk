@@ -5,8 +5,7 @@ use crate::digest::{Digest, ParseDigestError};
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};
 use crate::{
     EnvelopeError, ExecutableEnvelope, ExecutionProfile, GraphRecordError, Identifier,
-    JsonDocument, JsonError, Library, McpBinding, MetadataError, PromptTemplate, Scope,
-    ScopeContext, TypeError,
+    JsonDocument, JsonError, Library, McpBinding, MetadataError, PromptTemplate, Scope, TypeError,
 };
 use std::{collections::BTreeMap, fmt};
 
@@ -101,7 +100,7 @@ impl CanonicalDocument {
             f.scopes.len(),
             f.scopes
                 .iter()
-                .map(|(id, v)| Ok((id.to_string(), v.to_value(ScopeContext::Ordinary, limits)?))),
+                .map(|(id, v)| Ok((id.to_string(), v.to_value(limits)?))),
         )?;
         b.table(
             "templates",
@@ -224,10 +223,7 @@ impl CanonicalDocument {
             digest(get("root_scope"))?,
         );
         for (key, v) in map(get("scopes"))?.iter() {
-            f.scopes.insert(
-                key.parse()?,
-                Scope::from_value(v, ScopeContext::Ordinary, l)?,
-            );
+            f.scopes.insert(key.parse()?, Scope::from_value(v, l)?);
         }
         for (key, v) in map(get("templates"))?.iter() {
             f.templates
@@ -255,7 +251,7 @@ impl CanonicalDocument {
     fn validate_keys(&self, l: &Limits) -> Result<(), DocumentError> {
         let f = &self.fields;
         for (id, v) in &f.scopes {
-            if v.digest(ScopeContext::Ordinary, l)? != *id {
+            if v.digest(l)? != *id {
                 return Err(DocumentError::DigestMismatch("scope"));
             }
         }

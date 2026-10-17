@@ -35,7 +35,7 @@ fn node(name: &str, input: Option<bool>, guard: Expression) -> Node {
         n.inputs = ports(&[("input", P::Boolean, required)]);
     }
     n.guard = guard;
-    Node::new(n, Role::Ordinary, &Limits::default()).unwrap()
+    Node::new(n, &Limits::default()).unwrap()
 }
 fn truth() -> Expression {
     Expression::literal(L::Boolean(true))
@@ -72,7 +72,7 @@ fn verify(
     fields: ScopeFields,
 ) -> Result<htlk_analyzer::ScopeGraphPlan, htlk_analyzer::ScopeVerificationError> {
     let limits = Limits::default();
-    let scope = Scope::new(fields, Role::Ordinary, &limits).unwrap();
+    let scope = Scope::new(fields, &limits).unwrap();
     let schemas = NativeSchemas::compile(
         &SchemaCatalog::new(vec![], &limits).unwrap(),
         NativeSchemaOptions::default(),
@@ -234,7 +234,7 @@ fn loop_body_observability_is_checked_for_each_until_use() {
         )],
         ..ScopeFields::default()
     };
-    let scope = Scope::new(fields, Role::LoopBody, &limits).unwrap();
+    let scope = Scope::new(fields, &limits).unwrap();
     let schemas = NativeSchemas::compile(
         &SchemaCatalog::new(vec![], &limits).unwrap(),
         NativeSchemaOptions::default(),
@@ -288,7 +288,7 @@ fn edge_types_and_expression_names_are_checked_in_their_own_contexts() {
         )
         .unwrap(),
     );
-    fields.nodes[1] = Node::new(bad, Role::Ordinary, &Limits::default()).unwrap();
+    fields.nodes[1] = Node::new(bad, &Limits::default()).unwrap();
     assert_eq!(verify(fields).unwrap_err().kind, Error::UnknownReference);
 }
 #[test]
@@ -455,12 +455,12 @@ fn derived_plan_limits_count_projection_types_not_only_result_types() {
         &limits,
     )
     .unwrap();
-    let scope = Scope::new(f, Role::Ordinary, &limits).unwrap();
+    let scope = Scope::new(f, &limits).unwrap();
     let tight = Limits {
-        max_document_bytes: scope.encode(Role::Ordinary, &limits).unwrap().len(),
+        max_document_bytes: scope.encode(&limits).unwrap().len(),
         ..limits.clone()
     };
-    scope.to_value(Role::Ordinary, &tight).unwrap();
+    scope.to_value(&tight).unwrap();
     let schemas = NativeSchemas::compile(
         &SchemaCatalog::new(vec![], &limits).unwrap(),
         NativeSchemaOptions::default(),

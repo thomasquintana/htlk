@@ -31,9 +31,12 @@ The model depends on neither crate.
 
 Consequently, a representable document with an unknown root, undeclared endpoint
 or invalid contextual reference can reach the analyzer and receive a semantic
-diagnostic. Existing context-taking model APIs retain their signatures, but their
-context argument does not establish semantic validity. The analyzer checks every
-actual ordinary/loop-body and expression use context.
+diagnostic. Expression and graph-model construction/codecs take limits, not use-site
+contexts. `Scope` is a reusable definition: its ordinary or loop-body role comes
+from each use, never a serialized label. The analyzer checks every actual scope
+and expression use context, endpoint membership, binding coverage, and dependency
+validity. Node and scope digests identify complete canonical records independently
+of use-site role. Type APIs retain their distinct `TypeContext` requirements.
 
 ## Canonical CBOR
 

@@ -54,7 +54,7 @@ a standard-library inventory. Verification performs no MCP service calls.
 use htlk_executable::cbor::{Limits, Value};
 use htlk_executable::{CanonicalDocument, DocumentFields,
     EvaluatorLimits, ExecutionLimits,
-    PolicyDocument, PolicyFields, Scope, ScopeContext, ScopeFields};
+    PolicyDocument, PolicyFields, Scope, ScopeFields};
 use htlk_analyzer::{ExpressionSite,ScopeUse};
 use htlk_runtime::{EvaluationFrame,EvaluationValue,NativeRegistry,verify_executable};
 
@@ -73,8 +73,8 @@ let policy = PolicyDocument::new(PolicyFields {
 }, &limits)?;
 let mut registry = NativeRegistry::new(&limits)?;
 let profile = registry.link_policy(&policy)?;
-let scope = Scope::new(ScopeFields::default(), ScopeContext::Ordinary, &limits)?;
-let root = scope.digest(ScopeContext::Ordinary, &limits)?;
+let scope = Scope::new(ScopeFields::default(), &limits)?;
+let root = scope.digest(&limits)?;
 let mut fields = DocumentFields::new("example.empty".into(), profile, root);
 fields.scopes.insert(root, scope);
 fields.documents.insert(policy.digest(), policy.document().clone());
@@ -769,11 +769,19 @@ Read-only `fields()` access permits inspection; cloning fields and rebuilding is
 an explicit new definition. Canonical ingress requires every CDDL field and does
 not apply authored defaults to incomplete records.
 
+`Node::new(fields, limits)` and `Scope::new(fields, limits)` establish bounded
+canonical representation and local record invariants. Node, edge, and scope
+`to_value(limits)`, `from_value(value, limits)`, `encode(limits)`, and
+`decode(bytes, limits)` take no use-site context. A `Scope` is a reusable definition;
+successful construction does not establish endpoint membership, binding coverage,
+dependency validity, or ordinary/loop-body legality. Those require analyzer checks
+at every relevant use site.
+
 ```rust
 use htlk_executable::cbor::Limits;
 use htlk_executable::{Edge, EdgeDestination, EdgeSource, Expression,
     ExpressionKind, Node, NodeFields, Operation, Port,
-    PortTable, BuiltinType, Scope, ScopeContext, ScopeFields, ValueReference,
+    PortTable, BuiltinType, Scope, ScopeFields, ValueReference,
     ValueType};
 
 let limits = Limits::default();
@@ -785,7 +793,7 @@ let expression = Expression::new(ExpressionKind::Ref {
 let mut fields = NodeFields::new("echo".parse()?, Operation::Eval(expression));
 fields.inputs = inputs.clone();
 fields.outputs = PortTable::new(vec![("value".parse()?, string_port.clone())], &limits)?;
-let node = Node::new(fields, ScopeContext::Ordinary, &limits)?;
+let node = Node::new(fields, &limits)?;
 let scope = Scope::new(ScopeFields {
     inputs,
     outputs: PortTable::new(vec![("answer".parse()?, string_port)], &limits)?,
@@ -798,9 +806,9 @@ let scope = Scope::new(ScopeFields {
             EdgeDestination::Output("answer".parse()?)),
     ],
     ..ScopeFields::default()
-}, ScopeContext::Ordinary, &limits)?;
-let bytes = scope.encode(ScopeContext::Ordinary, &limits)?;
-assert_eq!(Scope::decode(&bytes, ScopeContext::Ordinary, &limits)?, scope);
+}, &limits)?;
+let bytes = scope.encode(&limits)?;
+assert_eq!(Scope::decode(&bytes, &limits)?, scope);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -839,7 +847,8 @@ before retaining it. A failed child may temporarily occupy one additional
 codec-sized allocation; counters are not exact heap measurements. Scope references
 stay digests, and local endpoint lookup is derived rather than serialized.
 
-`Node::digest` and `Scope::digest` cover complete canonical records. The public
+`node.digest(limits)` and `scope.digest(limits)` identify complete canonical records
+independently of use-site role or semantic admission. The public
 `digest::record_digest` helper takes a closed `RecordKind` (scope, node, template,
 binding, server) and hashes the raw `htlk.<kind>/0.1\n` prefix plus canonical CBOR.
 It validates encoding limits, not arbitrary supplied record schemas. Library
