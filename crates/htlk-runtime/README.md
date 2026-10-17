@@ -24,8 +24,9 @@ foundations with fenced leases, atomic record transitions, internal command rece
 bounded journal/outbox delivery and capability-free replay. `Runtime` supplies
 policy-gated immutable graph registration, independent admitted reload and atomic
 typed run admission with authenticated host receipts.
-Explicit Actix execution now drives pure/task/loop graphs. Dispatch authorization,
-wait/MCP execution and live transport integrations remain in progress.
+Explicit Actix execution now drives pure/task/loop graphs. Typed input waits,
+replies, cancellation and authorized inspections are integrated.
+Approval/MCP execution and live transport integrations remain in progress.
 `htlk-executable::digest` supplies typed SHA-256 digests and hashing for future
 fingerprint checks and runtime identities, using consumer-defined preimages.
 Its `ExecutableEnvelope` API validates version-0.1 envelope fields, format,

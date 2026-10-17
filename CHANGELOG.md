@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add lease-free input waits, authenticated owner-routed replies and cancellation,
+  historical receipts, expiry handling and protected run/node/graph inspection.
 - Add fenced Actix run supervision, lazy immutable execution frames, durable
   guards/admission, atomic pure publication, task boundaries and loop checkpoints.
 - Add checked actual-read influence tracing and lazy boundary authorization for

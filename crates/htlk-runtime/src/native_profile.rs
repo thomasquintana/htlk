@@ -56,6 +56,9 @@ pub fn native_profile(
         include_bytes!("execution/step.rs"),
         include_bytes!("execution/composite.rs"),
         include_bytes!("execution/control.rs"),
+        include_bytes!("execution/waits.rs"),
+        include_bytes!("execution/host.rs"),
+        include_bytes!("execution/inspection.rs"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);

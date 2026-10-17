@@ -1,6 +1,16 @@
 //! Bounded recovery/scheduling scans derived from authoritative records.
 use super::*;
 impl SqliteStore {
+    pub(crate) async fn find_record(
+        &self,
+        family: RecordFamily,
+        id: &str,
+    ) -> Result<(RunId, StoredRecord), StoreError> {
+        self.check_text(id)?;
+        let id = id.to_string();
+        let limits = self.config.limits.clone();
+        self.connection.call(move|db|->Result<_,StoreError>{let mut statement=db.prepare("SELECT run_id,revision,final,payload FROM records WHERE family=?1 AND record_id=?2 LIMIT 2")?;let mut rows=statement.query(params![family.as_str(),id])?;let row=rows.next()?.ok_or(StoreError::Missing)?;let run=row.get_ref(0)?.as_str().map_err(|_|StoreError::Corrupt)?;let run=RunId::new(run.into(),&limits).map_err(|_|StoreError::Corrupt)?;let payload=cbor::decode(row.get_ref(3)?.as_blob().map_err(|_|StoreError::Corrupt)?,&limits)?;let record=StoredRecord{key:RecordKey{family,id},revision:row.get(1)?,final_record:row.get(2)?,payload};if rows.next()?.is_some(){return Err(StoreError::Corrupt)}Ok((run,record))}).await.map_err(StoreError::from_worker)
+    }
     /// Lists one finite page of nonterminal run IDs after an exclusive opaque cursor.
     ///
     /// # Errors

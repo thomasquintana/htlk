@@ -98,6 +98,27 @@ pub enum Authorization<'a> {
         /// Trusted conservative boundary/source protection.
         labels: &'a SecurityLabels,
     },
+    /// Resolve an authenticated typed input wait.
+    SubmitReply {
+        /// Run containing this request.
+        run_id: &'a crate::identity::RunId,
+        /// Exact wait identity.
+        wait_id: crate::identity::WaitId,
+        /// Trusted request/outcome protection.
+        labels: &'a SecurityLabels,
+    },
+    /// Intentionally stop a nonterminal run.
+    CancelRun {
+        /// Exact target run.
+        run_id: &'a crate::identity::RunId,
+    },
+    /// Inspect run/node metadata under its protection boundary.
+    InspectRun {
+        /// Exact target run.
+        run_id: &'a crate::identity::RunId,
+        /// Conservative result/outcome protection.
+        labels: &'a SecurityLabels,
+    },
 }
 /// Trusted host policy. Implementations authenticate evidence and evaluate grants;
 /// ordinary graph data cannot implement or replace this policy. Registration trust
@@ -179,6 +200,7 @@ pub struct Runtime {
     pub(crate) config: RuntimeConfig,
     pub(crate) clock: Arc<dyn CoordinatorClock>,
     cache: Mutex<BTreeMap<Digest, Arc<VerifiedExecutable<'static>>>>,
+    pub(crate) execution: Mutex<Option<actix::WeakAddr<crate::execution::Supervisor>>>,
 }
 impl Runtime {
     /// Constructs a service from trusted store, immutable registry and host policy.
@@ -209,6 +231,7 @@ impl Runtime {
             config,
             clock: Arc::new(SystemClock),
             cache: Mutex::new(BTreeMap::new()),
+            execution: Mutex::new(None),
         })
     }
     /// Selects an explicit trusted clock before sharing the service with actors.

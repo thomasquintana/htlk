@@ -42,7 +42,10 @@ the implemented `htlk-compiler`.
    output precedence, explicit feedback and durable iteration checkpoints.
 6. **Pending — Policy and limits:** authorization, effective deadlines, reservations,
    supported hard budgets and fenced cancellation.
-7. **Pending — Waits and approvals:** durable requests, authenticated replies,
+7. **In progress — Waits and approvals:** durable input requests, authenticated replies,
+   expiry, host receipts and fenced cancellation implemented; exact-action approval
+   generation integration pending. [Wait/control API](runtime-waits.md).
+   Remaining obligations include
    exact-action approval generations, expiry and idempotent receipts.
 8. **Pending — Live MCP:** stdio/HTTP, descriptor drift, bounded protocol conversion,
    durable attempts/responses and delivery-state-aware retry.

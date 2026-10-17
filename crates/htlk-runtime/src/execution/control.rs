@@ -55,6 +55,7 @@ pub(super) async fn enforce(runtime: Arc<Runtime>, lease: RunLease) -> Result<()
             None,
             FailureCode::Timeout,
             false,
+            vec![],
         )
         .await;
     }
@@ -67,6 +68,7 @@ pub(super) async fn enforce(runtime: Arc<Runtime>, lease: RunLease) -> Result<()
                 None,
                 FailureCode::Timeout,
                 false,
+                vec![],
             )
             .await;
         }
@@ -80,6 +82,7 @@ pub(super) async fn enforce(runtime: Arc<Runtime>, lease: RunLease) -> Result<()
                 Some(&node.key.id),
                 FailureCode::Timeout,
                 false,
+                vec![],
             )
             .await;
         }
@@ -96,6 +99,7 @@ pub(super) async fn stop(
     node_target: Option<&str>,
     code: FailureCode,
     cancel: bool,
+    extra: Vec<crate::store::RecordWrite>,
 ) -> Result<(), RuntimeError> {
     let header = runtime.store.run_header(lease.run_id()).await?;
     if header.status.is_terminal() {
@@ -133,7 +137,7 @@ pub(super) async fn stop(
             break;
         }
     }
-    let mut writes = Vec::new();
+    let mut writes = extra;
     let mut protection = Vec::new();
     for node in &nodes {
         if node.final_record {

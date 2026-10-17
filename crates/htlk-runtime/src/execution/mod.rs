@@ -1,6 +1,11 @@
 //! Actix supervision of fenced durable graph execution.
 mod composite;
 mod control;
+mod host;
+mod inspection;
+pub use inspection::{GraphView, NodeView, RunView, WaitView};
+mod waits;
+pub use host::{CancelReceipt, ReplyReceipt};
 mod frame;
 mod model;
 mod step;
@@ -61,17 +66,21 @@ impl ExecutionEngine {
             return Err(RuntimeError::failure(FailureCode::Profile));
         }
         let workers = SyncArbiter::start(config.workers, || Worker);
-        Ok(Self {
-            address: Supervisor {
-                runtime,
-                config,
-                workers,
-                active: BTreeMap::new(),
-                polling: false,
-                cursor: None,
-            }
-            .start(),
-        })
+        let address = Supervisor {
+            runtime: runtime.clone(),
+            config,
+            workers,
+            active: BTreeMap::new(),
+            polling: false,
+            cursor: None,
+        }
+        .start();
+        *runtime
+            .execution
+            .lock()
+            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))? =
+            Some(address.downgrade());
+        Ok(Self { address })
     }
     /// Stops local coordination without changing terminal outcomes or redispatching
     /// effects. Restart reacquires ownership after existing leases expire.
@@ -102,7 +111,7 @@ impl Handler<Work> for Worker {
         System::new().block_on(step::tick(msg.runtime, msg.lease))
     }
 }
-struct Supervisor {
+pub(crate) struct Supervisor {
     runtime: Arc<Runtime>,
     config: ExecutionConfig,
     workers: Addr<Worker>,

@@ -897,7 +897,8 @@ async fn operate(
         Operation::Scope(_) | Operation::Loop { .. } => {
             super::composite::operate(runtime, lease, scope, node, record).await
         }
-        Operation::Wait { .. } | Operation::Mcp { .. } => Ok(false),
+        Operation::Wait { .. } => super::waits::operate(runtime, lease, scope, node, record).await,
+        Operation::Mcp { .. } => Ok(false),
     }
 }
 pub(super) struct OutputProposal<'a> {
@@ -1295,6 +1296,7 @@ async fn stop_scope(
         None,
         code,
         false,
+        vec![],
     )
     .await
 }
