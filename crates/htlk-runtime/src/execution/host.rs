@@ -31,6 +31,7 @@ pub struct CancelReceipt {
     /// Immutable result if terminal.
     pub status: RunStatus,
 }
+#[derive(Clone)]
 pub(crate) enum Operation {
     Extend {
         request: super::extension::ExtensionRequest,
@@ -48,6 +49,7 @@ pub(crate) enum Operation {
         reason: String,
     },
 }
+#[derive(Clone)]
 pub(crate) struct Command {
     pub run: RunId,
     pub context: HostContext,
@@ -357,10 +359,21 @@ impl Runtime {
                 reason: reason.into(),
             },
         };
-        if recorded(self, &command).await?.is_none()
-            && !self.store.run_header(run).await?.status.is_terminal()
-        {
-            route(self, command).await?;
+        if recorded(self, &command).await?.is_none() {
+            if !self.store.run_header(run).await?.status.is_terminal() {
+                let result = route(self, command.clone()).await;
+                if result.is_err() && !self.store.run_header(run).await?.status.is_terminal() {
+                    result?;
+                }
+            }
+            if recorded(self, &command).await?.is_none() {
+                let status = self.store.run_header(run).await?.status;
+                let response = object([("status", Value::Text(status.as_str().into()))])?;
+                let mut write = receipt(self, &command, response)?;
+                write.payload = replace(&write.payload, [("reason", Value::Text(reason.into()))])?;
+                let now = self.store.coordinator_time(self.clock.now_ms()?).await?;
+                self.store.terminal_receipt(run, write, now).await?;
+            }
         }
         Ok(CancelReceipt {
             run_id: run.clone(),

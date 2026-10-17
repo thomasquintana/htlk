@@ -20,7 +20,9 @@ future output acceptance, preserving spent usage and earlier terminal outcomes.
 
 `Runtime::cancel_run` routes authenticated commands to the same authority, commits
 descendant stops and its receipt atomically, and preserves already terminal runs.
-Local execution must be launched for new mutations; historical receipts and ordinary
+Cancellation of an already terminal run saves an immutable no-op receipt without
+a worker and retains the winning outcome. Reusing that key with a different reason
+conflicts. Local execution must be launched for active mutations; historical receipts and ordinary
 read inspection do not require a live worker. Cross-process command forwarding is
 an embedding concern; unavailable local authority returns E_FENCED for safe retry.
 
@@ -31,5 +33,5 @@ evidence is not exposed as a successful graph artifact before node acceptance.
 
 Tests cover policy/type rejection without consuming a wait, accepted reply history,
 conflicting duplicate, success, expiry, cancellation, closed waits and cancellation
-key conflicts. Exact-action approval generations and live MCP integration follow
-as separately tracked execution tasks.
+key conflicts, including terminal no-op receipt replay. See [MCP and approvals](runtime-mcp.md)
+for exact-action generations and [extension](runtime-extension.md) for atomic planning replies.

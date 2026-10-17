@@ -1,6 +1,64 @@
 //! Bounded recovery/scheduling scans derived from authoritative records.
 use super::*;
 impl SqliteStore {
+    // Terminal outcomes are immutable; recording a host no-op receipt needs no
+    // execution owner and cannot revive work. Only a single final reply is allowed.
+    pub(crate) async fn terminal_receipt(
+        &self,
+        run: &RunId,
+        write: RecordWrite,
+        observed: i64,
+    ) -> Result<Value, StoreError> {
+        if write.key.family != RecordFamily::Reply
+            || !write.final_record
+            || write.expected_revision.is_some()
+        {
+            return Err(StoreError::Invalid);
+        }
+        self.check_text(&write.key.id)?;
+        timestamp(observed)?;
+        let Value::Map(fields) = &write.payload else {
+            return Err(StoreError::Invalid);
+        };
+        let (Some(Value::Text(actor)), Some(Value::Text(method)), Some(response)) = (
+            fields.get("principal"),
+            fields.get("method"),
+            fields.get("response"),
+        ) else {
+            return Err(StoreError::Invalid);
+        };
+        let (actor, method, response) = (actor.clone(), method.clone(), response.clone());
+        let limits = self.config.limits.clone();
+        let mut transition = Transition {
+            context: TransitionContext {
+                command_id: write.key.id.clone(),
+                actor: actor.clone(),
+                causation: method.clone(),
+                timestamp_ms: observed,
+            },
+            writes: vec![write.clone()],
+            next_status: None,
+            root: None,
+            expected_fingerprint: None,
+        };
+        let event = cbor::encode(
+            &transitions::transition_body(&mut transition, &limits)?,
+            &limits,
+        )?;
+        let payload = cbor::encode(&write.payload, &limits)?;
+        let run = run.clone();
+        self.connection.call(move|db|->Result<_,StoreError>{
+            let tx=db.transaction_with_behavior(TransactionBehavior::Immediate)?;let header=load_header(&tx,&run)?;
+            if !header.status.is_terminal(){return Err(StoreError::Conflict)}
+            let old:Option<Vec<u8>>=tx.query_row("SELECT payload FROM records WHERE run_id=?1 AND family='reply' AND record_id=?2",params![run.as_str(),write.key.id],|r|r.get(0)).optional()?;
+            if let Some(old)=old{if old!=payload{return Err(StoreError::IdempotencyConflict)}return Ok(response)}
+            let now=observed.max(header.last_time_ms);let sequence=header.sequence.checked_add(1).ok_or(StoreError::Invalid)?;
+            tx.execute("INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,'reply',?2,1,1,?3)",params![run.as_str(),write.key.id,payload])?;
+            tx.execute("UPDATE runs SET sequence=?2,last_time_ms=?3 WHERE run_id=?1",params![run.as_str(),sequence,now])?;
+            append_event(&tx,run.as_str(),sequence,EventMeta{kind:"terminal_receipt",actor:&actor,timestamp:now,causation:&method,command:Some(&write.key.id)},&event,&limits)?;
+            tx.commit()?;Ok(response)
+        }).await.map_err(StoreError::from_worker)
+    }
     pub(crate) async fn save_late_response(
         &self,
         run: &RunId,

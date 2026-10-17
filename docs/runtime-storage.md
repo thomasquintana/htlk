@@ -7,7 +7,7 @@ Storage methods do not perform those application-level checks.
 
 ## Database identity and durability
 
-The private SQLite database uses application ID `0x48544c4b` and schema version 4.
+The private SQLite database uses application ID `0x48544c4b` and schema version 5.
 An empty database is initialized in an immediate transaction. Existing unrelated,
 nonempty or incompatible-version databases are rejected without relabeling them.
 File stores use WAL, synchronous FULL, foreign keys and a bounded busy timeout.
@@ -18,6 +18,7 @@ Migration 3 adds immutable value bytes and producer uniqueness indexes; version 
 is upgraded without changing existing registered envelopes or execution records.
 Migration 4 adds durable host identity/time and authenticated receipt tables, plus
 a committed-time lookup index. Existing versions are upgraded transactionally.
+Migration 5 adds a non-authoritative, protected late-response inbox.
 
 The initial layout has run authority headers, a version-0.1 journal, a transactional
 outbox, revisioned runtime-record families and internal command receipts. Graph
@@ -99,6 +100,7 @@ ownership_acquired: [owner, fence, expires_at_ms]
 ownership_renewed:  [owner, fence, expires_at_ms]
 records_committed:  [owner, fence, body]
 run_initialized:    [body, [principal, method, fingerprint, key, digest, expiry]]
+terminal_receipt:   body  // one final host reply; no status/root replacement
 
 body = [writes, terminal_status_or_null, new_root_or_null, expected_fingerprint_or_null]
 new_root = [fingerprint, scope_instance_id]
@@ -122,6 +124,12 @@ any error rather than continuing from a partially checked event.
 This reconstructs storage decisions; actual graph recovery additionally re-admits
 executables, checks referenced artifacts and reconciles dispatch state.
 
+Terminal cancellation no-ops append an authenticated immutable receipt without
+requiring an execution lease. This special transaction can insert only one final
+reply record; it cannot change status, root, ownership or graph work. The journal
+reconstructor enforces the same restriction. Identical retries do not add events,
+and changed requests under a recorded key still conflict after completion.
+
 ## Outbox delivery
 
 Each journal insert adds one notice in the same transaction. `pending_outbox`
@@ -142,7 +150,6 @@ duplicate outbox delivery, corrupt payloads, replay equivalence and altered hist
 
 [Immutable graph registration](runtime-registration.md) and
 [artifact storage/read integrity](runtime-artifacts.md) are implemented consumers.
-[Atomic run-input publication](runtime-runs.md) and host receipts are implemented;
-graph execution follows. Initial finite timers/zero usage are saved, while their
-coordinator enforcement and reservation consumers remain later integrations;
-their execution semantics are not established merely by a generic record commit.
+[Atomic run-input publication](runtime-runs.md), host receipts,
+[actor execution](runtime-execution.md), [MCP reservations](runtime-mcp.md) and
+[extension accounting](runtime-extension.md) are implemented consumers.

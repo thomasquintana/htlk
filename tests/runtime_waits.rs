@@ -51,7 +51,13 @@ impl CoordinatorClock for Clock {
 fn context(name: &str) -> HostContext {
     HostContext::new(name.into(), &Limits::default()).unwrap()
 }
-async fn setup() -> (Arc<Runtime>, ExecutionEngine, Arc<Clock>, RunId) {
+async fn setup() -> (
+    Arc<Runtime>,
+    ExecutionEngine,
+    Arc<Clock>,
+    RunId,
+    SqliteStore,
+) {
     let (compiler, registry) = native_compiler();
     let result=compiler.compile_source(r#"ir_version="0.1" graph test.wait{inputs={request=json} outputs={value=string}nodes{review=wait(string){topic="review" timeout_ms=500}}edges{edge request{from=inputs.request to=review.inputs.request} edge reply{from=review.outputs.value to=outputs.value}}}"#,&catalogs()).unwrap();
     let clock = Arc::new(Clock(AtomicI64::new(1000)));
@@ -60,7 +66,7 @@ async fn setup() -> (Arc<Runtime>, ExecutionEngine, Arc<Clock>, RunId) {
         .unwrap();
     let runtime = Arc::new(
         Runtime::new(
-            store,
+            store.clone(),
             Arc::new(registry),
             Arc::new(Policy),
             RuntimeConfig::default(),
@@ -94,7 +100,7 @@ async fn setup() -> (Arc<Runtime>, ExecutionEngine, Arc<Clock>, RunId) {
         .await
         .unwrap()
         .run_id;
-    (runtime, engine, clock, run)
+    (runtime, engine, clock, run, store)
 }
 async fn open(runtime: &Runtime, run: &RunId) -> htlk::runtime::identity::WaitId {
     for _ in 0..1000 {
@@ -119,7 +125,7 @@ async fn terminal(runtime: &Runtime, run: &RunId) -> RunStatus {
 #[test]
 fn reply_type_policy_and_idempotency_are_checked_without_holding_workers() {
     actix::System::new().block_on(async {
-        let (runtime, engine, clock, run) = setup().await;
+        let (runtime, engine, clock, run, store) = setup().await;
         let wait = open(&runtime, &run).await;
         assert_eq!(
             runtime
@@ -154,6 +160,40 @@ fn reply_type_policy_and_idempotency_are_checked_without_holding_workers() {
         );
         assert_eq!(terminal(&runtime, &run).await, RunStatus::Succeeded);
         engine.shutdown().await.unwrap();
+        let before = store.run_header(&run).await.unwrap();
+        let receipt = runtime
+            .cancel_run(&context("alice"), &run, "already complete", "terminal-noop")
+            .await
+            .unwrap();
+        assert_eq!(receipt.status, RunStatus::Succeeded);
+        let after = store.run_header(&run).await.unwrap();
+        assert_eq!(after.sequence, before.sequence + 1);
+        assert_eq!(
+            runtime
+                .cancel_run(&context("alice"), &run, "already complete", "terminal-noop")
+                .await
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(
+            store.run_header(&run).await.unwrap().sequence,
+            after.sequence
+        );
+        assert_eq!(
+            runtime
+                .cancel_run(&context("alice"), &run, "changed", "terminal-noop")
+                .await
+                .unwrap_err()
+                .code(),
+            FailureCode::IdempotencyConflict
+        );
+        let entries = store.journal(&run, 0, 100).await.unwrap();
+        let mut replay =
+            htlk::runtime::store::ReplayState::begin(&entries[0], &Limits::default()).unwrap();
+        for entry in &entries[1..] {
+            replay.apply(entry, &Limits::default()).unwrap();
+        }
+        assert_eq!(replay.header(), &after);
         clock.0.store(9000, Ordering::SeqCst);
         assert_eq!(
             runtime
@@ -187,7 +227,7 @@ fn reply_type_policy_and_idempotency_are_checked_without_holding_workers() {
 #[test]
 fn cancellation_closes_waits_and_expiry_is_not_an_approval_or_success() {
     actix::System::new().block_on(async {
-        let (runtime, engine, _, run) = setup().await;
+        let (runtime, engine, _, run, _) = setup().await;
         let wait = open(&runtime, &run).await;
         assert_eq!(
             runtime
@@ -216,7 +256,7 @@ fn cancellation_closes_waits_and_expiry_is_not_an_approval_or_success() {
             FailureCode::IdempotencyConflict
         );
         engine.shutdown().await.unwrap();
-        let (runtime, engine, clock, run) = setup().await;
+        let (runtime, engine, clock, run, _) = setup().await;
         open(&runtime, &run).await;
         clock.0.store(1500, Ordering::SeqCst);
         assert_eq!(terminal(&runtime, &run).await, RunStatus::Failed);

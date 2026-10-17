@@ -102,6 +102,8 @@ pub struct CommitReceipt {
 /// Closed version-0.1 journal transition schema selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JournalEvent {
+    /// Immutable host receipt appended after a terminal outcome, without work.
+    TerminalReceipt,
     /// Initial root/inputs, contract result and authenticated host start receipt.
     RunInitialized,
     /// Initial fingerprint/root; sequence one, no owner.
@@ -116,6 +118,7 @@ pub enum JournalEvent {
 impl JournalEvent {
     fn parse(value: &str) -> Result<Self, StoreError> {
         match value {
+            "terminal_receipt" => Ok(Self::TerminalReceipt),
             "run_initialized" => Ok(Self::RunInitialized),
             "run_created" => Ok(Self::RunCreated),
             "ownership_acquired" => Ok(Self::OwnershipAcquired),

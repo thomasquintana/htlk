@@ -87,6 +87,35 @@ impl ReplayState {
         }
         cbor::encode(&entry.payload, limits)?;
         match entry.event {
+            JournalEvent::TerminalReceipt => {
+                if !self.header.status.is_terminal() {
+                    return Err(StoreError::Corrupt);
+                }
+                let [writes, status, root, expected] = array::<4>(&entry.payload)?;
+                if !matches!(
+                    (status, root, expected),
+                    (Value::Null, Value::Null, Value::Null)
+                ) {
+                    return Err(StoreError::Corrupt);
+                }
+                let [write] = array::<1>(writes)?;
+                let [family, id, revision, final_record, payload] = array::<5>(write)?;
+                if string(family)? != "reply"
+                    || !matches!((revision, final_record), (Value::Null, Value::Bool(true)))
+                    || entry.command_id.as_deref() != Some(string(id)?)
+                {
+                    return Err(StoreError::Corrupt);
+                }
+                let Value::Map(fields) = payload else {
+                    return Err(StoreError::Corrupt);
+                };
+                if fields.get("principal") != Some(&Value::Text(entry.actor.clone()))
+                    || fields.get("method") != Some(&Value::Text(entry.causation.clone()))
+                {
+                    return Err(StoreError::Corrupt);
+                }
+                self.apply_body(&entry.payload, limits, false)?;
+            }
             JournalEvent::RunCreated => return Err(StoreError::Corrupt),
             JournalEvent::RunInitialized => self.apply_initial(entry, limits)?,
             JournalEvent::OwnershipAcquired | JournalEvent::OwnershipRenewed => {

@@ -94,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Persist and replay terminal cancellation no-op receipts without requiring an
+  execution owner, preserving committed outcomes and idempotency-key conflicts.
 - Update the locked rustls dependency to 0.23.46 to resolve
   RUSTSEC-2026-0346 through RUSTSEC-2026-0349 and refresh its license notice.
 
