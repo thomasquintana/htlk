@@ -34,6 +34,15 @@ semantic analysis. `VerifiedExecutable` retains that immutable analyzer result
 and borrows the registry, which cannot be mutated while admitted execution uses it.
 Serialized compiler analysis is never treated as proof of host admission.
 
+`verify_executable_owned(bytes, Arc<NativeRegistry>, limits)` performs the same
+verification and returns `VerifiedExecutable<'static>`, retaining shared immutable
+registry ownership for actors and caches. The handle is `Send + Sync`; compiled
+source and bundle outputs can be admitted without borrowing application state.
+Both entry points prepare schemas using `NativeSchemaOptions::default()`. Native
+compiler integrations should use those options and the same host-selected policy,
+profile and complete library manifests. Compiler hard-budget capability flags are
+host declarations; actual dispatch enforcement remains a runtime responsibility.
+
 `VerifiedExecutable::evaluate` selects an authored expression by scope use and
 expression site, then enforces the retained inferred boundaries and runtime checks.
 `validate_edge_value` enforces destination value constraints; scheduling and

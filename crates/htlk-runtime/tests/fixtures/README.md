@@ -69,3 +69,7 @@ rules. The independent checker explicitly covers the new diagnostic/regex module
 Model pointer lookup changes also contribute to native identities. Regeneration
 changes profile digests and the envelope fingerprint, while the empty root scope,
 policy and existing canonical record goldens retain their identities.
+
+Shared-owned admission refreshes the core identity through `verified.rs` and the
+runtime exports. The borrowed and owned paths share exact verification logic;
+schema, regex and URI-template engine identities retain their previous values.

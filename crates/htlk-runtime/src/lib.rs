@@ -28,4 +28,6 @@ pub use native_registry::{
 pub use runtime_type::{project_typed_value, validate_typed_value};
 pub use schema_projection::SchemaProjection;
 pub use uri_template::expand_uri_template;
-pub use verified::{ExecutableVerificationError, VerifiedExecutable, verify_executable};
+pub use verified::{
+    ExecutableVerificationError, VerifiedExecutable, verify_executable, verify_executable_owned,
+};

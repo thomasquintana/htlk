@@ -6,14 +6,30 @@ use crate::{
 };
 use htlk_cbor::{Limits, Value};
 use htlk_executable::cbor as htlk_cbor;
+use std::sync::Arc;
+
+enum RegistryLink<'a> {
+    Borrowed(&'a NativeRegistry),
+    Owned(Arc<NativeRegistry>),
+}
+impl RegistryLink<'_> {
+    fn registry(&self) -> &NativeRegistry {
+        match self {
+            Self::Borrowed(registry) => registry,
+            Self::Owned(registry) => registry,
+        }
+    }
+}
 
 /// An immutable executable admitted through the shipped schema, MCP, expression,
-/// graph and exact linked-profile stages. Construction is private. The borrowed
-/// registry cannot be mutated while the verified executable is in use.
+/// graph and exact linked-profile stages. Construction is private. Its borrowed or
+/// shared-owned registry cannot be mutated while the executable is in use.
+/// [`verify_executable_owned`] returns a `'static` handle suitable for actor and
+/// cache ownership; it performs the same complete verification as borrowed admission.
 pub struct VerifiedExecutable<'a> {
     analysis: crate::AnalyzedDocument,
     fingerprint: Digest,
-    registry: &'a NativeRegistry,
+    registry: RegistryLink<'a>,
 }
 impl VerifiedExecutable<'_> {
     /// Semantic result recomputed during this runtime admission, tied to the
@@ -76,7 +92,7 @@ impl VerifiedExecutable<'_> {
             self.schemas(),
             self.analysis.limits(),
         );
-        self.registry.evaluate_admitted(
+        self.registry.registry().evaluate_admitted(
             &checked,
             frame,
             Some(self.schemas()),
@@ -208,6 +224,30 @@ pub fn verify_executable<'a>(
     registry: &'a NativeRegistry,
     limits: &Limits,
 ) -> Result<VerifiedExecutable<'a>, ExecutableVerificationError> {
+    verify(bytes, RegistryLink::Borrowed(registry), limits)
+}
+
+/// Verifies authoritative bytes while retaining shared ownership of the exact
+/// host-linked registry. The returned handle has no borrowed host lifetime and
+/// can itself be shared through [`Arc`]. Source reports or caller-supplied analysis
+/// are never accepted as admission proof. Schema preparation uses
+/// [`NativeSchemaOptions::default`], as does borrowed admission.
+///
+/// # Errors
+/// Returns the same complete stage failures as [`verify_executable`].
+pub fn verify_executable_owned(
+    bytes: &[u8],
+    registry: Arc<NativeRegistry>,
+    limits: &Limits,
+) -> Result<VerifiedExecutable<'static>, ExecutableVerificationError> {
+    verify(bytes, RegistryLink::Owned(registry), limits)
+}
+
+fn verify<'a>(
+    bytes: &[u8],
+    registry: RegistryLink<'a>,
+    limits: &Limits,
+) -> Result<VerifiedExecutable<'a>, ExecutableVerificationError> {
     let envelope = ExecutableEnvelope::decode(bytes, limits)?;
     let fingerprint = envelope.fingerprint();
     let document = CanonicalDocument::from_envelope(&envelope, limits)?;
@@ -219,9 +259,11 @@ pub fn verify_executable<'a>(
         .ok_or(crate::LinkageError::MissingRecord("policy document"))
         .map_err(crate::DocumentAnalysisError::from)?;
     let policy = PolicyDocument::from_document(policy.clone(), limits)?;
-    registry.verify_profile(&fields.profile, &policy)?;
+    registry
+        .registry()
+        .verify_profile(&fields.profile, &policy)?;
     for library in fields.libraries.values() {
-        registry.verify_library(library)?;
+        registry.registry().verify_library(library)?;
     }
     let analysis = crate::analyze_document(document, NativeSchemaOptions::default(), limits)?;
     Ok(VerifiedExecutable {

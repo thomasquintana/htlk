@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add shared-owned native executable admission through `verify_executable_owned`
+  for actor/cache lifetimes, with compiler/native configuration, library and
+  authoritative-byte interoperability checks.
 - Implement Draft 0.1 standalone, source-bundle, and canonical-document compilation
   in `htlk-compiler`, with strict three-catalog ingestion, fixed profile/library
   matching, bounded parsing/lowering, source diagnostics and deterministic output.
