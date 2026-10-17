@@ -33,8 +33,10 @@ the implemented `htlk-compiler`.
    [Registration API](runtime-registration.md) · [Artifacts](runtime-artifacts.md).
    [Run admission](runtime-runs.md). Full boundary/cancellation/dispatch enforcement
    is delivered with the execution phases below.
-4. **Pending — Pure graph execution:** deterministic binding reduction, guard-first
-   admission, checked contexts, influence labels and atomic output publication.
+4. **In progress — Pure graph execution:** deterministic binding selection and
+   guard-first input settlement implemented with an independent state oracle.
+   Checked contexts, durable decisions, actor scheduling and execution publication
+   pending. [Reducer contracts](runtime-binding.md).
 5. **Pending — Scopes and loops:** complete child settlement, conjunctive contracts,
    output precedence, explicit feedback and durable iteration checkpoints.
 6. **Pending — Policy and limits:** authorization, effective deadlines, reservations,

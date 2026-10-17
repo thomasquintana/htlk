@@ -47,6 +47,7 @@ pub fn native_profile(
         include_bytes!("run.rs"),
         include_bytes!("store_runs.rs"),
         include_bytes!("store_runs.sql"),
+        include_bytes!("binding.rs"),
         include_bytes!("mcp_protocol.rs"),
         include_bytes!("uri_template.rs"),
     ]);

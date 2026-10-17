@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add deterministic all-guard binding selection and guard-first input settlement,
+  protected absence/causes and an independent exhaustive three-candidate oracle.
 - Add authenticated idempotent run admission, protected input/absence manifests,
   root contract evidence, durable host identity/time, initial usage/deadline records
   and replayable start receipts through SQLite migration 4. Historical receipts

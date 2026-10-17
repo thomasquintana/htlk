@@ -114,3 +114,8 @@ core source coverage, with migration 4 and replayable host start receipts. Share
 immutable label storage changes no label/input encoding or semantic hashes.
 Regeneration refreshes source-derived core/regex/URI identities and the envelope
 fingerprint while leaving the empty graph, policy and schema identity unchanged.
+
+The uniform binding/admission reducer adds `binding.rs` to both core source lists.
+The profile coverage edit refreshes core/regex/URI-template identities. Selection
+is not a new graph format; the empty graph and independent runtime ID vectors
+remain unchanged.
