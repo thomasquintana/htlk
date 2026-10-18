@@ -126,6 +126,16 @@ impl Runtime {
             &requested,
         ])?;
         let scope_limits = min_limits(&[&run_limits, &root.fields().limits])?;
+        if std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(
+                run_limits
+                    .timeout_ms()
+                    .ok_or_else(|| RuntimeError::failure(FailureCode::Profile))?,
+            ))
+            .is_none()
+        {
+            return Err(RuntimeError::failure(FailureCode::Profile));
+        }
         let mut bound = Vec::new();
         let mut cached: BTreeMap<ArtifactId, (Arc<ArtifactMetadata>, Arc<Value>)> = BTreeMap::new();
         let mut values_budget = RecordAccounting::new(&self.config.limits)?;

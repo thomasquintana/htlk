@@ -182,7 +182,7 @@ fn reopened_response_recorded_checkpoint_finishes_with_no_mcp_adapter_and_matche
         for _ in 0..2000{if adapter.sent.load(Ordering::SeqCst)==1{break}actix::clock::sleep(Duration::from_millis(1)).await;}assert_eq!(adapter.sent.load(Ordering::SeqCst),1);engine.shutdown().await.unwrap();
         clock.0.store(1200,Ordering::SeqCst);let lease=store.acquire(&run.run_id,"checkpoint-owner".into(),1200,1300).await.unwrap();
         let attempt=store.records(&run.run_id,RecordFamily::Attempt,None,100).await.unwrap().pop().unwrap();
-        let mut writes=vec![update(&attempt,change(&attempt.payload,[("dispatch_state",Value::Text("response_recorded".into()))]),true),RecordWrite{key:RecordKey{family:RecordFamily::Response,id:attempt.key.id.clone()},expected_revision:None,final_record:true,payload:object([("raw",Value::Bytes(RESPONSE.to_vec())),("influence_labels",SecurityLabels::default().to_value(&Limits::default()).unwrap())])}];
+        let mut writes=vec![update(&attempt,change(&attempt.payload,[("dispatch_state",Value::Text("response_recorded".into()))]),true),RecordWrite{key:RecordKey{family:RecordFamily::Response,id:attempt.key.id.clone()},expected_revision:None,final_record:true,payload:object([("raw",Value::Bytes(RESPONSE.to_vec())),("raw_digest",Value::Text(htlk_executable::digest::hash_bytes(RESPONSE).to_string())),("delivery",Value::Text("response_received".into())),("influence_labels",SecurityLabels::default().to_value(&Limits::default()).unwrap())])}];
         for reservation in store.records(&run.run_id,RecordFamily::Reservation,None,100).await.unwrap(){
             writes.push(update(&reservation,change(&reservation.payload,[("state",Value::Text("released".into()))]),true));
         }

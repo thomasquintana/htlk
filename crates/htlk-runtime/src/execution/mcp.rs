@@ -7,7 +7,7 @@ use crate::{
     Authorization, Runtime, RuntimeError,
     failure::FailureCode,
     identity::{AttemptId, InvocationId},
-    mcp::{McpDeduplication, McpPolicy, McpRequest},
+    mcp::{McpCancellation, McpDeduplication, McpDelivery, McpOutcome, McpPolicy, McpRequest},
     store::{RecordFamily, RunLease, StoredRecord},
 };
 use htlk_executable::{
@@ -59,7 +59,22 @@ async fn operate_inner(
         .get(binding_id)
         .ok_or_else(err)?;
     let invocation: InvocationId = record.key.id.parse().map_err(|_| err())?;
-    let mut policy = runtime.policy.mcp_policy(&scope.context, binding)?;
+    let parameters = if let Some(Value::Text(id)) = map(&record.payload)?.get("attempt_id") {
+        field(
+            &runtime
+                .store
+                .record(lease.run_id(), &key(RecordFamily::Attempt, id))
+                .await?
+                .payload,
+            "params",
+        )?
+        .clone()
+    } else {
+        request(runtime, scope, binding, record).await?.1
+    };
+    let mut policy = runtime
+        .policy
+        .mcp_policy_for_request(&scope.context, binding, &parameters)?;
     let effective = ExecutionLimits::from_value(
         field(&record.payload, "effective_limits")?,
         &runtime.config.limits,
@@ -98,6 +113,9 @@ async fn operate_inner(
                     .store
                     .record(lease.run_id(), &key(RecordFamily::Response, attempt_id))
                     .await?;
+                let delivery =
+                    McpDelivery::parse(&string(&response.payload, "delivery")?).ok_or_else(err)?;
+                policy.replay_safe |= delivery == McpDelivery::NotSent;
                 let mut protected_record = record.clone();
                 protected_record.payload = replace(
                     &record.payload,
@@ -108,18 +126,37 @@ async fn operate_inner(
                                 &labels(&response.payload, &runtime.config.limits)?,
                                 &runtime.config.limits,
                             )?
+                            .union(&policy.result_labels, &runtime.config.limits)?
                             .to_value(&runtime.config.limits)?,
                     )],
                 )?;
                 let record = &protected_record;
                 if let Some(Value::Text(code)) = map(&response.payload)?.get("failure_code") {
-                    let code: FailureCode = code.parse().map_err(|_| err())?;
+                    let observed = map(&response.payload)?
+                        .get("observed_failure_code")
+                        .unwrap_or(&Value::Null)
+                        .clone();
+                    let code: FailureCode = if let Value::Text(observed) = observed {
+                        observed.parse().map_err(|_| err())?
+                    } else {
+                        code.parse().map_err(|_| err())?
+                    };
+                    let code = if delivery == McpDelivery::PossiblySent && !policy.replay_safe {
+                        FailureCode::EffectUncertain
+                    } else {
+                        code
+                    };
                     return fail_attempt(runtime, lease, node, record, &attempt, code, &policy)
                         .await;
                 }
                 let Value::Bytes(raw) = field(&response.payload, "raw")? else {
                     return Err(err());
                 };
+                if digest(&response.payload, "raw_digest")?
+                    != htlk_executable::digest::hash_bytes(raw)
+                {
+                    return Err(RuntimeError::failure(FailureCode::Digest));
+                }
                 let result = match normalize(runtime, scope, binding, raw, &attempt.payload).await {
                     Ok(result) => result,
                     Err(error) => {
@@ -161,16 +198,17 @@ async fn operate_inner(
                 return Ok(true);
             }
             "possibly_sent" => {
-                let (verified, _) = deduplication(
-                    runtime,
-                    binding,
-                    invocation,
-                    field(&attempt.payload, "params")?,
-                )?;
-                if verified != *field(&attempt.payload, "deduplication")? {
-                    return Err(RuntimeError::failure(FailureCode::Policy));
+                if runtime.mcp.is_some()
+                    && let Ok((verified, _)) = deduplication(
+                        runtime,
+                        binding,
+                        invocation,
+                        field(&attempt.payload, "params")?,
+                    )
+                    && verified == *field(&attempt.payload, "deduplication")?
+                {
+                    policy.replay_safe |= verified != Value::Null;
                 }
-                policy.replay_safe |= verified != Value::Null;
                 let code = if policy.replay_safe {
                     FailureCode::McpTransport
                 } else {
@@ -182,47 +220,14 @@ async fn operate_inner(
             _ => return Err(err()),
         }
     } else {
-        let advertised = match descriptor(
-            runtime,
-            binding,
-            effective.attempt_timeout_ms().ok_or_else(err)?,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(error) => {
-                step::finish_failure(
-                    runtime,
-                    lease,
-                    record,
-                    error.code(),
-                    labels(&record.payload, &runtime.config.limits)?,
-                )
-                .await?;
-                return Ok(true);
-            }
+        let number = match map(&record.payload)?.get("attempt_number") {
+            None | Some(Value::Null) => 1,
+            Some(Value::Integer(n)) if *n > 0 => u64::try_from(*n)
+                .map_err(|_| err())?
+                .checked_add(1)
+                .ok_or_else(err)?,
+            _ => return Err(err()),
         };
-        if advertised.digest() != binding.descriptor() {
-            step::finish_failure(
-                runtime,
-                lease,
-                record,
-                FailureCode::McpDescriptor,
-                labels(&record.payload, &runtime.config.limits)?,
-            )
-            .await?;
-            return Ok(true);
-        }
-        let number = map(&record.payload)?
-            .get("attempt_number")
-            .and_then(|v| {
-                if let Value::Integer(n) = v {
-                    Some(*n as u64 + 1)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(1);
         if number > retry.max_attempts() {
             step::finish_failure(
                 runtime,
@@ -240,17 +245,21 @@ async fn operate_inner(
         let encoded = JsonDocument::from_value(&params, &runtime.config.limits)
             .map_err(|_| RuntimeError::failure(FailureCode::Input))?;
         let (dedup, protocol_key) = deduplication(runtime, binding, invocation, &params)?;
+        let protocol_key = protocol_key.map_or(Value::Null, Value::Text);
+        if let Some(previous) = map(&record.payload)?.get("dispatch_deduplication")
+            && (previous != &dedup
+                || field(&record.payload, "dispatch_protocol_key")? != &protocol_key)
+        {
+            return Err(RuntimeError::failure(FailureCode::Policy));
+        }
         let payload = object([
             ("dispatch_state", Value::Text("prepared".into())),
             ("invocation_id", Value::Text(invocation.to_string())),
             ("number", Value::Integer(number as i64)),
             ("method", Value::Text(method)),
             ("params", params),
-            ("deduplication", dedup),
-            (
-                "protocol_key",
-                protocol_key.map_or(Value::Null, Value::Text),
-            ),
+            ("deduplication", dedup.clone()),
+            ("protocol_key", protocol_key.clone()),
             ("encoded_request", Value::Bytes(encoded.as_bytes().to_vec())),
             ("requested_uri", uri.map_or(Value::Null, Value::Text)),
             ("owner_fence", Value::Integer(lease.fence())),
@@ -268,6 +277,8 @@ async fn operate_inner(
                 ("attempt_id", Value::Text(attempt.to_string())),
                 ("attempt_number", Value::Integer(number as i64)),
                 ("reason", Value::Text("prepared".into())),
+                ("dispatch_deduplication", dedup),
+                ("dispatch_protocol_key", protocol_key),
             ],
         )?;
         step::commit(
@@ -300,43 +311,48 @@ async fn operate_inner(
         request(runtime, scope, binding, record).await?;
     if expected_method != string(&attempt.payload, "method")?
         || expected_params != *field(&attempt.payload, "params")?
+        || parameters != expected_params
         || expected_uri.map_or(Value::Null, Value::Text)
             != *field(&attempt.payload, "requested_uri")?
     {
         return Err(RuntimeError::failure(FailureCode::Digest));
     }
-    let advertised = descriptor(
-        runtime,
-        binding,
-        effective.attempt_timeout_ms().ok_or_else(err)?,
-    )
-    .await?;
-    if advertised.digest() != binding.descriptor() {
-        return Err(RuntimeError::failure(FailureCode::McpDescriptor));
+    let input_hash = digest(&record.payload, "input_hash")?;
+    let method = string(&attempt.payload, "method")?;
+    let Value::Bytes(encoded_parameters) = field(&attempt.payload, "encoded_request")? else {
+        return Err(err());
+    };
+    if JsonDocument::from_value(&parameters, &runtime.config.limits)
+        .map_err(|_| err())?
+        .as_bytes()
+        != encoded_parameters
+    {
+        return Err(RuntimeError::failure(FailureCode::Digest));
     }
-    // Discovery is asynchronous. Check the current policy and exact disposition
-    // after it, immediately before the durable dispatch fence.
-    let mut policy = runtime.policy.mcp_policy(&scope.context, binding)?;
-    let (verified, protocol_key) = deduplication(
-        runtime,
-        binding,
-        invocation,
-        field(&attempt.payload, "params")?,
-    )?;
-    if verified != *field(&attempt.payload, "deduplication")? {
-        return Err(RuntimeError::failure(FailureCode::Policy));
-    }
-    policy.replay_safe |= verified != Value::Null;
-    runtime.policy.authorize(
-        &scope.context,
-        Authorization::DispatchMcp {
-            binding,
-            invocation,
-            input_hash: digest(&record.payload, "input_hash")?,
-            labels: &influence,
-            resource_uri: uri,
-        },
-    )?;
+    let idempotency_key = map(&attempt.payload)?.get("protocol_key").and_then(|v| {
+        if let Value::Text(s) = v {
+            Some(s.as_str())
+        } else {
+            None
+        }
+    });
+    let authorize = |protection: &crate::records::SecurityLabels| {
+        runtime.policy.authorize(
+            &scope.context,
+            Authorization::DispatchMcp {
+                method: &method,
+                parameters: &parameters,
+                encoded_parameters,
+                idempotency_key,
+                binding,
+                invocation,
+                input_hash,
+                labels: protection,
+                resource_uri: uri,
+            },
+        )
+    };
+    authorize(&influence)?;
     if !super::approval::gate(runtime, lease, scope, binding, node, record, &policy).await? {
         return Ok(runtime
             .store
@@ -345,6 +361,24 @@ async fn operate_inner(
             .revision
             != record.revision);
     }
+    let adapter = runtime
+        .mcp
+        .as_ref()
+        .ok_or_else(|| RuntimeError::failure(FailureCode::McpIdentity))?;
+    let cancellation =
+        runtime
+            .mcp_control
+            .attempt(lease, invocation, attempt_id.parse().map_err(|_| err())?)?;
+    if cancellation.token.is_cancelled() {
+        return Err(crate::store::StoreError::Fenced.into());
+    }
+    let latest = runtime.store.record(lease.run_id(), &record.key).await?;
+    if latest.final_record {
+        return Err(crate::store::StoreError::Terminal.into());
+    }
+    if latest.revision != record.revision {
+        return Err(crate::store::StoreError::Conflict.into());
+    }
     let now = runtime
         .store
         .coordinator_time(runtime.clock.now_ms()?)
@@ -352,81 +386,295 @@ async fn operate_inner(
     if now >= number(&record.payload, "deadline_ms")? {
         return Err(RuntimeError::failure(FailureCode::Timeout));
     }
-    let mut usage = match reserve(runtime, lease, scope, record, &attempt_id).await {
-        Ok(writes) => writes,
-        Err(error) => {
-            step::finish_failure(runtime, lease, record, error.code(), influence).await?;
-            return Ok(true);
+    let connect_timeout = effective
+        .attempt_timeout_ms()
+        .ok_or_else(err)?
+        .min((number(&record.payload, "deadline_ms")? - now) as u64);
+    let connected = bounded(
+        &cancellation.token,
+        connect_timeout,
+        runtime.config.cancellation_grace_ms,
+        adapter.connect(binding, &scope.context, &runtime.config.limits),
+    )
+    .await;
+    if cancellation.token.is_cancelled() {
+        if let Ok(Ok(mut connection)) = connected {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(runtime.config.cancellation_grace_ms),
+                connection.close(),
+            )
+            .await;
+        }
+        return Err(crate::store::StoreError::Fenced.into());
+    }
+    let mut connection = match connected {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(error)) => {
+            return record_outcome(
+                runtime,
+                lease,
+                &attempt,
+                McpOutcome {
+                    delivery: McpDelivery::NotSent,
+                    result: Err(error),
+                },
+                &policy,
+                influence,
+                false,
+            )
+            .await;
+        }
+        Err(_) => {
+            return record_outcome(
+                runtime,
+                lease,
+                &attempt,
+                McpOutcome {
+                    delivery: McpDelivery::NotSent,
+                    result: Err(crate::failure::RuntimeFailure::new(FailureCode::McpTimeout)),
+                },
+                &policy,
+                influence,
+                false,
+            )
+            .await;
         }
     };
-    usage.push(update(
-        &attempt,
-        replace(
-            &attempt.payload,
-            [("dispatch_state", Value::Text("possibly_sent".into()))],
-        )?,
-        false,
-    ));
-    step::commit(
-        runtime,
-        lease,
-        format!("dispatch:{attempt_id}"),
-        usage,
-        None,
-    )
-    .await?;
-    let timeout = effective.attempt_timeout_ms().ok_or_else(err)?.min(
-        u64::try_from(number(&record.payload, "deadline_ms")?.saturating_sub(now))
-            .unwrap_or(1)
-            .max(1),
-    );
-    let adapter = runtime
-        .mcp
-        .as_ref()
-        .ok_or_else(|| RuntimeError::failure(FailureCode::McpIdentity))?;
-    let reply = tokio::time::timeout(
-        std::time::Duration::from_millis(timeout),
-        adapter.invoke(
+    let result = async {
+        if connection.descriptor().digest() != binding.descriptor() {
+            return record_outcome(
+                runtime,
+                lease,
+                &attempt,
+                McpOutcome {
+                    delivery: McpDelivery::NotSent,
+                    result: Err(crate::failure::RuntimeFailure::new(
+                        FailureCode::McpDescriptor,
+                    )),
+                },
+                &policy,
+                influence,
+                false,
+            )
+            .await;
+        }
+        // No connection negotiation remains after this policy/approval decision.
+        let mut policy =
+            runtime
+                .policy
+                .mcp_policy_for_request(&scope.context, binding, &parameters)?;
+        let (verified, protocol_key) = deduplication(
+            runtime,
             binding,
-            McpRequest {
+            invocation,
+            field(&attempt.payload, "params")?,
+        )?;
+        if verified != *field(&attempt.payload, "deduplication")? {
+            return Err(RuntimeError::failure(FailureCode::Policy));
+        }
+        policy.replay_safe |= verified != Value::Null;
+        authorize(&influence)?;
+        if !super::approval::gate(runtime, lease, scope, binding, node, record, &policy).await? {
+            return Ok(runtime
+                .store
+                .record(lease.run_id(), &record.key)
+                .await?
+                .revision
+                != record.revision);
+        }
+        let now = runtime
+            .store
+            .coordinator_time(runtime.clock.now_ms()?)
+            .await?;
+        if now >= number(&record.payload, "deadline_ms")? {
+            return Err(RuntimeError::failure(FailureCode::Timeout));
+        }
+        if cancellation.token.is_cancelled() {
+            return Err(crate::store::StoreError::Fenced.into());
+        }
+        let mut usage = match reserve(runtime, lease, scope, record, &attempt_id).await {
+            Ok(writes) => writes,
+            Err(error) => {
+                step::finish_failure(runtime, lease, record, error.code(), influence).await?;
+                return Ok(true);
+            }
+        };
+        usage.push(update(
+            &attempt,
+            replace(
+                &attempt.payload,
+                [
+                    ("dispatch_state", Value::Text("possibly_sent".into())),
+                    ("owner_fence", Value::Integer(lease.fence())),
+                    ("policy_version", Value::Text(policy.policy_version.clone())),
+                    ("replay_authorized", Value::Bool(policy.replay_safe)),
+                    (
+                        "result_labels",
+                        policy.result_labels.to_value(&runtime.config.limits)?,
+                    ),
+                    ("input_hash", field(&record.payload, "input_hash")?.clone()),
+                    (
+                        "influence_labels",
+                        influence.to_value(&runtime.config.limits)?,
+                    ),
+                    (
+                        "approval_wait",
+                        if policy.approval_authority.is_some() {
+                            map(&record.payload)?
+                                .get("approval_wait")
+                                .cloned()
+                                .unwrap_or(Value::Null)
+                        } else {
+                            Value::Null
+                        },
+                    ),
+                ],
+            )?,
+            false,
+        ));
+        step::commit(
+            runtime,
+            lease,
+            format!("dispatch:{attempt_id}"),
+            usage,
+            None,
+        )
+        .await?;
+        let timeout = effective.attempt_timeout_ms().ok_or_else(err)?.min(
+            u64::try_from(number(&record.payload, "deadline_ms")?.saturating_sub(now))
+                .unwrap_or(1)
+                .max(1),
+        );
+        let outcome = match bounded(
+            &cancellation.token,
+            timeout,
+            runtime.config.cancellation_grace_ms,
+            connection.invoke(McpRequest {
+                response_limits: runtime.config.limits.clone(),
+                cancellation: cancellation.token.clone(),
+                cancellation_grace_ms: runtime.config.cancellation_grace_ms,
                 method: string(&attempt.payload, "method")?,
                 params: field(&attempt.payload, "params")?.clone(),
                 timeout_ms: timeout,
-                max_response_bytes: runtime.config.limits.max_document_bytes,
+                max_response_bytes: response_limit(runtime),
                 idempotency_key: protocol_key,
+            }),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(delivery) => McpOutcome {
+                delivery,
+                result: Err(crate::failure::RuntimeFailure::new(FailureCode::McpTimeout)),
             },
-        ),
+        };
+        record_outcome(runtime, lease, &attempt, outcome, &policy, influence, true).await
+    }
+    .await;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(runtime.config.cancellation_grace_ms),
+        connection.close(),
     )
-    .await
-    .unwrap_or_else(|_| Err(crate::failure::RuntimeFailure::new(FailureCode::McpTimeout)));
-    let response = match reply {
-        Ok(raw) if raw.len() <= runtime.config.limits.max_document_bytes => {
-            object([("raw", Value::Bytes(raw))])?
+    .await;
+    result
+}
+fn response_limit(runtime: &Runtime) -> usize {
+    runtime
+        .config
+        .limits
+        .max_document_bytes
+        .min(runtime.store.config().limits.max_document_bytes)
+        / 8
+}
+async fn bounded<F: Future>(
+    signal: &McpCancellation,
+    timeout: u64,
+    grace: u64,
+    future: F,
+) -> Result<F::Output, McpDelivery> {
+    if signal.is_cancelled() {
+        return Err(McpDelivery::NotSent);
+    }
+    let Some(deadline) =
+        tokio::time::Instant::now().checked_add(std::time::Duration::from_millis(timeout))
+    else {
+        return Err(McpDelivery::NotSent);
+    };
+    tokio::pin!(future);
+    tokio::time::timeout_at(deadline,async{
+        tokio::select!{
+            biased;
+            _=signal.cancelled()=>{let until=tokio::time::Instant::now().checked_add(std::time::Duration::from_millis(grace)).unwrap_or(deadline).min(deadline);tokio::time::timeout_at(until,future.as_mut()).await.map_err(|_|McpDelivery::PossiblySent)},
+            result=future.as_mut()=>Ok(result),
         }
-        Ok(_) => object([(
-            "failure_code",
-            Value::Text(FailureCode::McpProtocol.to_string()),
-        )])?,
+    }).await.unwrap_or(Err(McpDelivery::PossiblySent))
+}
+async fn record_outcome(
+    runtime: &Runtime,
+    lease: &RunLease,
+    attempt: &StoredRecord,
+    outcome: McpOutcome,
+    policy: &McpPolicy,
+    influence: crate::records::SecurityLabels,
+    reserved: bool,
+) -> Result<bool, RuntimeError> {
+    let attempt_id = &attempt.key.id;
+    let delivery = outcome.delivery;
+    let response = match outcome.result {
+        Ok(raw)
+            if delivery == McpDelivery::ResponseReceived
+                && raw.len() <= response_limit(runtime) =>
+        {
+            object([
+                (
+                    "raw_digest",
+                    Value::Text(htlk_executable::digest::hash_bytes(&raw).to_string()),
+                ),
+                ("raw", Value::Bytes(raw)),
+            ])?
+        }
+        Ok(_) => object([
+            (
+                "failure_code",
+                Value::Text(
+                    if delivery == McpDelivery::PossiblySent && !policy.replay_safe {
+                        FailureCode::EffectUncertain
+                    } else {
+                        FailureCode::McpProtocol
+                    }
+                    .to_string(),
+                ),
+            ),
+            (
+                "observed_failure_code",
+                Value::Text(FailureCode::McpProtocol.to_string()),
+            ),
+        ])?,
         Err(error) => {
-            let code = if matches!(
-                error.code(),
-                FailureCode::McpTransport | FailureCode::McpTimeout
-            ) && !policy.replay_safe
-            {
+            let code = if delivery == McpDelivery::PossiblySent && !policy.replay_safe {
                 FailureCode::EffectUncertain
             } else {
                 error.code()
             };
-            object([("failure_code", Value::Text(code.to_string()))])?
+            object([
+                ("failure_code", Value::Text(code.to_string())),
+                (
+                    "observed_failure_code",
+                    Value::Text(error.code().to_string()),
+                ),
+            ])?
         }
     };
     let response_labels = influence.union(&policy.result_labels, &runtime.config.limits)?;
     let response = replace(
         &response,
-        [(
-            "influence_labels",
-            response_labels.to_value(&runtime.config.limits)?,
-        )],
+        [
+            (
+                "influence_labels",
+                response_labels.to_value(&runtime.config.limits)?,
+            ),
+            ("delivery", Value::Text(delivery.as_str().into())),
+        ],
     )?;
     let current = runtime.store.record(lease.run_id(), &attempt.key).await?;
     let mut writes = vec![
@@ -438,11 +686,10 @@ async fn operate_inner(
             )?,
             true,
         ),
-        insert(RecordFamily::Response, &attempt_id, response.clone(), true),
+        insert(RecordFamily::Response, attempt_id, response.clone(), true),
     ];
-    if !matches!(map(&response)?.get("failure_code"), Some(Value::Text(code)) if code == FailureCode::EffectUncertain.as_str() || code == FailureCode::McpTransport.as_str() || code == FailureCode::McpTimeout.as_str())
-    {
-        writes.extend(release(runtime, lease, &attempt_id).await?);
+    if reserved && delivery != McpDelivery::PossiblySent {
+        writes.extend(release(runtime, lease, attempt_id).await?);
     }
     match step::commit(
         runtime,
@@ -459,7 +706,7 @@ async fn operate_inner(
         )) => {
             runtime
                 .store
-                .save_late_response(lease.run_id(), &attempt_id, &response, &response_labels)
+                .save_late_response(lease.run_id(), attempt_id, &response, &response_labels)
                 .await?;
         }
         Err(error) => return Err(error),
@@ -507,22 +754,6 @@ fn deduplication(
             }
         },
     )
-}
-async fn descriptor(
-    runtime: &Runtime,
-    binding: &McpBinding,
-    timeout_ms: u64,
-) -> Result<JsonDocument, crate::failure::RuntimeFailure> {
-    let adapter = runtime
-        .mcp
-        .as_ref()
-        .ok_or_else(|| crate::failure::RuntimeFailure::new(FailureCode::McpIdentity))?;
-    tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        adapter.descriptor(binding, &runtime.config.limits),
-    )
-    .await
-    .unwrap_or_else(|_| Err(crate::failure::RuntimeFailure::new(FailureCode::McpTimeout)))
 }
 async fn request(
     runtime: &Runtime,
@@ -639,11 +870,16 @@ async fn normalize(
                 return Err(err());
             };
             let mut result = Vec::new();
+            let requested_uri = string(attempt, "requested_uri")?;
             for content in contents {
                 let uri = string(content, "uri")?;
                 runtime.policy.authorize(
                     &scope.context,
-                    Authorization::ReadResource { binding, uri: &uri },
+                    Authorization::ReadResource {
+                        binding,
+                        requested_uri: &requested_uri,
+                        uri: &uri,
+                    },
                 )?;
                 let mut fields = vec![("uri".into(), Value::Text(uri))];
                 if let Some(mime) = map(content)?.get("mimeType") {
@@ -707,9 +943,18 @@ async fn fail_attempt(
     let Operation::Mcp { retry, .. } = &node.fields().operation else {
         return Err(err());
     };
-    let number = number(&attempt.payload, "number")? as u64;
-    if code != FailureCode::EffectUncertain
-        && policy.replay_safe
+    let number = u64::try_from(number(&attempt.payload, "number")?).map_err(|_| err())?;
+    if number == 0 || number > retry.max_attempts() {
+        return Err(err());
+    }
+    if matches!(
+        code,
+        FailureCode::McpTransport
+            | FailureCode::McpTimeout
+            | FailureCode::McpProtocol
+            | FailureCode::McpToolError
+            | FailureCode::OutputSchema
+    ) && policy.replay_safe
         && number < retry.max_attempts()
         && retry.on().iter().any(|c| c == code.as_str())
     {
@@ -717,7 +962,10 @@ async fn fail_attempt(
             .store
             .coordinator_time(runtime.clock.now_ms()?)
             .await?;
-        let delay = retry.backoff_ms()[number as usize - 1];
+        let delay = *retry
+            .backoff_ms()
+            .get(number as usize - 1)
+            .ok_or_else(err)?;
         let due = now.saturating_add(i64::try_from(delay).map_err(|_| err())?);
         if due < number_value(&record.payload, "deadline_ms")? {
             let payload = replace(

@@ -387,6 +387,13 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
         if id.to_string() != attempt.key.id {
             return Err(corrupt());
         }
+        if field(&attempt.payload, "deduplication")?
+            != field(&node.payload, "dispatch_deduplication")?
+            || field(&attempt.payload, "protocol_key")?
+                != field(&node.payload, "dispatch_protocol_key")?
+        {
+            return Err(corrupt());
+        }
         let Value::Bytes(encoded) = field(&attempt.payload, "encoded_request")? else {
             return Err(corrupt());
         };
@@ -411,6 +418,27 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
                     return Err(corrupt());
                 }
                 labels(&response.payload, &runtime.config.limits)?;
+                let delivery =
+                    crate::mcp::McpDelivery::parse(&string(&response.payload, "delivery")?)
+                        .ok_or_else(corrupt)?;
+                if let Some(Value::Bytes(raw)) = map(&response.payload)?.get("raw") {
+                    if delivery != crate::mcp::McpDelivery::ResponseReceived
+                        || digest(&response.payload, "raw_digest")?
+                            != htlk_executable::digest::hash_bytes(raw)
+                        || map(&response.payload)?.get("failure_code").is_some()
+                    {
+                        return Err(corrupt());
+                    }
+                } else {
+                    string(&response.payload, "failure_code")?
+                        .parse::<FailureCode>()
+                        .map_err(|_| corrupt())?;
+                    if let Some(Value::Text(code)) =
+                        map(&response.payload)?.get("observed_failure_code")
+                    {
+                        code.parse::<FailureCode>().map_err(|_| corrupt())?;
+                    }
+                }
             }
             _ => return Err(corrupt()),
         }

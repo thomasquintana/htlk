@@ -73,6 +73,7 @@ impl ExecutionEngine {
         }
         let workers = SyncArbiter::start(config.workers, || Worker);
         let address = Supervisor {
+            stop: Arc::new(crate::mcp::McpCancellation::new()),
             runtime: runtime.clone(),
             config,
             workers,
@@ -105,6 +106,7 @@ impl Actor for Worker {
     type Context = SyncContext<Self>;
 }
 struct Work {
+    stop: Arc<crate::mcp::McpCancellation>,
     runtime: Arc<Runtime>,
     lease: RunLease,
     recovering: bool,
@@ -115,10 +117,14 @@ impl Message for Work {
 impl Handler<Work> for Worker {
     type Result = Result<step::Progress, RuntimeError>;
     fn handle(&mut self, msg: Work, _: &mut Self::Context) -> Self::Result {
+        if msg.stop.is_cancelled() {
+            return Ok(step::Progress::Blocked);
+        }
         System::new().block_on(recovery::drive(msg.runtime, msg.lease, msg.recovering))
     }
 }
 pub(crate) struct Supervisor {
+    stop: Arc<crate::mcp::McpCancellation>,
     runtime: Arc<Runtime>,
     config: ExecutionConfig,
     workers: Addr<Worker>,
@@ -192,6 +198,7 @@ impl Handler<Poll> for Supervisor {
                             continue;
                         }
                         let address = Coordinator {
+                            stop: Arc::new(crate::mcp::McpCancellation::linked(&actor.stop)),
                             runtime: actor.runtime.clone(),
                             config: actor.config.clone(),
                             run: run.clone(),
@@ -202,7 +209,7 @@ impl Handler<Poll> for Supervisor {
                             workers: actor.workers.clone(),
                             parent: ctx.address().downgrade(),
                             initial_time: now,
-                            renew_after: now + actor.config.lease_ms / 3,
+                            renew_after: now.saturating_add(actor.config.lease_ms / 3),
                             checking: false,
                             recovered: false,
                         }
@@ -221,6 +228,7 @@ impl Message for Stop {
 impl Handler<Stop> for Supervisor {
     type Result = ();
     fn handle(&mut self, _: Stop, ctx: &mut Self::Context) {
+        self.stop.cancel();
         for (_, actor) in std::mem::take(&mut self.active) {
             actor.do_send(Stop)
         }
@@ -228,6 +236,7 @@ impl Handler<Stop> for Supervisor {
     }
 }
 struct Coordinator {
+    stop: Arc<crate::mcp::McpCancellation>,
     recovered: bool,
     runtime: Arc<Runtime>,
     config: ExecutionConfig,
@@ -256,6 +265,15 @@ impl Actor for Coordinator {
                 .into_actor(self)
                 .map(|result, actor, ctx| match result {
                     Ok(lease) => {
+                        if actor
+                            .runtime
+                            .mcp_control
+                            .execution(&lease, &actor.stop)
+                            .is_err()
+                        {
+                            ctx.stop();
+                            return;
+                        }
                         actor.lease = Some(lease);
                         ctx.notify(Pulse)
                     }
@@ -265,6 +283,7 @@ impl Actor for Coordinator {
         ctx.run_interval(self.config.poll_interval, |_, ctx| ctx.notify(Pulse));
     }
     fn stopped(&mut self, _: &mut Self::Context) {
+        self.stop.cancel();
         if let Some(parent) = self.parent.upgrade() {
             parent.do_send(Finished(self.run.clone()))
         }
@@ -316,8 +335,12 @@ impl Handler<Pulse> for Coordinator {
                 .into_actor(self)
                 .map(|result, actor, ctx| {
                     actor.renewing = false;
-                    actor.renew_after = actor.runtime.clock.now_ms().unwrap_or(actor.initial_time)
-                        + actor.config.lease_ms / 3;
+                    actor.renew_after = actor
+                        .runtime
+                        .clock
+                        .now_ms()
+                        .unwrap_or(actor.initial_time)
+                        .saturating_add(actor.config.lease_ms / 3);
                     if result.is_err() {
                         ctx.stop()
                     }
@@ -331,6 +354,7 @@ impl Handler<Pulse> for Coordinator {
         ctx.spawn(
             self.workers
                 .send(Work {
+                    stop: self.stop.clone(),
                     runtime: self.runtime.clone(),
                     lease,
                     recovering: !self.recovered,
@@ -358,6 +382,7 @@ impl Handler<Pulse> for Coordinator {
 impl Handler<Stop> for Coordinator {
     type Result = ();
     fn handle(&mut self, _: Stop, ctx: &mut Self::Context) {
+        self.stop.cancel();
         ctx.stop();
     }
 }

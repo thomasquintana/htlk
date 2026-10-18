@@ -283,6 +283,17 @@ pub(super) async fn stop(
         None
     };
     if !writes.is_empty() || status.is_some() {
+        let stopped = if whole {
+            None
+        } else {
+            Some(
+                writes
+                    .iter()
+                    .filter(|w| w.key.family == RecordFamily::Invocation && w.final_record)
+                    .map(|w| w.key.id.clone())
+                    .collect::<BTreeSet<_>>(),
+            )
+        };
         step::commit(
             runtime,
             lease,
@@ -296,6 +307,7 @@ pub(super) async fn stop(
             status,
         )
         .await?;
+        runtime.mcp_control.cancel(lease.run_id(), stopped.as_ref());
     }
     Ok(())
 }

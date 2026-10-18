@@ -417,6 +417,10 @@ fn approval_generations_are_authenticated_and_old_allow_cannot_authorize_new_req
                 .is_err()
         );
         script.pause_discovery.store(true, Ordering::SeqCst);
+        runtime
+            .submit_approval(&approver, first.wait_id, digest, true, "old")
+            .await
+            .unwrap();
         for _ in 0..1000 {
             if script.waiting_discovery.load(Ordering::SeqCst) {
                 break;
@@ -424,14 +428,11 @@ fn approval_generations_are_authenticated_and_old_allow_cannot_authorize_new_req
             actix::clock::sleep(Duration::from_millis(1)).await;
         }
         assert!(script.waiting_discovery.load(Ordering::SeqCst));
-        runtime
-            .submit_approval(&approver, first.wait_id, digest, true, "old")
-            .await
-            .unwrap();
         policy.version.store(2, Ordering::SeqCst);
         script.pause_discovery.store(false, Ordering::SeqCst);
         let second = pending_approval(&runtime, &caller, &run.run_id, Some(first.wait_id)).await;
         assert_ne!(second.request_digest, first.request_digest);
+        assert!(matches!(runtime.inspect_run(&caller,&run.run_id).await.unwrap().usage,Value::Map(m) if m.get("calls_spent")==Some(&Value::Integer(0))));
         runtime
             .submit_approval(&approver, first.wait_id, digest, true, "old")
             .await

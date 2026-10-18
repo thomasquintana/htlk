@@ -10,17 +10,22 @@ pub fn native_compiler_with_timeouts(
     timeout_ms: u64,
     attempt_timeout_ms: u64,
 ) -> (Compiler, NativeRegistry) {
+    native_compiler_with_defaults(
+        ExecutionLimits::new()
+            .with_timeout_ms(timeout_ms)
+            .unwrap()
+            .with_attempt_timeout_ms(attempt_timeout_ms)
+            .unwrap()
+            .with_max_concurrency(1)
+            .unwrap(),
+    )
+}
+pub fn native_compiler_with_defaults(defaults: ExecutionLimits) -> (Compiler, NativeRegistry) {
     let limits = Limits::default();
     let policy = PolicyDocument::new(
         PolicyFields {
             cost_unit: "credits".into(),
-            defaults: ExecutionLimits::new()
-                .with_timeout_ms(timeout_ms)
-                .unwrap()
-                .with_attempt_timeout_ms(attempt_timeout_ms)
-                .unwrap()
-                .with_max_concurrency(1)
-                .unwrap(),
+            defaults,
             evaluator_limits: EvaluatorLimits {
                 max_expression_depth: 64,
                 max_value_bytes: 65536,

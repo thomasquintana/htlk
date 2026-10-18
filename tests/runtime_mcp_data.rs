@@ -57,6 +57,12 @@ struct Policy {
 }
 impl RuntimePolicy for Policy {
     fn authorize(&self, _: &HostContext, action: Authorization<'_>) -> Result<(), RuntimeFailure> {
+        if let Authorization::ReadResource { requested_uri, .. } = action {
+            assert!(matches!(
+                requested_uri,
+                "context://fixed" | "context://topics/a%20b"
+            ));
+        }
         if self.deny_extra_uri
             && matches!(
                 action,

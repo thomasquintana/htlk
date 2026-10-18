@@ -14,6 +14,7 @@ pub mod failure;
 pub mod identity;
 pub mod influence;
 pub mod mcp;
+mod mcp_control;
 mod mcp_protocol;
 mod native_profile;
 mod native_registry;

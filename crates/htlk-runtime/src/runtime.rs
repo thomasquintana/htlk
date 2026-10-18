@@ -145,6 +145,15 @@ pub enum Authorization<'a> {
     },
     /// Send the exact frozen compound MCP action under current transfer policy.
     DispatchMcp {
+        /// Exact method and frozen native protocol parameters, for operation and
+        /// argument/resource-scope checks before any connection or send.
+        method: &'a str,
+        /// Parameters are data; they cannot assert their own grants.
+        parameters: &'a Value,
+        /// Exact canonical JSON parameter encoding captured before dispatch.
+        encoded_parameters: &'a [u8],
+        /// Verified invocation-stable protocol key if configured.
+        idempotency_key: Option<&'a str>,
         /// Exact compiled selection, not an alias or tool-name hint.
         binding: &'a htlk_executable::McpBinding,
         /// Stable occurrence.
@@ -158,6 +167,8 @@ pub enum Authorization<'a> {
     },
     /// Authorize every returned resource URI before accepting its snapshot.
     ReadResource {
+        /// Exact fixed or expanded URI whose response is being accepted.
+        requested_uri: &'a str,
         /// Exact server/operation.
         binding: &'a htlk_executable::McpBinding,
         /// Actual returned URI.
@@ -276,6 +287,21 @@ pub trait RuntimePolicy: Send + Sync {
             ..Default::default()
         })
     }
+    /// Selects replay, approval and result protection for the exact frozen request.
+    /// Implementations can require approval by amount/path or enforce an actual
+    /// server-supported read/dry-run contract. Data never grants its own authority.
+    /// The default delegates to the compound-operation policy.
+    ///
+    /// # Errors
+    /// Returns a redacted current-policy failure.
+    fn mcp_policy_for_request(
+        &self,
+        context: &HostContext,
+        binding: &htlk_executable::McpBinding,
+        _parameters: &Value,
+    ) -> Result<crate::mcp::McpPolicy, RuntimeFailure> {
+        self.mcp_policy(context, binding)
+    }
 }
 /// Trusted service admission/cache ceilings. Per-run execution limits are separate.
 #[derive(Clone, Debug)]
@@ -292,6 +318,8 @@ pub struct RuntimeConfig {
     /// Minimum artifact/history audit window after terminal completion, at least
     /// the advertised host receipt lifetime. Expiry is explicit, never implicit.
     pub audit_retention_ms: u64,
+    /// Finite cooperative MCP cancellation/connection cleanup grace.
+    pub cancellation_grace_ms: u64,
 }
 impl Default for RuntimeConfig {
     fn default() -> Self {
@@ -301,6 +329,7 @@ impl Default for RuntimeConfig {
             execution_limits: htlk_executable::ExecutionLimits::new(),
             idempotency_retention_ms: 24 * 60 * 60 * 1000,
             audit_retention_ms: 24 * 60 * 60 * 1000,
+            cancellation_grace_ms: 100,
         }
     }
 }
@@ -324,6 +353,7 @@ pub struct Runtime {
     cache: Mutex<BTreeMap<Digest, Arc<VerifiedExecutable<'static>>>>,
     pub(crate) execution: Mutex<Option<actix::WeakAddr<crate::execution::Supervisor>>>,
     pub(crate) mcp: Option<Arc<dyn crate::mcp::McpAdapter>>,
+    pub(crate) mcp_control: crate::mcp_control::McpControl,
 }
 impl Runtime {
     /// Constructs a service from trusted store, immutable registry and host policy.
@@ -346,6 +376,13 @@ impl Runtime {
             || config.idempotency_retention_ms > i64::MAX as u64
             || config.audit_retention_ms < config.idempotency_retention_ms
             || config.audit_retention_ms > i64::MAX as u64
+            || config.cancellation_grace_ms == 0
+            || config.cancellation_grace_ms > i64::MAX as u64
+            || std::time::Instant::now()
+                .checked_add(std::time::Duration::from_millis(
+                    config.cancellation_grace_ms,
+                ))
+                .is_none()
         {
             return Err(RuntimeError::failure(FailureCode::Profile));
         }
@@ -358,6 +395,7 @@ impl Runtime {
             cache: Mutex::new(BTreeMap::new()),
             execution: Mutex::new(None),
             mcp: None,
+            mcp_control: Default::default(),
         })
     }
     /// Selects an explicit trusted clock before sharing the service with actors.

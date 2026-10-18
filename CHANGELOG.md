@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add live-session-before-intent MCP dispatch, exact parameter-scope policy checks,
+  observed delivery dispositions, bounded cooperative HTTP/stdio cancellation and
+  shutdown, dispatch-policy audit, full ingress limits and reverse-ping handling.
 - Add host-selected versioned input-wait reply authority, frozen requester metadata
   and current authenticated grant checks independent of source routing topics.
 - Add exact-origin startup recovery, immutable checkpoint/value/protection checks,
