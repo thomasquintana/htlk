@@ -98,3 +98,14 @@ format/Clippy/tests/doctests; warning-free workspace rustdoc; `cargo deny check`
 regenerated notices; the runnable host example; and all five workspace crates
 packaged and verified together using a fresh external target directory. Native
 fixture fingerprint: `sha256:c826cceee971af190f37d9783bdd7d708beaf2e9453e93e71525ec15df31d386`.
+
+## Completion review
+
+The implementation plan was completed through `61d5ace` and pushed to origin.
+A follow-up review on 2026-10-18 checked every task and historical follow-up against
+the final completion evidence and the conformance matrix. The five actor conformance,
+seven MCP and three recovery integration tests passed again, alongside compiler
+interoperability and the spec/independent fixture checkers. No implementation-plan
+tasks remain within the documented native boundary; the temporary local plan has
+been removed, with this roadmap, the conformance matrix and commit history retaining
+the delivery record.

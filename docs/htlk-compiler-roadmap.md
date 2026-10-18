@@ -59,3 +59,13 @@ test. Compiler results expose immutable shared analysis for checked boundaries.
 The core reads finite snapshots only. Host filesystem collection and its symlink/
 stable-read rules, authoring/repair applications, optional compilation caches, and
 runtime graph scheduling/installation remain their respective consumers' work.
+
+## Completion review
+
+The implementation plan was completed through `590972a` and pushed to origin.
+A follow-up review on 2026-10-18 confirmed that its frontend, module, composition,
+diagnostic, provenance and accounting follow-ups were covered by the final
+conformance work. All 34 compiler integration tests, the compiler doctest and the
+five facade interoperability tests passed again, alongside the spec and independent
+fixture checkers. No implementation-plan tasks remain; the temporary local plan
+has been removed, with this roadmap and commit history retaining the delivery record.
