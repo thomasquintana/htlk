@@ -9,7 +9,7 @@ Harness Toolkit (`htlk`) is a Rust workspace for compiling and running
 harnesses. The root crate is a facade over two focused libraries:
 
 - [`htlk-compiler`](https://crates.io/crates/htlk-compiler) compiles HTLK IR and source bundles into executable graphs, inspects module interfaces, and composes canonical graphs.
-- [`htlk-runtime`](https://crates.io/crates/htlk-runtime) provides foundations for native Rust graph execution with actors, LLMs, SQLite, and MCP servers.
+- [`htlk-runtime`](https://crates.io/crates/htlk-runtime) executes Draft 0.1 graphs with fenced actors, durable SQLite state, trusted host policy and live MCP servers.
 
 Both components share [`htlk-executable`](crates/htlk-executable/README.md) for
 canonical Draft 0.1 records, bounded construction, explicit wire conversions, the public
@@ -24,7 +24,13 @@ evaluation, callback dispatch and actual-value enforcement. The compiler uses th
 same analysis for source lowering and canonical-input checking. Runtime graph
 registration now stores independently admitted immutable bytes under explicit host
 trust policy, with atomic typed run admission and authenticated idempotent receipts.
-Graph scheduling, live MCP coordination and agent repair loops remain future work.
+The runtime drives pure/task/loop work, bounded stdio/HTTP MCP attempts, durable input
+waits and exact-action approvals, additive compiler-backed extension, checked recovery,
+protected inspection/source metadata and immutable retention tombstones.
+
+Run `cargo run --example runtime_workflow --locked` for a complete compile/register/
+planning-window/join/extension workflow and a separately authenticated approval using
+a scripted pinned tool. It needs no provider credentials.
 
 ## Installation
 
@@ -45,7 +51,9 @@ directly.
 - [Canonical executable model and digests](crates/htlk-executable/README.md)
 - [Deterministic CBOR profile and API](crates/htlk-executable/src/cbor/README.md)
 - [Shared semantic analysis](crates/htlk-analyzer/README.md)
-- [Runtime admission and native evaluation](crates/htlk-runtime/README.md)
+- [Runtime API, execution and supported native boundary](crates/htlk-runtime/README.md)
+- [Runtime conformance evidence](docs/runtime-conformance.md)
+- [Inspection, source metadata and host example](docs/runtime-inspection.md)
 - [Detailed cross-crate API reference](docs/executable-api.md)
 - [Executable/verifier completion checklist](docs/htlk-executable-roadmap.md)
 - [CI documentation artifacts and crates.io releases](CONTRIBUTING.md#releases)

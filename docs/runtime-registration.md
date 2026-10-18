@@ -14,7 +14,7 @@ inspection and returns immutable admitted definitions and checked plans.
 `read_artifact` additionally authorizes and verifies previously accepted value
 snapshots; see [artifact publication](runtime-artifacts.md). These methods do not
 execute nodes. [Run admission](runtime-runs.md) creates durable checked initial
-state; actual child scheduling is the next coordinator phase.
+state; [explicit actor execution](runtime-execution.md) drives child scheduling.
 
 ## Configuration and authenticated context
 

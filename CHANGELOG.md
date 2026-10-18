@@ -108,6 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Apply explicitly authorized safe MCP retries to rejected postconditions before
+  finalizing the invocation, retaining immutable per-attempt validation decisions.
 - Stop descendants atomically on calculation-path deadlines, close expired approval
   requests with their denial classification, and preserve live coordination after
   stale terminal-child results so fallback execution can continue immediately.

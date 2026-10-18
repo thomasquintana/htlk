@@ -19,38 +19,39 @@ the implemented `htlk-compiler`.
    configuration integration, typed runtime/content/artifact identities, immutable
    input manifests, trusted labels, lifecycle vocabulary and stable failure records.
    [Private record/hash contracts](runtime-records.md) document their boundaries.
-2. **In progress — Durable authority:** SQLite identity/migration, WAL/FULL settings,
+2. **Implemented — Durable authority:** SQLite identity/migration, WAL/FULL settings,
    atomic run creation and fenced coordinator acquisition/renewal implemented.
    Atomic revisioned/final record transitions, internal command receipts, bounded
-   journal/outbox delivery and capability-free reconstruction implemented. Consumer
-    host receipts and dispatch reservations implemented; complete recovery/timer
-    auditing remains. [Storage boundary](runtime-storage.md).
-3. **In progress — Registration and runs:** immutable exact-byte graph registration,
+   journal/outbox delivery, capability-free reconstruction, host receipts, persisted
+   deadlines and delivery-aware reservations. [Storage boundary](runtime-storage.md).
+3. **Implemented — Registration and runs:** immutable exact-byte graph registration,
    explicit producer/authorization policy, detached provenance, bounded admitted
    cache and independent reload implemented. Typed artifact proposals, immutable
    byte staging, atomic metadata/output crosschecks and authorized integrity-checked
    reads implemented. Authenticated/idempotent start, input admission, root contracts,
    durable identity/time, initial scope/usage/timers and atomic host receipts implemented.
    [Registration API](runtime-registration.md) · [Artifacts](runtime-artifacts.md).
-   [Run admission](runtime-runs.md). Full boundary/cancellation/dispatch enforcement
-   is delivered with the execution phases below.
-4. **In progress — Pure graph execution:** deterministic binding selection and
+   [Run admission](runtime-runs.md). Boundary/cancellation/dispatch enforcement
+   integrates with the execution phases below.
+4. **Implemented — Pure graph execution:** deterministic binding selection and
    guard-first input settlement implemented with an independent state oracle.
    Actual-read influence/boundary authorization wraps checked contexts and root
    contracts. Fenced actor execution and atomic pure publication implemented.
    [Execution](runtime-execution.md) · [Reducers](runtime-binding.md) · [Influence](runtime-influence.md).
-5. **Implemented foundation — Scopes and loops:** complete child settlement, conjunctive contracts,
+5. **Implemented — Scopes and loops:** complete child settlement, conjunctive contracts,
    output precedence, explicit feedback and durable iteration checkpoints.
-6. **In progress — Policy and limits:** lazy authorization, effective deadlines,
-   ancestor call/concurrency accounting and fenced cancellation implemented.
+6. **Implemented — Policy and limits:** lazy/current exact-parameter authorization,
+   effective deadlines, ancestor accounting, fenced/cooperative cancellation and
+   irreversible spent usage with ambiguity retention.
    Unsupported hard external token/cost enforcement is rejected before admission.
-7. **In progress — Waits and approvals:** durable input requests, authenticated replies,
+7. **Implemented — Waits and approvals:** durable input requests, authenticated replies,
     expiry, host receipts, cancellation and exact-action approval generations
-    implemented. Complete expiry/race audit remains.
+    implemented, with typed/trusted routing, disposition classification, expiry/races
+    and historical receipts.
     [Wait/control API](runtime-waits.md) · [MCP/approvals](runtime-mcp.md).
-8. **Implemented foundation — Live MCP:** bounded stdio/HTTP JSON/SSE, exact descriptor
-   drift checks, all four operations, durable intent/responses, replay-safe retry,
-   verified deduplication contracts and non-authoritative late-response retention.
+8. **Implemented — Live MCP:** bounded stdio/HTTP JSON/SSE, live session/descriptor
+   checks before intent, all four operations, delivery-aware persistence/retry,
+   verified dedup, bounded cooperative stop and non-authoritative late evidence.
 9. **Implemented — Recovery and replay:** exact-origin/checkpoint/artifact verification,
     producer-index reconstruction, higher-fence takeover, delivery-state reconciliation,
     saved loop/wait resumption, explicit fatal/invariant outcomes and capability-free
@@ -63,8 +64,10 @@ the implemented `htlk-compiler`.
      preserved join paths/synthetic markers, retention, finite execution/cancel bounds
      and a runnable compile/register/planning/approval host example.
      [Inspection/source API](runtime-inspection.md) · [Retention](runtime-retention.md).
-12. **Pending — Conformance:** runtime §17 matrix, compiled worked-example execution,
-    crash/race coverage and workspace/release validation.
+12. **Complete — Native conformance and validation:** [runtime §17 evidence matrix](runtime-conformance.md),
+    compiled worked-example execution/replay, boundary and crash/race coverage, and
+    final workspace/release checks verified. The supported native boundary is explicit
+    in the conformance document.
 
 ## Invariants
 
@@ -89,3 +92,9 @@ Each delivered slice requires focused semantic tests, updated public documentati
 and applicable formatting/lint checks. Final acceptance includes runtime §17,
 reopened SQLite/journal replay agreement, fixture/spec checkers, workspace tests,
 Clippy, rustdoc, packaging and dependency policy.
+
+Final verification (2026-10-17): spec and independent fixture checks; workspace
+format/Clippy/tests/doctests; warning-free workspace rustdoc; `cargo deny check`;
+regenerated notices; the runnable host example; and all five workspace crates
+packaged and verified together using a fresh external target directory. Native
+fixture fingerprint: `sha256:c826cceee971af190f37d9783bdd7d708beaf2e9453e93e71525ec15df31d386`.

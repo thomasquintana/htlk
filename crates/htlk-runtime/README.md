@@ -2,16 +2,9 @@
 
 Runtime components for the [Harness Toolkit](https://crates.io/crates/htlk).
 
-This crate is the foundation for the native Rust actor-based execution environment
-for Harness Toolkit executable graphs. Its selected dependencies support:
-
-- OpenAI-compatible chat, streaming, structured output, and embeddings.
-- Bundled SQLite storage for application data, caches, and metadata.
-- Embedded vector search through `sqlite-vec`.
-- Local and remote MCP servers over child-process stdio and Streamable HTTP.
-- OAuth and JWT client credentials for MCP connections.
-
-Its domain API is still being implemented. Conditions and pure calculations use
+This crate executes Draft 0.1 Harness Toolkit graphs using fenced Actix supervision,
+durable SQLite records/journal/outbox, explicit trusted host policy, and bounded
+local/remote MCP connections over stdio and Streamable HTTP JSON/SSE. Conditions and pure calculations use
 HTLK's typed expression records and a native Rust evaluator; prompt rendering uses
 the canonical prompt-template model. No scripting runtime is embedded.
 
@@ -26,8 +19,13 @@ policy-gated immutable graph registration, independent admitted reload and atomi
 typed run admission with authenticated host receipts.
 Explicit Actix execution now drives pure/task/loop graphs. Typed input waits,
 replies, cancellation and authorized inspections are integrated.
-Approval/MCP execution and live transport integrations remain in progress.
-`htlk-executable::digest` supplies typed SHA-256 digests and hashing for future
+Exact-action approvals and live MCP execution record intent before send, observed
+delivery and raw proposals before acceptance, safe retry and irreversible spent usage.
+Compiler-backed additive extension mounts existing work unchanged; recovery checks
+original implementations/checkpoints/producer links and resumes recorded responses
+without recalling MCP. Protected inspection/source metadata and retention tombstones
+remain separate from executable meaning and accepted values.
+`htlk-executable::digest` supplies typed SHA-256 digests and hashing for
 fingerprint checks and runtime identities, using consumer-defined preimages.
 Its `ExecutableEnvelope` API validates version-0.1 envelope fields, format,
 version, and fingerprint before later registration checks interpret the payload.
@@ -42,12 +40,12 @@ sets, explicit host input variants and lifecycle/source states. Manifest checkpo
 are versioned and recheck frozen hashes against authoritative port declarations.
 `failure` supplies stable redacted error values and separate protected causes.
 The repository's `docs/runtime-records.md` defines private hash/checkpoint contracts.
-Coordinator binding/scope-boundary enforcement remains in progress.
+Uniform binding and scope-boundary enforcement preserve actual-read/control labels.
 
 `SqliteStore` is trusted infrastructure rather than the logical authenticated host
 API. File stores use WAL/FULL synchronization, reject incompatible databases, and
 commit run ownership with journal/outbox evidence. See `docs/runtime-storage.md`
-for the delivered storage boundary and its remaining coordinator integrations.
+for the transactional storage boundary and versioned private event schemas.
 
 Construct `Runtime` with an explicit `RuntimePolicy` and authenticated `HostContext`
 to call `register_graph` or inspect an admitted `executable`. Registration verifies
@@ -68,7 +66,16 @@ root/input/usage/timer state with principal/method/target idempotency. False/err
 root contracts create failed runs without children. Durable ID/time allocation and
 receipt retention handle concurrency, restart and clock rollback; host clocks can
 be injected through `with_clock`. `docs/runtime-runs.md` documents the admission
-boundary. Scheduling and child execution are the next coordinator integration.
+boundary. `docs/runtime-execution.md`, `runtime-mcp.md`, `runtime-waits.md`,
+`runtime-extension.md` and `runtime-recovery.md` describe their execution consumers.
+
+The host also has `submit_reply`, `submit_approval`, `extend_run`, `cancel_run`,
+run/node/graph/source/history inspection, artifact reads and explicit protected
+retention/collection APIs. Exact grants and labels come from trusted policy, never
+ordinary JSON authority-like fields. Native external hard token/cost enforcement is
+unsupported and rejected before starting/installing affected work; compiler capability
+flags and estimates cannot manufacture a hard bound. Use default native schema options
+on both compiler and runtime. See `docs/runtime-conformance.md` for scenario evidence.
 
 ## Admission and checked execution
 

@@ -1,8 +1,8 @@
 # Runtime run admission and host receipts
 
 Authority: [runtime §§3, 9, 13–15](../specs/runtime-spec.md).
-`Runtime::start_run` creates durable checked root state. Graph scheduling and child
-execution are the next coordinator phase; registration still executes no nodes.
+`Runtime::start_run` creates durable checked root state. An explicitly launched
+execution engine schedules children; registration itself executes no nodes.
 
 ## API and authenticated context
 
@@ -15,7 +15,7 @@ The principal never comes from an input named `principal` or an approval field.
 Current `Authorization::StartRun` is checked before any receipt is returned. Host
 policy may supply additional principal ceilings through `execution_limits`.
 Omission inherits and grants no effects. Actual effect authorization is rechecked
-at dispatch when MCP coordination is implemented.
+before connection and again at actual MCP dispatch.
 
 ## Request identity and retention
 

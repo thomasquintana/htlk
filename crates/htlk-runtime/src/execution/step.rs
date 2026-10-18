@@ -1134,6 +1134,9 @@ pub(super) async fn accept_node(
     )?;
     let influence = influence.union(&post.influence, &runtime.config.limits)?;
     if let Some(error) = condition_error(&post, FailureCode::Postconditions) {
+        if matches!(node.fields().operation, Operation::Mcp { .. }) {
+            return Err(error.into());
+        }
         return finish_node(
             runtime,
             lease,

@@ -746,6 +746,71 @@ fn decision_brief_accepts_at_each_bound_and_falls_back_after_loop_limit() {
                 ))
             );
             engine.shutdown().await.unwrap();
+            let calls = script.calls.load(Ordering::SeqCst);
+            let mut after = 0;
+            let mut replay = None;
+            loop {
+                let page = store.journal(&run.run_id, after, 100).await.unwrap();
+                if page.is_empty() {
+                    break;
+                }
+                for event in page {
+                    after = event.sequence;
+                    if let Some(state) = &mut replay {
+                        htlk::runtime::store::ReplayState::apply(state, &event, &Limits::default())
+                            .unwrap();
+                    } else {
+                        replay = Some(
+                            htlk::runtime::store::ReplayState::begin(&event, &Limits::default())
+                                .unwrap(),
+                        );
+                    }
+                }
+            }
+            let replay = replay.unwrap();
+            assert_eq!(
+                replay.header(),
+                &store.run_header(&run.run_id).await.unwrap()
+            );
+            for family in [
+                htlk::runtime::store::RecordFamily::Scope,
+                htlk::runtime::store::RecordFamily::Invocation,
+                htlk::runtime::store::RecordFamily::Binding,
+                htlk::runtime::store::RecordFamily::Guard,
+            ] {
+                for record in store.records(&run.run_id, family, None, 100).await.unwrap() {
+                    assert_eq!(replay.record(&record.key), Some(&record));
+                }
+            }
+            assert_eq!(
+                script.calls.load(Ordering::SeqCst),
+                calls,
+                "reconstruction cannot dispatch MCP"
+            );
+        }
+    })
+}
+#[test]
+fn decision_brief_handles_retrieval_schema_empty_question_and_explicit_stop() {
+    actix::System::new().block_on(async {
+        for mode in ["retrieval","schema","empty","stop"]{
+            let (compiler,registry)=support::native_compiler_with_timeouts(10000,1000);let graph=compiler.compile_source(include_str!("../specs/examples/decision_brief.htlk"),&catalogs()).unwrap();let raw=if mode=="retrieval"{br#"{"content":[],"isError":true,"structuredContent":{}}"#.to_vec()}else{br#"{"content":[],"structuredContent":{}}"#.to_vec()};let adapter=Arc::new(FaultAdapter{descriptors:graph.canonical_document.fields().bindings.values().map(|b|(b.descriptor(),graph.canonical_document.fields().documents[&b.descriptor()].clone())).collect(),replies:Mutex::new(if mode=="stop"{VecDeque::from([None])}else{VecDeque::from([Some(raw.clone()),Some(raw)])}),requests:Mutex::new(vec![]),release:AtomicBool::new(false)});let runtime=Arc::new(Runtime::new(SqliteStore::in_memory(StoreConfig::default()).await.unwrap(),Arc::new(registry),Arc::new(Policy{approval:false,version:AtomicUsize::new(1)}),RuntimeConfig::default()).unwrap().with_clock(Arc::new(Clock)).with_mcp(adapter.clone()));let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{poll_interval:Duration::from_millis(1),..Default::default()}).unwrap();let question=if mode=="empty"{""}else{"Should we run a pilot?"};let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::from([("question".parse().unwrap(),InputValue::Inline(Value::Text(question.into())))]),"start",None).await.unwrap();
+            if mode=="stop"{for _ in 0..1000{if !adapter.requests.lock().unwrap().is_empty(){break}actix::clock::sleep(Duration::from_millis(2)).await;}assert_eq!(runtime.cancel_run(&caller,&run.run_id,"explicit stop","stop").await.unwrap().status,RunStatus::Cancelled);adapter.release.store(true,Ordering::SeqCst);}
+            let view=terminal(&runtime,&caller,&run.run_id).await;
+            match mode{
+                "empty"=>{assert_eq!(view.header.status,RunStatus::Failed);assert_eq!(view.failure.unwrap().code(),htlk::runtime::failure::FailureCode::Preconditions);assert!(adapter.requests.lock().unwrap().is_empty());},
+                "stop"=>{assert_eq!(view.header.status,RunStatus::Cancelled);assert!(view.outputs.is_none());assert_eq!(adapter.requests.lock().unwrap().len(),1);},
+                _=>{assert_eq!(view.header.status,RunStatus::Succeeded);assert_eq!(adapter.requests.lock().unwrap().len(),2);let Some(Value::Map(outputs))=view.outputs else{panic!()};let Some(Value::Map(entry))=outputs.get("result")else{panic!()};let Some(Value::Text(id))=entry.get("artifact_id")else{panic!()};let value=runtime.read_artifact(&caller,id.parse().unwrap()).await.unwrap().value;assert!(matches!(value,Value::Map(m)if m.get("status")==Some(&Value::Text("needs_attention".into()))));},
+            }
+            engine.shutdown().await.unwrap();
+        }
+    })
+}
+#[test]
+fn mcp_postcondition_rejection_retries_only_under_explicit_code_and_trusted_replay() {
+    actix::System::new().block_on(async {
+        for safe in [false,true]{
+            let (compiler,registry)=support::native_compiler_with_timeouts(10000,1000);let graph=compiler.compile_source(r#"ir_version="0.1" graph test.post_retry{inputs={}outputs={value=json}nodes{args=eval(json,{query="question"}) lookup=call(mcp.tool("research","lookup")){retry{max_attempts=2 on=["E_POSTCONDITIONS"] backoff_ms=[0]}postconditions=outputs.value.evidence_text=="accepted"}}edges{edge args{from=args.outputs.value to=lookup.inputs.arguments}edge value{from=lookup.outputs.value to=outputs.value}}}"#,&catalogs()).unwrap();let adapter=Arc::new(FaultAdapter{descriptors:graph.canonical_document.fields().bindings.values().map(|b|(b.descriptor(),graph.canonical_document.fields().documents[&b.descriptor()].clone())).collect(),replies:Mutex::new(VecDeque::from([Some(br#"{"content":[],"structuredContent":{"evidence_text":"rejected"}}"#.to_vec()),Some(br#"{"content":[],"structuredContent":{"evidence_text":"accepted"}}"#.to_vec())])),requests:Mutex::new(vec![]),release:AtomicBool::new(false)});let policy:Arc<dyn RuntimePolicy>=if safe{Arc::new(Policy{approval:false,version:AtomicUsize::new(1)})}else{Arc::new(UnsafePolicy)};let runtime=Arc::new(Runtime::new(SqliteStore::in_memory(StoreConfig::default()).await.unwrap(),Arc::new(registry),policy,RuntimeConfig::default()).unwrap().with_clock(Arc::new(Clock)).with_mcp(adapter.clone()));let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{poll_interval:Duration::from_millis(1),..Default::default()}).unwrap();let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::new(),"start",None).await.unwrap();let view=terminal(&runtime,&caller,&run.run_id).await;assert_eq!(view.header.status,if safe{RunStatus::Succeeded}else{RunStatus::Failed});let requests=adapter.requests.lock().unwrap().clone();assert_eq!(requests.len(),if safe{2}else{1});assert!(requests.windows(2).all(|r|r[0]==r[1]));if !safe{let node=runtime.inspect_node(&caller,&run.run_id,htlk::runtime::identity::InvocationId::new(view.header.root_scope,&"lookup".parse().unwrap(),&Limits::default()).unwrap()).await.unwrap();assert_eq!(node.failure.unwrap().code(),htlk::runtime::failure::FailureCode::Postconditions);}engine.shutdown().await.unwrap();
         }
     })
 }

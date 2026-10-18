@@ -61,6 +61,10 @@ Known no-send failures can retry unsafe operations only under authored operation
 codes/count/delay; listing deterministic identity/descriptor/input/policy failures in
 a retry set never repairs them. Intent saves policy version, replay permission, labels,
 input hash and the exact approval pointer for audit.
+An explicitly listed MCP postcondition rejection can retry only under that same
+intersection before the invocation becomes terminal. Each local retry/failure
+decision records its attempt, classification, policy snapshot and protection;
+inspection distinguishes rejected/retried/accepted proposals from RPC delivery.
 
 Independent replay safety defaults to false in `RuntimePolicy::mcp_policy`. A trusted
 adapter may instead verify an actual enforced `McpDeduplication` contract. Protocol

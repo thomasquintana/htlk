@@ -170,6 +170,8 @@ pub struct DecisionView {
 /// An attempt's observable durable facts, separate from invocation lifecycle.
 #[derive(Clone, Debug)]
 pub struct AttemptView {
+    /// Recorded local retry/failure decision, or accepted current proposal.
+    pub validation: Option<String>,
     /// Stable one-based attempt identity.
     pub attempt_id: AttemptId,
     /// One-based count within its invocation.
@@ -524,6 +526,20 @@ impl Runtime {
             .into_iter()
             .filter(|r| attempt_ids.contains(&r.key.id))
             .collect::<Vec<_>>();
+        let observations = self
+            .store
+            .inspection_records(
+                run,
+                RecordFamily::Observation,
+                &["invocation_id", "attempt_id", "failure_code", "decision"],
+            )
+            .await?
+            .into_iter()
+            .filter(|r| {
+                map(&r.payload).ok().and_then(|m| m.get("invocation_id"))
+                    == Some(&Value::Text(id.to_string()))
+            })
+            .collect::<Vec<_>>();
         let waits = wait_records(self, run)
             .await?
             .into_iter()
@@ -550,6 +566,7 @@ impl Runtime {
             .chain(bindings.iter())
             .chain(attempts.iter())
             .chain(responses.iter())
+            .chain(observations.iter())
             .chain(waits.iter())
             .chain(child.iter())
         {
@@ -604,7 +621,21 @@ impl Runtime {
             .into_iter()
             .map(|a| {
                 let response = responses.iter().find(|r| r.key.id == a.key.id);
+                let decision = observations.iter().find(|r| {
+                    map(&r.payload).ok().and_then(|m| m.get("attempt_id"))
+                        == Some(&Value::Text(a.key.id.clone()))
+                });
                 Ok(AttemptView {
+                    validation: if let Some(decision) = decision {
+                        optional_text(&decision.payload, "decision")?
+                    } else if string(&record.payload, "status")? == "succeeded"
+                        && optional_text(&record.payload, "attempt_id")?.as_deref()
+                            == Some(a.key.id.as_str())
+                    {
+                        Some("accepted".into())
+                    } else {
+                        None
+                    },
                     attempt_id: a.key.id.parse().map_err(|_| err())?,
                     number: u64::try_from(number(&a.payload, "number")?).map_err(|_| err())?,
                     dispatch_state: string(&a.payload, "dispatch_state")?,
@@ -624,7 +655,8 @@ impl Runtime {
                                 .ok_or_else(err)
                         })
                         .transpose()?,
-                    failure_code: response
+                    failure_code: decision
+                        .or(response)
                         .map(|r| optional_text(&r.payload, "failure_code"))
                         .transpose()?
                         .flatten()

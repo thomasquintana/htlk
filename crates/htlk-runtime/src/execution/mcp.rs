@@ -182,7 +182,7 @@ async fn operate_inner(
                         &runtime.config.limits,
                     )?
                     .union(&policy.result_labels, &runtime.config.limits)?;
-                step::accept_node(
+                let accepted = step::accept_node(
                     runtime,
                     lease,
                     scope,
@@ -194,8 +194,23 @@ async fn operate_inner(
                         parents: vec![],
                     },
                 )
-                .await?;
-                return Ok(true);
+                .await;
+                return match accepted {
+                    Ok(()) => Ok(true),
+                    Err(RuntimeError::Failure(failure)) => {
+                        fail_attempt(
+                            runtime,
+                            lease,
+                            node,
+                            record,
+                            &attempt,
+                            failure.code(),
+                            &policy,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
             }
             "possibly_sent" => {
                 if runtime.mcp.is_some()
@@ -947,6 +962,25 @@ async fn fail_attempt(
     if number == 0 || number > retry.max_attempts() {
         return Err(err());
     }
+    let decision = |disposition: &str| -> Result<crate::store::RecordWrite, RuntimeError> {
+        Ok(insert(
+            RecordFamily::Observation,
+            format!("{}:decision", attempt.key.id),
+            object([
+                ("invocation_id", Value::Text(record.key.id.clone())),
+                ("attempt_id", Value::Text(attempt.key.id.clone())),
+                ("failure_code", Value::Text(code.to_string())),
+                ("decision", Value::Text(disposition.into())),
+                ("policy_version", Value::Text(policy.policy_version.clone())),
+                ("replay_authorized", Value::Bool(policy.replay_safe)),
+                (
+                    "influence_labels",
+                    field(&record.payload, "influence_labels")?.clone(),
+                ),
+            ])?,
+            true,
+        ))
+    };
     if matches!(
         code,
         FailureCode::McpTransport
@@ -954,6 +988,7 @@ async fn fail_attempt(
             | FailureCode::McpProtocol
             | FailureCode::McpToolError
             | FailureCode::OutputSchema
+            | FailureCode::Postconditions
     ) && policy.replay_safe
         && number < retry.max_attempts()
         && retry.on().iter().any(|c| c == code.as_str())
@@ -980,19 +1015,21 @@ async fn fail_attempt(
                 runtime,
                 lease,
                 format!("retry:{}:{number}", record.key.id),
-                vec![update(record, payload, false)],
+                vec![update(record, payload, false), decision("retry")?],
                 None,
             )
             .await?;
             return Ok(true);
         }
     }
-    step::finish_failure(
+    step::finish_node(
         runtime,
         lease,
         record,
-        code,
+        "failed",
+        Some(crate::failure::RuntimeFailure::new(code)),
         labels(&record.payload, &runtime.config.limits)?,
+        vec![decision("failed")?],
     )
     .await?;
     Ok(true)
