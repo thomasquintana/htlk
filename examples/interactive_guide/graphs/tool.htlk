@@ -1,0 +1,17 @@
+ir_version = "0.1"
+
+graph guide.tool {
+    inputs = { query = string }
+    outputs = { result = json }
+    nodes {
+        arguments = eval(json, { query = inputs.query }) {
+            inputs = { query = string }
+        }
+        lookup = call(mcp.tool("guide", "lookup"))
+    }
+    edges {
+        edge query { from = inputs.query to = arguments.inputs.query }
+        edge arguments { from = arguments.outputs.value to = lookup.inputs.arguments }
+        edge result { from = lookup.outputs.value to = outputs.result }
+    }
+}

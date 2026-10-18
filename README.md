@@ -43,8 +43,29 @@ The facade exposes the component crates as `htlk::compiler` and
 `htlk::runtime`. Applications that only need one layer can depend on its crate
 directly.
 
+## Interactive getting started
+
+New to HTLK or Rust? Follow the [interactive user guide](docs/interactive-guide.md)
+for setup and six hands-on terminal lessons. From a checkout of this repository:
+
+```console
+cargo run --example interactive_guide --locked
+```
+
+Compile a graph, run it with your own inputs, evaluate an expression, repair type
+errors, answer a workflow's question, and approve or deny a scripted MCP tool call.
+The lessons use the real compiler/runtime and need no provider credentials or
+external services. Use `m` for the menu, `r` to retry at a lesson's end, or `q` to quit.
+
+To verify the complete walkthrough automatically:
+
+```console
+cargo run --example interactive_guide --locked -- --check
+```
+
 ## Documentation
 
+- [Interactive user guide and Rust setup](docs/interactive-guide.md)
 - [Draft 0.1 specifications and IR grammar](specs/README.md)
 - [Compiler API and source package compilation](crates/htlk-compiler/README.md)
 - [Compiler implementation and conformance roadmap](docs/htlk-compiler-roadmap.md)

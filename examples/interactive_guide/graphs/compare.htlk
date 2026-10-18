@@ -1,0 +1,16 @@
+ir_version = "0.1"
+
+graph guide.compare {
+    inputs = { left = integer, right = integer }
+    outputs = { greater = boolean }
+    nodes {
+        compare = eval(boolean, inputs.left > inputs.right) {
+            inputs = { left = integer, right = integer }
+        }
+    }
+    edges {
+        edge left { from = inputs.left to = compare.inputs.left }
+        edge right { from = inputs.right to = compare.inputs.right }
+        edge greater { from = compare.outputs.value to = outputs.greater }
+    }
+}

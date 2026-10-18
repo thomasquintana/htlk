@@ -1,0 +1,51 @@
+{
+  "tools": {
+    "catalog_version": "0.1",
+    "mcp_protocol_version": "2025-11-25",
+    "servers": {
+      "guide": {
+        "deployment_id": "local-guide",
+        "transport": "stdio",
+        "implementation_name": "htlk-interactive-guide",
+        "implementation_version": "0.1.0"
+      }
+    },
+    "schema_documents": {},
+    "tools": [
+      {
+        "server": "guide",
+        "descriptor": {
+          "name": "lookup",
+          "description": "Return a fixed tutorial result from an in-process scripted adapter.",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "query": { "type": "string", "minLength": 1 } },
+            "required": ["query"],
+            "additionalProperties": false
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": { "text": { "type": "string" } },
+            "required": ["text"],
+            "additionalProperties": false
+          }
+        }
+      }
+    ]
+  },
+  "resources": {
+    "catalog_version": "0.1",
+    "mcp_protocol_version": "2025-11-25",
+    "servers": {},
+    "schema_documents": {},
+    "resources": [],
+    "templates": []
+  },
+  "prompts": {
+    "catalog_version": "0.1",
+    "mcp_protocol_version": "2025-11-25",
+    "servers": {},
+    "schema_documents": {},
+    "prompts": []
+  }
+}

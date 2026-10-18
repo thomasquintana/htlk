@@ -85,6 +85,12 @@ htlk-runtime.workspace = true
 actix.workspace = true
 htlk-executable.workspace = true
 htlk-analyzer.workspace = true
+tokio.workspace = true
+
+[[example]]
+name = "interactive_guide"
+path = "examples/interactive_guide/main.rs"
+test = true
 
 [lints]
 workspace = true

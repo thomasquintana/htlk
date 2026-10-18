@@ -1,0 +1,16 @@
+ir_version = "0.1"
+
+graph guide.question {
+    inputs = { request = json }
+    outputs = { answer = string }
+    nodes {
+        question = wait(string) {
+            topic = "guide_question"
+            timeout_ms = 1800000
+        }
+    }
+    edges {
+        edge request { from = inputs.request to = question.inputs.request }
+        edge answer { from = question.outputs.value to = outputs.answer }
+    }
+}

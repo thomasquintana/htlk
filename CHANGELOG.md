@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add a beginner-friendly interactive terminal guide with six real compiler/runtime
+  lessons, editable graph examples, Rust setup notes, and a scripted walkthrough check.
 - Add protected detached source maps/descriptions with unchanged canonical join
   paths and synthetic wrapper markers, complete logical inspection and bounded
   audit summaries, persisted causal/selection evidence, and a runnable host example.

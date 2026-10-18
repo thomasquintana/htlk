@@ -833,6 +833,7 @@ dependencies = [
  "htlk-compiler",
  "htlk-executable",
  "htlk-runtime",
+ "tokio",
 ]
 
 [[package]]

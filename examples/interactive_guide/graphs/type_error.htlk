@@ -1,0 +1,13 @@
+ir_version = "0.1"
+
+graph guide.type_error {
+    inputs = { message = string }
+    outputs = { message = integer }
+    nodes {}
+    edges {
+        edge message {
+            from = inputs.message
+            to = outputs.message
+        }
+    }
+}
