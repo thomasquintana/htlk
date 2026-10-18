@@ -1,6 +1,65 @@
 //! Bounded recovery/scheduling scans derived from authoritative records.
 use super::*;
 impl SqliteStore {
+    pub(crate) async fn record_protection(
+        &self,
+        run: &RunId,
+    ) -> Result<crate::records::SecurityLabels, StoreError> {
+        let run = run.clone();
+        let limits = self.config.limits.clone();
+        self.connection
+            .call(move |db| -> Result<_, StoreError> {
+                let mut labels = crate::records::SecurityLabels::default();
+                let mut statement = db.prepare("SELECT payload FROM records WHERE run_id=?1")?;
+                let mut rows = statement.query([run.as_str()])?;
+                while let Some(row) = rows.next()? {
+                    let value = cbor::decode(
+                        row.get_ref(0)?.as_blob().map_err(|_| StoreError::Corrupt)?,
+                        &limits,
+                    )
+                    .map_err(|_| StoreError::Corrupt)?;
+                    if let Value::Map(fields) = value {
+                        for name in ["influence_labels", "security_labels"] {
+                            if let Some(value) = fields.get(name) {
+                                let protected =
+                                    crate::records::SecurityLabels::from_value(value, &limits)
+                                        .map_err(|_| StoreError::Corrupt)?;
+                                labels = labels
+                                    .union(&protected, &limits)
+                                    .map_err(|_| StoreError::Invalid)?;
+                            }
+                        }
+                    }
+                }
+                Ok(labels)
+            })
+            .await
+            .map_err(StoreError::from_worker)
+    }
+    pub(crate) async fn inspection_records(
+        &self,
+        run: &RunId,
+        family: RecordFamily,
+        fields: &[&'static str],
+    ) -> Result<Vec<StoredRecord>, StoreError> {
+        if fields.len() > 32 {
+            return Err(StoreError::Invalid);
+        }
+        let fields = fields.to_vec();
+        let run = run.clone();
+        let limits = self.config.limits.clone();
+        self.connection.call(move|db|->Result<_,StoreError>{
+            let mut statement=db.prepare("SELECT record_id,revision,final,payload FROM records WHERE run_id=?1 AND family=?2 ORDER BY record_id")?;let mut rows=statement.query(params![run.as_str(),family.as_str()])?;let mut result=Vec::new();let mut accounting=htlk_executable::record_accounting::RecordAccounting::new(&limits)?;
+            while let Some(row)=rows.next()?{
+                let id:String=row.get(0)?;let value=cbor::decode(row.get_ref(3)?.as_blob().map_err(|_|StoreError::Corrupt)?,&limits).map_err(|_|StoreError::Corrupt)?;
+                let Value::Map(value)=value else{return Err(StoreError::Corrupt)};
+                let payload=Value::Map(cbor::Map::try_from_entries(value.iter().filter(|(k,_)|fields.contains(k)||matches!(*k,"influence_labels"|"security_labels")).map(|(k,v)|(k.to_string(),v.clone())))?);
+                accounting.text(&id,1).and_then(|()|accounting.value(&payload,1)).map_err(|_|StoreError::Invalid)?;
+                result.push(StoredRecord{key:RecordKey{family,id},revision:row.get(1)?,final_record:row.get(2)?,payload});
+            }
+            Ok(result)
+        }).await.map_err(StoreError::from_worker)
+    }
     // Terminal outcomes are immutable; recording a host no-op receipt needs no
     // execution owner and cannot revive work. Only a single final reply is allowed.
     pub(crate) async fn terminal_receipt(

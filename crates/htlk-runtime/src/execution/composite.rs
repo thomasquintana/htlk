@@ -354,6 +354,10 @@ pub(super) async fn close_iteration(
     {
         return Ok(false);
     }
+    writes.extend(step::binding_writes(scope.id, "$next", &next, runtime)?);
+    writes.extend(step::binding_writes(
+        scope.id, "$outputs", &outputs, runtime,
+    )?);
     let base = labels(&scope.record.payload, &runtime.config.limits)?;
     let influence = SecurityLabels::combine(
         std::iter::once(&base).chain(
@@ -394,7 +398,7 @@ pub(super) async fn close_iteration(
     )
     .await?;
     if let Some(error) = next_error.or(output_error) {
-        step::scope_failure(runtime, lease, scope, error, influence).await?;
+        step::scope_failure_with(runtime, lease, scope, error, influence, writes).await?;
         return Ok(true);
     }
     for (ports, selected) in [
@@ -408,12 +412,13 @@ pub(super) async fn close_iteration(
                     crate::binding::BindingDecision::Absent { .. }
                 )
             {
-                step::scope_failure(
+                step::scope_failure_with(
                     runtime,
                     lease,
                     scope,
                     RuntimeFailure::new(FailureCode::OutputMissing),
                     influence,
+                    writes,
                 )
                 .await?;
                 return Ok(true);
@@ -448,24 +453,26 @@ pub(super) async fn close_iteration(
         Ok(result) => match result.value {
             EvaluationValue::Present(Value::Bool(v)) => v,
             _ => {
-                step::scope_failure(
+                step::scope_failure_with(
                     runtime,
                     lease,
                     scope,
                     RuntimeFailure::new(FailureCode::Invariant),
                     influence,
+                    writes,
                 )
                 .await?;
                 return Ok(true);
             }
         },
         Err(error) => {
-            step::scope_failure(
+            step::scope_failure_with(
                 runtime,
                 lease,
                 scope,
                 RuntimeFailure::new(error.code()),
                 influence,
+                writes,
             )
             .await?;
             return Ok(true);
@@ -484,11 +491,12 @@ pub(super) async fn close_iteration(
             ),
         ],
     )?;
+    writes.push(update(&scope.record, payload, true));
     step::commit(
         runtime,
         lease,
         format!("iteration-close:{}", scope.id),
-        vec![update(&scope.record, payload, true)],
+        writes,
         None,
     )
     .await?;

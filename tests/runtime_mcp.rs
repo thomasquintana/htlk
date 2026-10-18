@@ -326,7 +326,7 @@ struct Clock;
 #[test]
 fn approval_generations_are_authenticated_and_old_allow_cannot_authorize_new_request() {
     actix::System::new().block_on(async {
-        let (compiler, registry) = native_compiler();
+        let (compiler, registry) = support::native_compiler_with_timeouts(10000,1000);
         let result = compiler
             .compile_source(
                 r#"

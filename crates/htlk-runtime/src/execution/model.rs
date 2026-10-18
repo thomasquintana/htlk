@@ -141,3 +141,51 @@ pub(super) fn encode_use(site: &htlk_analyzer::ScopeUse) -> Value {
         ]),
     }
 }
+pub(super) fn encode_causes(
+    causes: &[crate::failure::FailureCause],
+) -> Result<Value, RuntimeError> {
+    Ok(Value::Array(
+        causes
+            .iter()
+            .map(|c| {
+                object([
+                    ("invocation_id", Value::Text(c.invocation.to_string())),
+                    ("code", Value::Text(c.code.to_string())),
+                    (
+                        "location",
+                        c.location
+                            .as_ref()
+                            .map_or(Value::Null, |p| Value::Text(p.to_string())),
+                    ),
+                ])
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    ))
+}
+pub(super) fn decode_causes(
+    value: Option<&Value>,
+    limits: &Limits,
+) -> Result<Vec<crate::failure::FailureCause>, RuntimeError> {
+    let Some(value) = value else {
+        return Ok(vec![]);
+    };
+    let Value::Array(causes) = value else {
+        return Err(err());
+    };
+    causes
+        .iter()
+        .map(|c| {
+            Ok(crate::failure::FailureCause {
+                invocation: string(c, "invocation_id")?.parse().map_err(|_| err())?,
+                code: string(c, "code")?.parse().map_err(|_| err())?,
+                location: match field(c, "location")? {
+                    Value::Null => None,
+                    value => Some(
+                        htlk_executable::JsonPointer::new(text(value)?, limits)
+                            .map_err(|_| err())?,
+                    ),
+                },
+            })
+        })
+        .collect()
+}

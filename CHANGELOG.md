@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add protected detached source maps/descriptions with unchanged canonical join
+  paths and synthetic wrapper markers, complete logical inspection and bounded
+  audit summaries, persisted causal/selection evidence, and a runnable host example.
 - Add live-session-before-intent MCP dispatch, exact parameter-scope policy checks,
   observed delivery dispositions, bounded cooperative HTTP/stdio cancellation and
   shutdown, dispatch-policy audit, full ingress limits and reverse-ping handling.

@@ -2,6 +2,57 @@
 use super::*;
 use crate::VerifiedExecutable;
 impl SqliteStore {
+    pub(crate) async fn attach_provenance(
+        &self,
+        fingerprint: Digest,
+        id: Digest,
+        value: &Value,
+    ) -> Result<(), StoreError> {
+        let mut accounting =
+            htlk_executable::record_accounting::RecordAccounting::new(&self.config.limits)?;
+        accounting
+            .collection(3, 0)
+            .and_then(|()| accounting.text(&fingerprint.to_string(), 1))
+            .and_then(|()| accounting.text(&id.to_string(), 1))
+            .and_then(|()| accounting.value(value, 1))
+            .map_err(|_| StoreError::Invalid)?;
+        let payload = cbor::encode(value, &self.config.limits)?;
+        if htlk_executable::digest::hash_bytes(&payload) != id {
+            return Err(StoreError::Corrupt);
+        }
+        self.connection.call(move|db|->Result<(),StoreError>{
+            let tx=db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM graphs WHERE fingerprint=?1)",[fingerprint.to_string()],|r|r.get(0))?;if !exists{return Err(StoreError::Missing)}
+            let old:Option<bool>=tx.query_row("SELECT payload=?3 FROM graph_provenance WHERE fingerprint=?1 AND provenance_digest=?2",params![fingerprint.to_string(),id.to_string(),payload],|r|r.get(0)).optional()?;
+            if old==Some(false){return Err(StoreError::Corrupt)}
+            tx.execute("INSERT OR IGNORE INTO graph_provenance(fingerprint,provenance_digest,payload) VALUES(?1,?2,?3)",params![fingerprint.to_string(),id.to_string(),payload])?;tx.commit()?;Ok(())
+        }).await.map_err(StoreError::from_worker)
+    }
+    pub(crate) async fn provenance(
+        &self,
+        fingerprint: Digest,
+        after: Option<Digest>,
+        page_size: usize,
+    ) -> Result<Vec<(Digest, Value)>, StoreError> {
+        if page_size == 0 || page_size > self.config.max_page_size {
+            return Err(StoreError::Invalid);
+        }
+        let limits = self.config.limits.clone();
+        let after = after.map(|id| id.to_string());
+        self.connection.call(move|db|->Result<_,StoreError>{
+            let tx=db.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM graphs WHERE fingerprint=?1)",[fingerprint.to_string()],|r|r.get(0))?;if !exists{return Err(StoreError::Missing)}
+            let mut statement=tx.prepare("SELECT provenance_digest,payload FROM graph_provenance WHERE fingerprint=?1 AND (?2 IS NULL OR provenance_digest>?2) ORDER BY provenance_digest LIMIT ?3")?;let mut rows=statement.query(params![fingerprint.to_string(),after,page_size as i64])?;
+            let mut result=Vec::new();let mut accounting=htlk_executable::record_accounting::RecordAccounting::new(&limits)?;
+            while let Some(row)=rows.next()?{
+                let id:String=row.get(0)?;let raw=row.get_ref(1)?.as_blob().map_err(|_|StoreError::Corrupt)?;let digest=htlk_executable::digest::hash_bytes(raw);if digest.to_string()!=id{return Err(StoreError::Corrupt)}
+                let value=cbor::decode(raw,&limits).map_err(|_|StoreError::Corrupt)?;
+                if accounting.text(&id,1).and_then(|()|accounting.value(&value,1)).is_err(){if result.is_empty(){return Err(StoreError::Invalid)}break}
+                result.push((digest,value));
+            }
+            Ok(result)
+        }).await.map_err(StoreError::from_worker)
+    }
     pub(crate) async fn store_graph(
         &self,
         admitted: &VerifiedExecutable<'_>,

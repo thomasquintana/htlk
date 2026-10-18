@@ -8,7 +8,10 @@ mod host;
 mod inspection;
 mod mcp;
 mod recovery;
-pub use inspection::{GraphView, NodeView, RunView, WaitView};
+pub use inspection::{
+    AttemptView, DecisionView, GraphView, HistoryEntry, HistoryPage, NodeView, RunView, ScopeView,
+    WaitView,
+};
 mod waits;
 pub use host::{CancelReceipt, ReplyReceipt};
 pub use waits::WaitPolicy;
@@ -163,6 +166,11 @@ impl Handler<Poll> for Supervisor {
         self.polling = true;
         let runtime = self.runtime.clone();
         let cursor = self.cursor.clone();
+        let active = self
+            .active
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
         let room = self
             .config
             .max_runs
@@ -174,11 +182,18 @@ impl Handler<Poll> for Supervisor {
                 let runs = runtime.store.running_runs(cursor.as_ref(), room).await?;
                 let mut ready = Vec::new();
                 for run in &runs {
-                    let owner = runtime.store.reserve_run_id().await?;
+                    if active.contains(run) {
+                        continue;
+                    }
                     let now = runtime
                         .store
                         .coordinator_time(runtime.clock.now_ms()?)
                         .await?;
+                    let header = runtime.store.run_header(run).await?;
+                    if header.owner.is_some() && header.expires_at_ms.is_some_and(|due| now < due) {
+                        continue;
+                    }
+                    let owner = runtime.store.reserve_run_id().await?;
                     ready.push((run.clone(), owner.to_string(), now));
                 }
                 Ok::<_, RuntimeError>((runs, ready))

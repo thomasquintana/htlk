@@ -291,7 +291,11 @@ pub(super) async fn frame(
             false,
         )?;
     }
-    frame.siblings(&scope.nodes, &scope.definition.fields().nodes)?;
+    frame.siblings(
+        &scope.nodes,
+        &scope.definition.fields().nodes,
+        digest(&scope.record.payload, "definition_digest")?,
+    )?;
     if let Some((values, ports)) = proposed {
         for (name, _) in ports.iter() {
             let value = map(values)?.get(name.as_str()).ok_or_else(err)?;
@@ -355,7 +359,7 @@ async fn guard(
             GuardEvaluation {
                 state,
                 influence: labels(&record.payload, &runtime.config.limits)?,
-                causes: vec![],
+                causes: decode_causes(map(&record.payload)?.get("causes"), &runtime.config.limits)?,
             },
             None,
         ));
@@ -374,6 +378,7 @@ async fn guard(
         GuardState::Pending => return Err(err()),
     };
     let payload = object([
+        ("causes", encode_causes(&result.causes)?),
         ("value", value),
         ("failure", error),
         (
@@ -426,10 +431,45 @@ fn source(
             (state, labels(&node.payload, limits)?)
         }
     };
+    let cause = match source {
+        EdgeSource::Output { node, .. } => {
+            let producer = scope.nodes.get(node).ok_or_else(err)?;
+            if matches!(state, SourceState::Unavailable(_)) {
+                Some(crate::failure::FailureCause {
+                    invocation: producer.key.id.parse().map_err(|_| err())?,
+                    code: if string(&producer.payload, "status")? == "failed" {
+                        failure(&producer.payload, limits)?.code()
+                    } else {
+                        FailureCode::Cancelled
+                    },
+                    location: Some(
+                        htlk_executable::JsonPointer::new(
+                            &format!(
+                                "/scopes/{}/nodes/{}",
+                                digest(&scope.record.payload, "definition_digest")?,
+                                scope
+                                    .definition
+                                    .fields()
+                                    .nodes
+                                    .iter()
+                                    .position(|n| n.id() == node)
+                                    .ok_or_else(err)?
+                            ),
+                            limits,
+                        )
+                        .map_err(|_| err())?,
+                    ),
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
     Ok(LabeledSource {
         state,
         influence,
-        cause: None,
+        cause,
     })
 }
 pub(super) async fn bindings(
@@ -593,7 +633,7 @@ async fn admit(
                 "failed",
                 Some(failures[0].failures[0].error.clone()),
                 influence,
-                binding_writes(scope.id, node.id(), &selected, runtime)?,
+                binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
             )
             .await?;
             return Ok(true);
@@ -606,7 +646,7 @@ async fn admit(
                 "skipped",
                 None,
                 influence,
-                binding_writes(scope.id, node.id(), &selected, runtime)?,
+                binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
             )
             .await?;
             return Ok(true);
@@ -632,7 +672,7 @@ async fn admit(
             "failed",
             Some(error),
             influence,
-            binding_writes(scope.id, node.id(), &selected, runtime)?,
+            binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
         )
         .await?;
         return Ok(true);
@@ -672,7 +712,7 @@ async fn admit(
             "failed",
             Some(error),
             evaluated.influence,
-            binding_writes(scope.id, node.id(), &selected, runtime)?,
+            binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
         )
         .await?;
         return Ok(true);
@@ -711,7 +751,7 @@ async fn admit(
             ),
         ],
     )?;
-    let mut writes = binding_writes(scope.id, node.id(), &selected, runtime)?;
+    let mut writes = binding_writes(scope.id, node.id().as_str(), &selected, runtime)?;
     writes.push(update(record, payload, false));
     commit(
         runtime,
@@ -825,9 +865,9 @@ pub(super) async fn validate_selected(
         None,
     ))
 }
-fn binding_writes(
+pub(super) fn binding_writes(
     scope: ScopeInstanceId,
-    node: &Identifier,
+    node: &str,
     selected: &BTreeMap<Identifier, BindingDecision>,
     runtime: &Runtime,
 ) -> Result<Vec<RecordWrite>, RuntimeError> {
@@ -842,12 +882,49 @@ fn binding_writes(
                 BindingDecision::Failed { .. } => ("failed", Value::Null),
                 BindingDecision::Pending { .. } => return Err(err()),
             };
+            let selected_edge = match binding {
+                BindingDecision::Value { edge, .. } => Some(edge),
+                BindingDecision::Absent { selected_edge, .. } => selected_edge.as_ref(),
+                _ => None,
+            };
+            let failures = if let BindingDecision::Failed { failures, .. } = binding {
+                failures
+                    .iter()
+                    .map(|f| {
+                        object([
+                            ("edge", Value::Text(f.edge.to_string())),
+                            (
+                                "error",
+                                f.error
+                                    .to_value(&runtime.config.limits)
+                                    .map_err(|_| err())?,
+                            ),
+                            (
+                                "source_error",
+                                f.source_error
+                                    .as_ref()
+                                    .map(|e| e.to_value(&runtime.config.limits).map_err(|_| err()))
+                                    .transpose()?
+                                    .unwrap_or(Value::Null),
+                            ),
+                            ("causes", encode_causes(&f.causes)?),
+                        ])
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                vec![]
+            };
             Ok(insert(
                 RecordFamily::Binding,
                 format!("{scope}:{node}:{port}"),
                 object([
                     ("state", Value::Text(state.into())),
                     ("artifact_id", artifact),
+                    (
+                        "selected_edge",
+                        selected_edge.map_or(Value::Null, |id| Value::Text(id.to_string())),
+                    ),
+                    ("failures", Value::Array(failures)),
                     (
                         "influence_labels",
                         binding.influence().to_value(&runtime.config.limits)?,
@@ -1227,6 +1304,7 @@ async fn close_scope(
     if selected.values().any(BindingDecision::is_pending) {
         return Ok(false);
     }
+    let mut boundary_writes = binding_writes(scope.id, "$outputs", &selected, runtime)?;
     let influence = SecurityLabels::combine(
         std::iter::once(&labels(&scope.record.payload, &runtime.config.limits)?)
             .chain(selected.values().map(BindingDecision::influence))
@@ -1251,7 +1329,7 @@ async fn close_scope(
     )
     .await?;
     if let Some(error) = error {
-        scope_failure(runtime, lease, scope, error, influence).await?;
+        scope_failure_with(runtime, lease, scope, error, influence, boundary_writes).await?;
         return Ok(true);
     }
     let manifest = manifest.ok_or_else(err)?;
@@ -1275,7 +1353,7 @@ async fn close_scope(
         .influence_labels()
         .union(&post.influence, &runtime.config.limits)?;
     if let Some(error) = condition_error(&post, FailureCode::Postconditions) {
-        scope_failure(runtime, lease, scope, error, influence).await?;
+        scope_failure_with(runtime, lease, scope, error, influence, boundary_writes).await?;
         return Ok(true);
     }
     let payload = replace(
@@ -1290,11 +1368,12 @@ async fn close_scope(
         ],
     )?;
     let root = runtime.store.run_header(lease.run_id()).await?.root_scope == scope.id;
+    boundary_writes.push(update(&scope.record, payload, true));
     commit(
         runtime,
         lease,
         format!("scope-succeed:{}:{}", scope.id, scope.record.revision),
-        vec![update(&scope.record, payload, true)],
+        boundary_writes,
         if root {
             Some(RunStatus::Succeeded)
         } else {
@@ -1304,12 +1383,13 @@ async fn close_scope(
     .await?;
     Ok(true)
 }
-pub(super) async fn scope_failure(
+pub(super) async fn scope_failure_with(
     runtime: &Runtime,
     lease: &RunLease,
     scope: &ScopeState,
     error: RuntimeFailure,
     influence: SecurityLabels,
+    mut writes: Vec<RecordWrite>,
 ) -> Result<(), RuntimeError> {
     let payload = replace(
         &scope.record.payload,
@@ -1326,11 +1406,12 @@ pub(super) async fn scope_failure(
         ],
     )?;
     let root = runtime.store.run_header(lease.run_id()).await?.root_scope == scope.id;
+    writes.push(update(&scope.record, payload, true));
     commit(
         runtime,
         lease,
         format!("scope-fail:{}:{}", scope.id, scope.record.revision),
-        vec![update(&scope.record, payload, true)],
+        writes,
         if root { Some(RunStatus::Failed) } else { None },
     )
     .await

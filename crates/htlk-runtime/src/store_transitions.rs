@@ -12,7 +12,7 @@ macro_rules! families {
         impl RecordFamily {
             /// Stable private database family spelling.
             pub const fn as_str(self) -> &'static str { match self { $(Self::$name => $wire),+ } }
-            pub(super) fn parse(value: &str) -> Result<Self, StoreError> {
+            pub(crate) fn parse(value: &str) -> Result<Self, StoreError> {
                 match value { $($wire => Ok(Self::$name)),+, _ => Err(StoreError::Corrupt) }
             }
         }

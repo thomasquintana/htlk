@@ -88,6 +88,7 @@ fn http_peer(result: String, sse: bool) -> (String, std::thread::JoinHandle<()>,
                     Err(e) => panic!("peer accept: {e}"),
                 }
             };
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();

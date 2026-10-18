@@ -98,13 +98,33 @@ impl Frame {
         &mut self,
         nodes: &BTreeMap<Identifier, StoredRecord>,
         definitions: &[htlk_executable::Node],
+        scope_definition: htlk_executable::digest::Digest,
     ) -> Result<(), crate::RuntimeError> {
-        for definition in definitions {
+        for (index, definition) in definitions.iter().enumerate() {
             let Some(record) = nodes.get(definition.id()) else {
                 continue;
             };
             let status = string(&record.payload, "status")?;
             let influence = labels(&record.payload, &self.runtime.config.limits)?;
+            let cause = if matches!(status.as_str(), "failed" | "cancelled") {
+                Some(crate::failure::FailureCause {
+                    invocation: record.key.id.parse().map_err(|_| err())?,
+                    code: if status == "failed" {
+                        failure(&record.payload, &self.runtime.config.limits)?.code()
+                    } else {
+                        FailureCode::Cancelled
+                    },
+                    location: Some(
+                        htlk_executable::JsonPointer::new(
+                            &format!("/scopes/{scope_definition}/nodes/{index}"),
+                            &self.runtime.config.limits,
+                        )
+                        .map_err(|_| err())?,
+                    ),
+                })
+            } else {
+                None
+            };
             let outcome = match status.as_str() {
                 "succeeded" => EvaluationOutcome::Succeeded,
                 "skipped" => EvaluationOutcome::Skipped,
@@ -123,7 +143,7 @@ impl Frame {
                 definition.id().clone(),
                 ReferenceInfluence {
                     labels: influence.clone(),
-                    cause: None,
+                    cause: cause.clone(),
                 },
             );
             for (port, _) in definition.fields().outputs.iter() {
@@ -146,6 +166,14 @@ impl Frame {
                     slot,
                     influence.clone(),
                 );
+                if let Some(reference) =
+                    self.influence.references.get_mut(&ValueReference::Output {
+                        node: definition.id().clone(),
+                        port: port.clone(),
+                    })
+                {
+                    reference.cause = cause.clone();
+                }
             }
         }
         Ok(())

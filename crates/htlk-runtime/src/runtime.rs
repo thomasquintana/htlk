@@ -64,6 +64,24 @@ impl fmt::Debug for Attestation {
 /// An action requested of current deployment authorization.
 #[non_exhaustive]
 pub enum Authorization<'a> {
+    /// Publish detached source diagnostics; cannot change executable semantics.
+    AttachSource {
+        /// Registered graph being annotated.
+        fingerprint: Digest,
+        /// Bounded source report.
+        source: &'a crate::source::SourceSidecar,
+        /// Trusted frozen metadata protection.
+        labels: &'a SecurityLabels,
+    },
+    /// Inspect one protected detached report under current grants.
+    ReadSource {
+        /// Registered executable identity.
+        fingerprint: Digest,
+        /// Immutable attachment identity.
+        provenance: Digest,
+        /// Frozen source metadata protection.
+        labels: &'a SecurityLabels,
+    },
     /// Expire an accepted artifact after all retention protections settle.
     ExpireArtifact {
         /// Immutable value/provenance and trusted protection.
@@ -194,6 +212,18 @@ pub enum Authorization<'a> {
 /// ordinary graph data cannot implement or replace this policy. Registration trust
 /// never permits invalid bytes to bypass complete independent verification.
 pub trait RuntimePolicy: Send + Sync {
+    /// Trusted source/description classification, never supplied as graph authority.
+    ///
+    /// # Errors
+    /// Returns a redacted classification failure before attaching metadata.
+    fn source_labels(
+        &self,
+        _context: &HostContext,
+        _fingerprint: Digest,
+        _source: &crate::source::SourceSidecar,
+    ) -> Result<SecurityLabels, RuntimeFailure> {
+        Ok(SecurityLabels::default())
+    }
     /// Selects trusted reply authority for an admitted request. A topic or an
     /// approval-like data field cannot select its own grants.
     ///
