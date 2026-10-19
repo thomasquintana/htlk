@@ -415,7 +415,9 @@ fn analyze_expression(
             OperationConstraint::Compare(path, op, left, right) => {
                 let left = checker.substitute(&left, 0)?;
                 let right = checker.substitute(&right, 0)?;
-                match comparison(op, &left, &right) {
+                let left = checker.refined_families(&left)?;
+                let right = checker.refined_families(&right)?;
+                match comparison(op, left, right) {
                     Match::Never => {
                         checker.mark_error(&path);
                         return Err(ExpressionTypeError::OperandType);
@@ -1832,6 +1834,14 @@ impl Checker<'_> {
         Ok(port)
     }
     fn refined_families(&mut self, ty: &T) -> Result<u16, ExpressionTypeError> {
+        self.step(0)?;
+        if let K::Union(members) = ty.kind() {
+            let mut result = 0;
+            for member in members {
+                result |= self.refined_families(member)?;
+            }
+            return Ok(result);
+        }
         if let K::Schema(id) = ty.kind()
             && self.schemas.is_some()
         {
@@ -2054,9 +2064,7 @@ fn families(ty: &T) -> u16 {
         K::Function { .. } => 256,
     }
 }
-fn comparison(op: B, a: &T, b: &T) -> Match {
-    let a = families(a);
-    let b = families(b);
+fn comparison(op: B, a: u16, b: u16) -> Match {
     let equality = matches!(op, B::Eq | B::Ne);
     if equality && (a == NULL && b & NULL != 0 || b == NULL && a & NULL != 0) {
         return Match::Yes;

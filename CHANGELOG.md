@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Close the Draft 0.1 alignment review's compiler catalog, contextual-name, grammar,
+  typed-bundle, schema-comparison and nested union-projection gaps.
+- Make approval denial atomic and final; enforce wait deadlines at commit; retain
+  contract sites and secondary validation causes; report scheduler quiescence and
+  loop iteration zero accurately.
+- Preserve MCP evaluator-limit classifications, reject task-required native calls,
+  renew expired HTTP sessions without implicit operation replay, and persist replies
+  independently of extension-sensitive accounting revisions.
+- Bound accumulated compiler diagnostics and pin/include additional semantic backend
+  identities. Clarify native record assignability, schema discovery, explicit
+  extension-input inheritance and module interface digest guarantees.
+
 ### Added
 
 - Add a beginner-friendly interactive terminal guide with six real compiler/runtime

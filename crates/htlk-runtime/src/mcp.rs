@@ -320,23 +320,12 @@ impl NativeMcpAdapter {
             .get(binding.server().deployment_id())
             .ok_or_else(|| fail(FailureCode::McpIdentity))?;
         let mut session = Session::new(endpoint, binding.server(), limits.clone()).await?;
-        let result = async {
-            let capabilities = session.initialize(binding.server()).await?;
-            let capability = match binding.kind() {
-                McpBindingKind::Tool { .. } => "tools",
-                McpBindingKind::Prompt { .. } => "prompts",
-                _ => "resources",
-            };
-            if !matches!(as_map(&capabilities)?.get(capability), Some(Value::Map(_))) {
-                return Err(fail(FailureCode::McpDescriptor));
-            }
-            session.descriptor(binding).await
-        }
-        .await;
+        let result = session.prepare(binding).await;
         match result {
             Ok(descriptor) => Ok(NativeConnection {
                 session,
                 descriptor,
+                binding: binding.clone(),
             }),
             // Preserve the primary identity/protocol failure. Transport drop
             // closes/kills the failed session; cleanup cannot turn it into timeout.
@@ -445,6 +434,7 @@ impl McpAdapter for NativeMcpAdapter {
 struct NativeConnection {
     session: Session,
     descriptor: JsonDocument,
+    binding: McpBinding,
 }
 impl McpConnection for NativeConnection {
     fn descriptor(&self) -> &JsonDocument {
@@ -515,15 +505,26 @@ impl McpConnection for NativeConnection {
                 }
             }).await.unwrap_or_else(|_|Err(fail(FailureCode::McpTimeout)))
             };
+            let delivery = self.session.delivery;
+            if self.session.expired {
+                self.session.reset_expired();
+                // Renew protocol state, never replay the operation here. The
+                // coordinator retains the original delivery evidence and alone
+                // decides whether another authored attempt is authorized.
+                let renewal =
+                    tokio::time::timeout_at(deadline, self.session.prepare(&self.binding)).await;
+                if let Ok(Ok(descriptor)) = renewal
+                    && descriptor.digest() == self.binding.descriptor()
+                {
+                    self.descriptor = descriptor;
+                }
+            }
             let result = result.and_then(|value| {
                 JsonDocument::from_value(&value, &self.session.limits)
                     .map(|d| d.as_bytes().to_vec())
                     .map_err(|_| fail(FailureCode::McpProtocol))
             });
-            McpOutcome {
-                delivery: self.session.delivery,
-                result,
-            }
+            McpOutcome { delivery, result }
         })
     }
     fn close(&mut self) -> McpFuture<'_, ()> {
@@ -608,8 +609,55 @@ struct Session {
     next: i64,
     limits: Limits,
     delivery: McpDelivery,
+    expired: bool,
 }
 impl Session {
+    fn reset_expired(&mut self) {
+        if let Transport::Http { session, .. } = &mut self.transport {
+            *session = None;
+        }
+        self.expired = false;
+    }
+    async fn prepare(&mut self, binding: &McpBinding) -> Result<JsonDocument, RuntimeFailure> {
+        for renewal in 0..2 {
+            let result = async {
+                let capabilities = self.initialize(binding.server()).await?;
+                let capability = match binding.kind() {
+                    McpBindingKind::Tool { .. } => "tools",
+                    McpBindingKind::Prompt { .. } => "prompts",
+                    _ => "resources",
+                };
+                if !matches!(as_map(&capabilities)?.get(capability), Some(Value::Map(_))) {
+                    return Err(fail(FailureCode::McpDescriptor));
+                }
+                let descriptor = self.descriptor(binding).await?;
+                let task_calls = as_map(&capabilities)?
+                    .get("tasks")
+                    .and_then(|v| as_map(v).ok()?.get("requests"))
+                    .and_then(|v| as_map(v).ok()?.get("tools"))
+                    .and_then(|v| as_map(v).ok()?.get("call"))
+                    .is_some();
+                let task_required = as_map(descriptor.value())?
+                    .get("execution")
+                    .and_then(|v| as_map(v).ok()?.get("taskSupport"))
+                    == Some(&Value::Text("required".into()));
+                if matches!(binding.kind(), McpBindingKind::Tool { .. })
+                    && task_calls
+                    && task_required
+                {
+                    return Err(fail(FailureCode::McpDescriptor));
+                }
+                Ok(descriptor)
+            }
+            .await;
+            if self.expired && renewal == 0 {
+                self.reset_expired();
+            } else {
+                return result;
+            }
+        }
+        Err(fail(FailureCode::McpTransport))
+    }
     fn cancellation_notifier(&self, id: i64) -> Result<CancellationNotifier, RuntimeFailure> {
         let message = obj([
             ("jsonrpc", Value::Text("2.0".into())),
@@ -733,6 +781,7 @@ impl Session {
             next: 0,
             limits,
             delivery: McpDelivery::NotSent,
+            expired: false,
         })
     }
     async fn initialize(&mut self, server: &ServerIdentity) -> Result<Value, RuntimeFailure> {
@@ -958,6 +1007,9 @@ impl Session {
                     .await
                     .map_err(|_| fail(FailureCode::McpTransport))?;
                 if !response.status().is_success() {
+                    if response.status() == reqwest::StatusCode::NOT_FOUND && session.is_some() {
+                        self.expired = true;
+                    }
                     return Err(fail(FailureCode::McpTransport));
                 }
                 if let Some(value) = response.headers().get("mcp-session-id") {

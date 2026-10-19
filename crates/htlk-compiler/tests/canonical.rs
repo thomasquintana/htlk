@@ -315,6 +315,124 @@ fn imports_enforce_visibility_and_defining_module_resolution() {
     );
 }
 
+#[test]
+fn module_negative_cases_and_fresh_interfaces_preserve_verification() {
+    let (compiler, _) = compiler();
+    let main = r#"ir_version="0.1" import lib from "self/library" graph test.module{inputs={}outputs={value=integer}nodes{work=use(lib.public_task)}edges{edge value{from=work.outputs.value to=outputs.value}}}"#;
+    let library = r#"ir_version="0.1" prompt hidden="secret" export prompt not_task="text" export task public_task{inputs={}outputs={value=integer}nodes{value=eval(integer,1)}edges{edge value{from=value.outputs.value to=outputs.value}}}"#;
+    for changed in [
+        main.replace("lib.public_task", "lib.hidden"),
+        main.replace("lib.public_task", "lib.not_task"),
+        main.replace(
+            "graph test.module",
+            "prompt lib.local=\"collision\" graph test.module",
+        ),
+        main.replace("self/library", "self/library.htlk"),
+        main.replace("self/library", "self/missing"),
+        main.replace("use(lib.public_task)", "use(lib.public_task.value)"),
+    ] {
+        let bundle = bundle_with_sources(&[("main", &changed), ("library", library)]);
+        let error = compiler.compile_bundle(&bundle, &catalogs()).unwrap_err();
+        if changed.contains("use(lib.not_task)") {
+            assert_eq!(error.diagnostics[0].code, "C_NAME");
+            assert!(!error.diagnostics[0].related_locations.is_empty());
+        }
+    }
+    let graph_module = bundle_with_sources(&[
+        ("main", main),
+        (
+            "library",
+            r#"ir_version="0.1" export task public_task{inputs={}outputs={}nodes{}edges{}} graph imported{inputs={}outputs={}nodes{}edges{}}"#,
+        ),
+    ]);
+    assert!(compiler.compile_bundle(&graph_module, &catalogs()).is_err());
+    let original = bundle_with_sources(&[("main", main), ("library", library)]);
+    let bytes = compiler
+        .compile_bundle(&original, &catalogs())
+        .unwrap()
+        .executable_bytes;
+    let edited = bundle_with_sources(&[
+        ("main", main),
+        (
+            "library",
+            &library.replace("eval(integer,1)", "eval(integer,2)"),
+        ),
+    ]);
+    assert_ne!(
+        bytes,
+        compiler
+            .compile_bundle(&edited, &catalogs())
+            .unwrap()
+            .executable_bytes
+    );
+    let mut relocated = original.clone();
+    let package = relocated.packages.values_mut().next().unwrap();
+    let mut text = package.sources.remove("src/library.htlk").unwrap();
+    text.push_str("\n-- moved without semantic changes\n");
+    package.sources.insert("other/library.htlk".into(), text);
+    package
+        .manifest
+        .modules
+        .insert("library".into(), "other/library.htlk".into());
+    let pin = package.digest(&Limits::default()).unwrap();
+    let package = relocated.packages.into_values().next().unwrap();
+    relocated.packages = BTreeMap::from([(pin, package)]);
+    relocated.entry.package_digest = pin;
+    assert_ne!(original.entry.package_digest, pin);
+    assert_eq!(
+        bytes,
+        compiler
+            .compile_bundle(&relocated, &catalogs())
+            .unwrap()
+            .executable_bytes
+    );
+    let typed = r#"ir_version="0.1" export task public_task{inputs={value=integer}outputs={value=integer}nodes{}edges{edge value{from=inputs.value to=outputs.value}}}"#;
+    let caller = r#"ir_version="0.1" import lib from "self/library" graph test.caller{inputs={value=string}outputs={value=integer}nodes{work=use(lib.public_task)}edges{edge input{from=inputs.value to=work.inputs.value}edge value{from=work.outputs.value to=outputs.value}}}"#;
+    let bundle = bundle_with_sources(&[("main", caller), ("library", typed)]);
+    compiler
+        .inspect_module(
+            &bundle,
+            &ModuleRef {
+                package_digest: bundle.entry.package_digest,
+                module_path: "library".into(),
+            },
+            &["public_task".into()],
+            &catalogs(),
+        )
+        .unwrap();
+    assert_eq!(
+        compiler
+            .compile_bundle(&bundle, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_TYPE"
+    );
+    let mut missing = original;
+    missing
+        .packages
+        .values_mut()
+        .next()
+        .unwrap()
+        .sources
+        .remove("src/library.htlk");
+    assert_eq!(
+        compiler
+            .compile_bundle(&missing, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SOURCE_BUNDLE"
+    );
+    assert!(
+        SourceBundle::from_json(
+            br#"{"format":"htlk_source_bundle","format":"htlk_source_bundle"}"#,
+            &Limits::default()
+        )
+        .is_err()
+    );
+}
+
 fn chain_join() -> JoinSpec {
     JoinSpec {
         id: "test.joined".into(),
@@ -813,12 +931,139 @@ fn linked_generic_callbacks_use_exact_complete_manifests() {
             .len(),
         3
     );
+    for alias in ["not", "true", "false", "null"] {
+        let contextual = source.replace("ops", alias);
+        assert_eq!(
+            compiler
+                .compile_source(&contextual, &catalogs())
+                .unwrap()
+                .executable_bytes,
+            output.executable_bytes,
+            "{alias}"
+        );
+    }
     assert_eq!(
         base.compile_document(output.canonical_document, &catalogs())
             .unwrap_err()
             .diagnostics[0]
             .code,
         "C_LIBRARY"
+    );
+}
+
+#[test]
+fn contextual_node_names_resolve_as_references_in_conditions() {
+    let (compiler, _) = compiler();
+    for name in ["true", "false", "null", "not"] {
+        let source = format!(
+            r#"ir_version="0.1" graph test.contextual {{ inputs={{}} outputs={{value=integer}}
+            nodes{{{name}=eval(integer,1)}} edges{{edge result{{from={name}.outputs.value to=outputs.value when={name}.outputs.value==1}}}} }}"#
+        );
+        compiler.compile_source(&source, &catalogs()).unwrap();
+    }
+}
+
+#[test]
+fn canonical_schema_revalidation_distinguishes_retrieval_context_from_bytes() {
+    let (compiler, _) = compiler();
+    let tools = r#"[{"server":"service","descriptor":{"name":"tool","inputSchema":{"type":"object","allOf":[{"$ref":"https://example.test/common"}]},"outputSchema":{"type":"object"}}}]"#;
+    let make = |schemas| operation_catalogs(tools, "[]", "[]", "[]", schemas);
+    let original = make(r#"{"https://example.test/common":{"type":"object"}}"#);
+    let source = r#"ir_version="0.1" graph test.schemas{inputs={} outputs={value=json} nodes{args=eval(json,{}) work=call(mcp.tool("service","tool"))} edges{edge args{from=args.outputs.value to=work.inputs.arguments} edge result{from=work.outputs.value to=outputs.value}}}"#;
+    let document = compiler
+        .compile_source(source, &original)
+        .unwrap()
+        .canonical_document;
+    compiler
+        .compile_document(document.clone(), &original)
+        .unwrap();
+    let comparison = source.replace("outputs={value=json}", "outputs={value=integer}")
+        .replace("work=call(mcp.tool(\"service\",\"tool\"))", "work=call(mcp.tool(\"service\",\"tool\")) done=eval(integer,1){when=work.outputs.value==1}")
+        .replace("from=work.outputs.value to=outputs.value", "from=done.outputs.value to=outputs.value");
+    assert_eq!(
+        compiler
+            .compile_source(&comparison, &original)
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_TYPE"
+    );
+    for schemas in [
+        "{}",
+        r#"{"https://example.test/common":{"type":"object","required":["new_field"]}}"#,
+    ] {
+        let changed = make(schemas);
+        assert_eq!(
+            compiler
+                .compile_document(document.clone(), &changed)
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_SCHEMA"
+        );
+        assert_eq!(
+            compiler
+                .join_graphs(&document, &document, &chain_join(), &changed)
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_SCHEMA"
+        );
+    }
+}
+
+#[test]
+fn public_ports_and_retry_members_follow_their_closed_grammar() {
+    let (compiler, _) = compiler();
+    let catalogs = operation_catalogs(
+        r#"[{"server":"service","descriptor":{"name":"tool","inputSchema":{"type":"object"},"outputSchema":{"type":"object"}}}]"#,
+        "[]",
+        "[]",
+        "[]",
+        "{}",
+    );
+    let source = r#"ir_version="0.1" graph test.syntax{inputs={} outputs={value=json} nodes{args=eval(json,{}) work=call(mcp.tool("service","tool")){retry{max_attempts=2 on=["MCP_TIMEOUT"] backoff_ms=[0]}}} edges{edge args{from=args.outputs.value to=work.inputs.arguments} edge result{from=work.outputs.value to=outputs.value}}}"#;
+    compiler.compile_source(source, &catalogs).unwrap();
+    for invalid in [
+        source.replace("outputs={value=json}", "outputs={\"value\"=json}"),
+        source.replace("max_attempts=2", "max_attempts=(2)"),
+        source.replace("[0]", "[(0)]"),
+        source.replace("[\"MCP_TIMEOUT\"]", "[\"\"\"MCP_TIMEOUT\"\"\"]"),
+    ] {
+        assert_eq!(
+            compiler
+                .compile_source(&invalid, &catalogs)
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_SYNTAX"
+        );
+    }
+}
+
+#[test]
+fn typed_bundle_rejects_extra_sources_before_snapshot_processing() {
+    let (base, _) = compiler();
+    let mut config = base.config().clone();
+    config.frontend.max_modules = 1;
+    let compiler = Compiler::new(config).unwrap();
+    let mut bundle = bundle_with_sources(&[(
+        "main",
+        r#"ir_version="0.1" graph test.empty{inputs={} outputs={} nodes{} edges{}}"#,
+    )]);
+    let package = bundle.packages.values_mut().next().unwrap();
+    for index in 0..1000 {
+        package
+            .sources
+            .insert(format!("extra/{index}.htlk"), "invalid header".into());
+    }
+    assert_eq!(
+        compiler
+            .compile_bundle(&bundle, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SOURCE_BUNDLE"
     );
 }
 

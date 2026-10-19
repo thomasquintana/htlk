@@ -30,6 +30,12 @@ pub(super) async fn drive(
         step::tick(runtime.clone(), lease.clone()).await
     };
     match result {
+        Err(RuntimeError::Storage(StoreError::Deadline(FailureCode::Timeout))) => {
+            // A deadline can cross between a worker's last check and SQLite
+            // acceptance. Stop the due scope/node, preserving legal fallbacks.
+            control::enforce(runtime, lease).await?;
+            Ok(Progress::Changed)
+        }
         Err(
             error @ RuntimeError::Storage(
                 StoreError::Fenced

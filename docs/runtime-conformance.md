@@ -44,6 +44,12 @@ exercise the same durable engine paths used by this example.
 
 ## Other normative boundaries
 
+The [2026-10-19 alignment review](spec-alignment.md) adds regressions for atomic
+denial, commit-time expiry, nested union projection, schema-aware comparison,
+canonical catalog revalidation, protected diagnostics and scheduler observations.
+It also covers task-required rejection, session-bearing HTTP 404 renewal, output
+fuel classification and simultaneous response/extension accounting.
+
 - **Admission/identities:** exact policy/library/native implementation, source/bundle
   interoperability, owned thread-safe handles, complete bounded hash preimages,
   independent runtime identity vectors and native envelope/source hashing.

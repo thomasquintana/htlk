@@ -1,5 +1,9 @@
 # Compiler implementation roadmap
 
+The [2026-10-19 alignment review](spec-alignment.md) supplements the historical
+completion record with corrected catalog revalidation, contextual names, closed
+grammar, typed-input bounds, incremental diagnostic accounting and module tests.
+
 The compiler is a source frontend and orchestration layer over
 `htlk-executable` and `htlk-analyzer`. The normative contracts are the
 [compiler specification](../specs/compiler-spec.md),

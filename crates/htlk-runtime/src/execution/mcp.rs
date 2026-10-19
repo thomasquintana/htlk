@@ -115,6 +115,24 @@ async fn operate_inner(
                     .await?;
                 let delivery =
                     McpDelivery::parse(&string(&response.payload, "delivery")?).ok_or_else(err)?;
+                // Persist the response independently of reservation revisions.
+                // An extension can adopt accounting ancestors while a reply is
+                // arriving. A local CAS retry must never discard that reply or
+                // turn it back into a possibly-sent external request.
+                if delivery != McpDelivery::PossiblySent {
+                    let writes = release(runtime, lease, attempt_id).await?;
+                    if !writes.is_empty() {
+                        step::commit(
+                            runtime,
+                            lease,
+                            format!("release:{attempt_id}"),
+                            writes,
+                            None,
+                        )
+                        .await?;
+                        return Ok(true);
+                    }
+                }
                 policy.replay_safe |= delivery == McpDelivery::NotSent;
                 let mut protected_record = record.clone();
                 protected_record.payload = replace(
@@ -435,7 +453,6 @@ async fn operate_inner(
                 },
                 &policy,
                 influence,
-                false,
             )
             .await;
         }
@@ -450,7 +467,6 @@ async fn operate_inner(
                 },
                 &policy,
                 influence,
-                false,
             )
             .await;
         }
@@ -469,7 +485,6 @@ async fn operate_inner(
                 },
                 &policy,
                 influence,
-                false,
             )
             .await;
         }
@@ -583,7 +598,7 @@ async fn operate_inner(
                 result: Err(crate::failure::RuntimeFailure::new(FailureCode::McpTimeout)),
             },
         };
-        record_outcome(runtime, lease, &attempt, outcome, &policy, influence, true).await
+        record_outcome(runtime, lease, &attempt, outcome, &policy, influence).await
     }
     .await;
     let _ = tokio::time::timeout(
@@ -631,7 +646,6 @@ async fn record_outcome(
     outcome: McpOutcome,
     policy: &McpPolicy,
     influence: crate::records::SecurityLabels,
-    reserved: bool,
 ) -> Result<bool, RuntimeError> {
     let attempt_id = &attempt.key.id;
     let delivery = outcome.delivery;
@@ -692,7 +706,7 @@ async fn record_outcome(
         ],
     )?;
     let current = runtime.store.record(lease.run_id(), &attempt.key).await?;
-    let mut writes = vec![
+    let writes = vec![
         update(
             &current,
             replace(
@@ -703,9 +717,6 @@ async fn record_outcome(
         ),
         insert(RecordFamily::Response, attempt_id, response.clone(), true),
     ];
-    if reserved && delivery != McpDelivery::PossiblySent {
-        writes.extend(release(runtime, lease, attempt_id).await?);
-    }
     match step::commit(
         runtime,
         lease,
@@ -861,7 +872,12 @@ async fn normalize(
                 &runtime.config.limits,
                 &scope.executable.policy().fields().evaluator_limits,
             )
-            .map_err(|_| RuntimeError::failure(FailureCode::OutputSchema))?;
+            .map_err(|error| {
+                RuntimeError::failure(FailureCode::for_evaluation(
+                    &error,
+                    crate::failure::FailureBoundary::Output,
+                ))
+            })?;
             Ok(value.clone())
         }
         McpBindingKind::Prompt { .. } => {
@@ -1176,10 +1192,15 @@ async fn release(
     lease: &RunLease,
     attempt: &str,
 ) -> Result<Vec<crate::store::RecordWrite>, RuntimeError> {
-    let reservation = runtime
+    let reservation = match runtime
         .store
         .record(lease.run_id(), &key(RecordFamily::Reservation, attempt))
-        .await?;
+        .await
+    {
+        Ok(record) => record,
+        Err(crate::store::StoreError::Missing) => return Ok(vec![]),
+        Err(error) => return Err(error.into()),
+    };
     if reservation.final_record {
         return Ok(vec![]);
     }

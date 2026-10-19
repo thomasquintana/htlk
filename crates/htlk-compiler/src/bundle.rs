@@ -234,9 +234,17 @@ impl SourceBundle {
                         "invalid/excessive mapped module count",
                     ));
                 }
+                // Typed callers do not pass through the JSON ingress ceiling.
+                // Reject cardinality before allocating or traversing extra sources.
+                if p.sources.len() != m.modules.len() {
+                    return Err(fail(
+                        "C_SOURCE_BUNDLE",
+                        "mapped source count differs from supplied sources",
+                    ));
+                }
                 let paths = m.modules.values().collect::<BTreeSet<_>>();
                 if paths.len() != m.modules.len()
-                    || paths != p.sources.keys().collect::<BTreeSet<_>>()
+                    || paths.iter().any(|path| !p.sources.contains_key(*path))
                 {
                     return Err(fail(
                         "C_SOURCE_BUNDLE",

@@ -1,5 +1,9 @@
 # Executable stack completion checklist (Draft 0.1)
 
+The [2026-10-19 alignment review](spec-alignment.md) adds schema-aware comparison
+admission, matching-variant projection, exact semantic backend pins/contributions
+and isolated recursive-schema regression evidence to this completion record.
+
 This checklist covers the shared executable format and verifier used by the
 compiler and runtime. Its authority is `specs/compiler-spec.md`,
 `specs/htlk-executable.cddl`, and `specs/runtime-spec.md`.

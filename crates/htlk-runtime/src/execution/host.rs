@@ -490,26 +490,48 @@ async fn apply(
                     ),
                 ],
             )?;
+            let invocation_payload = replace(
+                &invocation.payload,
+                [
+                    (
+                        "influence_labels",
+                        influence.to_value(&runtime.config.limits)?,
+                    ),
+                    (
+                        "reason",
+                        if *allow {
+                            Value::Text("approval_resolved".into())
+                        } else {
+                            Value::Null
+                        },
+                    ),
+                    (
+                        "status",
+                        if *allow {
+                            field(&invocation.payload, "status")?.clone()
+                        } else {
+                            Value::Text("failed".into())
+                        },
+                    ),
+                    (
+                        "failure",
+                        if *allow {
+                            field(&invocation.payload, "failure")?.clone()
+                        } else {
+                            crate::failure::RuntimeFailure::new(FailureCode::ApprovalDenied)
+                                .to_value(&runtime.config.limits)
+                                .map_err(|_| err())?
+                        },
+                    ),
+                ],
+            )?;
             step::commit(
                 &runtime,
                 &lease,
                 format!("approval-disposition:{id}"),
                 vec![
                     update(&wait, payload, true),
-                    update(
-                        &invocation,
-                        replace(
-                            &invocation.payload,
-                            [
-                                (
-                                    "influence_labels",
-                                    influence.to_value(&runtime.config.limits)?,
-                                ),
-                                ("reason", Value::Text("approval_resolved".into())),
-                            ],
-                        )?,
-                        false,
-                    ),
+                    update(&invocation, invocation_payload, !*allow),
                     receipt(&runtime, &command, response.clone())?,
                 ],
                 None,

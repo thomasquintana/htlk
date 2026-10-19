@@ -1,6 +1,6 @@
 # HTLK IR specification bundle — Draft 0.1
 
-HTLK is the Harness Toolkit. HTLK IR describes tasks as explicit graphs that a compiler checks and a runtime executes. These files specify the language and system; they do not contain a released compiler or runtime implementation.
+HTLK is the Harness Toolkit. HTLK IR describes tasks as explicit graphs that a compiler checks and a runtime executes. These files specify the language and system; the compiler and runtime implementations live in the repository's component crates.
 
 ## Start here
 
@@ -28,6 +28,6 @@ The separately distributed runtime video is a historical earlier-draft recording
 
 ## Checks
 
-With Node.js installed, run `node validate-specs.mjs` from this directory. The checker verifies grammar/example consistency, local links and diagram captions, source package digests, and the split example's correspondence to the single-file tutorial. It does not type-check or execute HTLK programs. Executable byte equivalence and behavioral conformance remain requirements for the eventual implementation, not claimed test results.
+With Node.js installed, run `node validate-specs.mjs` from this directory. The checker verifies grammar/example consistency, local links and diagram captions, source package digests, and the split example's correspondence to the single-file tutorial. It does not type-check or execute HTLK programs. Compiler byte equivalence and runtime behavior are exercised by the Rust suites; see the [alignment review](../docs/spec-alignment.md) and [runtime conformance evidence](../docs/runtime-conformance.md).
 
 Earlier version archives are retained separately; this archive contains the current specification and source examples, not the video/media bundle.

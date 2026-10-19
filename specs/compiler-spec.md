@@ -179,7 +179,7 @@ ServerIdentity {
 
 The host supplies the deployment identity through trusted connection configuration—for example, distinguishing a test installation from a production installation running the same server version. Information reported by the server itself cannot establish that trusted deployment selection. The connection address (endpoint), login secrets (credentials), current connection objects, observation times (timestamps), and source aliases are not part of the compound identity. When an alias occurs in several catalogs, it must map to exactly the same identity in each.
 
-Each entry supplies its exact MCP descriptor JSON object. The tool entry contains `inputSchema` and the HTLK-required `outputSchema` in that descriptor. Resource entries contain `uri`; template entries contain `uriTemplate`; prompt entries contain `name` and argument descriptors. There are no duplicated schema fields with potentially conflicting copies. Names and catalog keys are exact protocol strings.
+Each entry supplies its exact MCP descriptor JSON object. A selected callable tool entry contains `inputSchema` and the HTLK-required `outputSchema` in that descriptor; an unselected tool follows the protocol's descriptor requirements as described above. Resource entries contain `uri`; template entries contain `uriTemplate`; prompt entries contain `name` and argument descriptors. There are no duplicated schema fields with potentially conflicting copies. Names and catalog keys are exact protocol strings.
 
 A **pin** is an exact recorded selection, not a request to choose whichever version is newest. **I/O** means input/output interaction with files, networks, or other outside systems. Schema reference resolution below uses only supplied documents, without I/O.
 
@@ -192,6 +192,17 @@ All external JSON identity uses RFC 8785 JCS bytes after duplicate-key rejection
 A schema may refer to another schema rather than repeat its rules. `$ref` gives that reference, and `$id` establishes a schema resource's identifier and base for resolving relative references. For example, `shared.json#/$defs/Name` names a document relative to a base and then a location inside it. The part after `#` is a **fragment**. An **absolute URI** supplies a complete identifier; a **relative reference** needs a base. A **synthetic base** is an identifier HTLK creates when no suitable one was supplied. The `urn:` form names something without implying a network fetch.
 
 An embedded input/output schema without an absolute `$id` receives the synthetic base `urn:htlk:schema:<64 lowercase digest hex digits>`. This base supports local fragment references. A non-fragment relative reference requires a hierarchical absolute base URI supplied by `$id` or, for externally referenced documents, their catalog retrieval context; without one, compilation fails. A catalog URI alias never overrides the synthetic base of an embedded input/output schema. Catalog URI bindings and nested `$id` declarations must resolve consistently. This prevents two compilers from selecting different bases for the same embedded schema.
+
+Schema closure discovery is retrieval-root-driven. A reference to another supplied
+document selects that document by its catalog retrieval URI. A nested `$id` in a
+different document is available only after its containing retrieval root is
+reached; the compiler does not guess a containing retrieval URI from all catalog
+resource declarations. Within reached documents, references resolve against the
+complete derived resource index and retain each nested resource's actual pointer.
+Canonical revalidation matches external retrieval URI/document pairs against the
+current catalogs even if those document bytes equal an embedded schema. An embedded
+root is identified by both its prescribed base URI and its digest; supplied catalog
+content at that same URI must also agree.
 
 ### 3.1 JSON and schema semantics
 

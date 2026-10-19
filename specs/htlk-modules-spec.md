@@ -283,7 +283,7 @@ The compiler validates the requested module and its import closure, including al
 
 Task `preconditions` checks public inputs. Task `postconditions` may mention direct-child outcomes under the existing language rules; that expression is included as a completion requirement, not offered as a predicate executable by the caller without the task body. Local `limits` can be tightened by enclosing scopes and runtime policy. A report therefore does not promise that every valid input will succeed or that a task has no external effects. The exact implementation and its reached MCP requests remain subject to compiler and runtime checking.
 
-The report's `ModuleRef` ties it to an exact source package snapshot. `scope_digest` ties a task summary to its complete normalized implementation closure. A host must match the source identity and profile when using a report to prepare an edit, and regenerate the report when a selected catalog descriptor/schema or linked implementation changes. The compiler always resolves actual definitions against the catalogs supplied for the current request; a report does not override them. There is no handwritten interface file that can disagree with its implementation, no stub that authorizes missing definitions, and no interface-only path to a runnable executable.
+The report's `ModuleRef` ties it to an exact source package snapshot. `scope_digest` identifies the normalized scope record and its content-addressed reference structure under the inspected dependency environment; it does not independently hash document-level external schema retrieval bindings or the execution profile. The complete executable fingerprint binds that environment. A host must match the source identity and profile when using a report to prepare an edit, and regenerate the report when a selected catalog descriptor/schema or linked implementation changes. The compiler always resolves actual definitions against the catalogs supplied for the current request; a report does not override them. There is no handwritten interface file that can disagree with its implementation, no stub that authorizes missing definitions, and no interface-only path to a runnable executable.
 
 ### 5.3 Keep the LLM's context small without weakening verification
 
@@ -376,7 +376,7 @@ Required implementation tests include:
 | Comments or file locations change but normalized reached work does not | Source digest changes; executable identity stays the same |
 | Two versions of a source package are selected | Permit distinct exact identities; still reject incompatible MCP/profile requirements |
 | A module passes inspection but its caller connects incompatible ports | Reject the caller; inspection is not whole-program verification |
-| An old interface report accompanies a new source pin | Reject its use as a report for the new snapshot; regenerate |
+| A host/editor associates an old interface report with a new source pin | The host/editor rejects that association and regenerates; compiler APIs do not consume interface reports |
 | New compilation while a run is active | Existing run remains unchanged absent a separately valid installation |
 
 The supplied document checker validates syntax, example splitting, source-bundle digests, links, and captions. It is not an implementation of the semantic compiler, an incremental build system, or the runtime. The behavioral and byte-equivalence tests above remain implementation acceptance requirements.

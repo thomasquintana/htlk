@@ -122,7 +122,7 @@ const model = implementation('htlk.model-implementation/0.1\n', [
     'cbor/mod.rs', 'cbor/accounting.rs', 'cbor/decode.rs', 'cbor/encode.rs',
     'cbor/error.rs', 'cbor/limits.rs', 'cbor/value.rs',
   ]),
-  Buffer.from('cbor2=1.1.5;half=2.7.1'),
+  Buffer.from('cbor2=1.1.5;half=2.7.1;ryu-js=1.0.3;serde_json=1.0.151;url=2.5.8;sha2=0.10.9'),
 ]);
 const analyzer = implementation('htlk.analyzer-implementation/0.1\n', [
   rawDigest(model),
@@ -133,7 +133,7 @@ const analyzer = implementation('htlk.analyzer-implementation/0.1\n', [
     'schema_resources.rs', 'schema_projection.rs', 'mcp_protocol.rs',
     '../assets/mcp-2025-11-25.schema.json',
   ]),
-  Buffer.from('jsonschema=0.56.0;regex=1.13.1;regex-automata=0.4.18;regex-syntax=0.8.11;iri-string=0.7.14'),
+  Buffer.from('jsonschema=0.56.0;regex=1.13.1;regex-automata=0.4.18;regex-syntax=0.8.11;iri-string=0.7.14;serde=1.0.229;serde_json=1.0.151'),
 ]);
 const native = parts => implementation('htlk.native-implementation/0.1\n', parts);
 assert.equal(get(profile, 'core_digest').value, native([

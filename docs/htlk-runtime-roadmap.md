@@ -1,5 +1,10 @@
 # Runtime implementation roadmap
 
+The [2026-10-19 alignment review](spec-alignment.md) supplements the historical
+completion record with fourteen resolved findings and additional response/extension,
+deadline, dependency-identity and backend-recursion checks. Its finding register
+records the current requirement-specific regression evidence.
+
 The target is complete Draft 0.1 execution under
 [the runtime specification](../specs/runtime-spec.md), with canonical records from
 `htlk-executable`, semantic plans from `htlk-analyzer`, and executable bytes from

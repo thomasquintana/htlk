@@ -76,7 +76,19 @@ identity, run status, optional expected fingerprint, every record revision/final
 and terminal run transition. It writes the whole record set, optional active-root
 replacement and run outcome, complete journal event, outbox hint and command
 receipt together. Conflict or failure at any point rolls the entire decision back.
+Accepted wait writes additionally check their expiry against that transaction's
+authoritative timestamp. Classification cannot admit a reply/disposition after
+its deadline, including a reply combined with graph installation. Denial commits
+the invocation's immutable failure in the same transaction as the disposition.
+Scope/iteration and invocation success writes also check their persisted deadline
+against the committing timestamp. A crossed deadline rolls acceptance back and
+the coordinator applies the due scope/node stop, preserving authored fallbacks.
 Finalizing one record is useful for immutable binding decisions as well as outcomes.
+
+MCP response persistence does not compare reservation/usage revisions. Those
+accounting records can change during extension, so known-delivery capacity is
+released in a subsequent local transition. A release conflict retries against the
+durable `response_recorded` checkpoint and never resends the external operation.
 
 Internal command receipts are scoped by run and command key. The private semantic
 digest hashes `['htlk.store_command', '0.1', actor, causation, run_id, body]`.

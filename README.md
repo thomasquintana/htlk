@@ -74,6 +74,7 @@ cargo run --example interactive_guide --locked -- --check
 - [Shared semantic analysis](crates/htlk-analyzer/README.md)
 - [Runtime API, execution and supported native boundary](crates/htlk-runtime/README.md)
 - [Runtime conformance evidence](docs/runtime-conformance.md)
+- [Specification alignment findings and resolutions](docs/spec-alignment.md)
 - [Inspection, source metadata and host example](docs/runtime-inspection.md)
 - [Detailed cross-crate API reference](docs/executable-api.md)
 - [Executable/verifier completion checklist](docs/htlk-executable-roadmap.md)

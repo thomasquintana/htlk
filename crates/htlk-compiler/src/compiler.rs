@@ -255,18 +255,36 @@ impl Compiler {
                 check_capabilities(&node.fields().limits, self.config.capabilities)?;
             }
         }
+        let mut embedded = BTreeMap::new();
+        for binding in f.bindings.values() {
+            if let McpBindingKind::Tool {
+                input_schema,
+                output_schema,
+                ..
+            } = binding.kind()
+            {
+                for id in [input_schema, output_schema] {
+                    let document = f
+                        .documents
+                        .get(id)
+                        .ok_or_else(|| fail("C_SCHEMA", "missing embedded schema"))?;
+                    let base = crate::analyzer::embedded_schema_base(document, l)
+                        .map_err(|e| fail("C_SCHEMA", e))?;
+                    if embedded.insert(base, *id).is_some_and(|old| old != *id) {
+                        return Err(fail(
+                            "C_SCHEMA",
+                            "conflicting embedded schema retrieval root",
+                        ));
+                    }
+                }
+            }
+        }
         for (uri, id) in &f.schema_uris {
-            // Embedded schema roots are checked against descriptor subdocuments by
-            // complete analysis; externally retrieved roots must match catalogs.
-            let embedded = f.bindings.values().any(|b| match b.kind() {
-                McpBindingKind::Tool {
-                    input_schema,
-                    output_schema,
-                    ..
-                } => id == input_schema || id == output_schema,
-                _ => false,
-            });
-            if !embedded && catalogs.schemas.get(uri) != f.documents.get(id) {
+            // Equal document bytes do not make a different retrieval URI embedded.
+            let is_embedded = embedded.get(uri) == Some(id);
+            if (!is_embedded || catalogs.schemas.contains_key(uri))
+                && catalogs.schemas.get(uri) != f.documents.get(id)
+            {
                 return Err(fail(
                     "C_SCHEMA",
                     "external schema snapshot differs from supplied catalogs",

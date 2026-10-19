@@ -384,6 +384,9 @@ pub struct Runtime {
     pub(crate) execution: Mutex<Option<actix::WeakAddr<crate::execution::Supervisor>>>,
     pub(crate) mcp: Option<Arc<dyn crate::mcp::McpAdapter>>,
     pub(crate) mcp_control: crate::mcp_control::McpControl,
+    // Rebuildable scheduler observation: valid only at this exact journal sequence
+    // and before the earliest timer. Never serialized or used to execute work.
+    pub(crate) quiescent: Mutex<BTreeMap<crate::identity::RunId, (i64, i64)>>,
 }
 impl Runtime {
     /// Constructs a service from trusted store, immutable registry and host policy.
@@ -426,6 +429,7 @@ impl Runtime {
             execution: Mutex::new(None),
             mcp: None,
             mcp_control: Default::default(),
+            quiescent: Mutex::new(BTreeMap::new()),
         })
     }
     /// Selects an explicit trusted clock before sharing the service with actors.

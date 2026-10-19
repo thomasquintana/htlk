@@ -213,6 +213,74 @@ fn whole_schema_roots_reject_disjoint_eval_and_edge_boundaries() {
 }
 
 #[test]
+fn comparisons_use_known_schema_representation_facts() {
+    use htlk_analyzer::{ExpressionTypeError, check_expression_with_schemas};
+    use htlk_executable::*;
+    let l = Limits::default();
+    let (schemas, id) = schema(r#"{"type":"object"}"#);
+    let source = ValueReference::Input("source".parse().unwrap());
+    let mut env = ExpressionTypeEnvironment::default();
+    env.references.insert(
+        source.clone(),
+        Port::new(
+            ValueType::new(ValueTypeKind::Schema(id), TypeContext::Value, &l).unwrap(),
+            true,
+        ),
+    );
+    for literal in [
+        ScalarLiteral::Integer(1),
+        ScalarLiteral::String("x".into()),
+        ScalarLiteral::Boolean(true),
+        ScalarLiteral::Null,
+    ] {
+        let expression = Expression::new(
+            ExpressionKind::Binary {
+                operator: BinaryOperator::Eq,
+                left: Box::new(
+                    Expression::new(
+                        ExpressionKind::Ref {
+                            source: source.clone(),
+                            path: vec![],
+                        },
+                        &l,
+                    )
+                    .unwrap(),
+                ),
+                right: Box::new(Expression::literal(literal)),
+            },
+            &l,
+        )
+        .unwrap();
+        assert_eq!(
+            check_expression_with_schemas(
+                &expression,
+                ExpressionContext::Guard { loop_body: false },
+                &env,
+                None,
+                &schemas,
+                &l
+            )
+            .unwrap_err(),
+            ExpressionTypeError::OperandType
+        );
+        let mut uncertain = env.clone();
+        uncertain.references.insert(
+            source.clone(),
+            Port::new(ValueType::builtin(BuiltinType::Json), true),
+        );
+        check_expression_with_schemas(
+            &expression,
+            ExpressionContext::Guard { loop_body: false },
+            &uncertain,
+            None,
+            &schemas,
+            &l,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
 fn schema_shapes_keep_named_fields_items_presence_and_exact_obligations() {
     use htlk_analyzer::{RuntimeTypeCheckKind, check_expression_with_schemas};
     use htlk_executable::*;

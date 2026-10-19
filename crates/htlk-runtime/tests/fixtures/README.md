@@ -1,5 +1,10 @@
 # Complete native executable fixture
 
+The 2026-10-19 alignment fixes refresh the source-derived profile identities and
+add exact JSON/number/URI/backend dependency contributions. The empty scope record,
+policy, wire grammar, hash domains and independent runtime identity vectors remain
+unchanged. The independent Node checker mirrors the new explicit contribution list.
+
 `native-empty.hex` is a complete canonical Draft 0.1 envelope and graph document,
 with a host-selected finite policy and the shipped native implementation profile.
 The first two lines pin the envelope fingerprint and root-scope record digest.

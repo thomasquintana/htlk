@@ -101,6 +101,7 @@ pub(crate) struct Session<'a> {
     work: usize,
     depth: usize,
     intermediate_bytes: usize,
+    diagnostic_bytes: usize,
 }
 impl<'a> Session<'a> {
     pub fn new(
@@ -171,6 +172,7 @@ impl<'a> Session<'a> {
             work: 0,
             depth: 0,
             intermediate_bytes: 0,
+            diagnostic_bytes: 0,
         })
     }
     fn l(&self) -> &Limits {
@@ -209,15 +211,16 @@ impl<'a> Session<'a> {
                 .len()
                 .saturating_add(self.documentation.len()),
         )?;
-        let bytes = self
-            .source_map
-            .iter()
-            .fold(0usize, |n, e| {
-                n.saturating_add(crate::diagnostic::map_size(e))
-            })
-            .saturating_add(self.documentation.iter().fold(0usize, |n, (k, v)| {
-                n.saturating_add(k.len()).saturating_add(v.len())
-            }));
+        let bytes = self.diagnostic_bytes.saturating_add(
+            self.source_map
+                .iter()
+                .fold(0usize, |n, e| {
+                    n.saturating_add(crate::diagnostic::map_size(e))
+                })
+                .saturating_add(self.documentation.iter().fold(0usize, |n, (k, v)| {
+                    n.saturating_add(k.len()).saturating_add(v.len())
+                })),
+        );
         if bytes > self.compiler.config.frontend.max_report_bytes {
             return Err(fail(
                 "C_SOURCE_LIMIT",
@@ -269,9 +272,19 @@ impl<'a> Session<'a> {
                     DeclKind::Task(_) | DeclKind::Graph(_) => {
                         let id = self.scope_decl(module, &d.name)?;
                         let doc = self.document("compiler.validation", id)?;
-                        self.compiler
-                            .compile_document(doc, self.catalogs)
-                            .map(|out| self.diagnostics.extend(out.diagnostics))
+                        let out = self.compiler.compile_document(doc, self.catalogs)?;
+                        for diagnostic in out.diagnostics {
+                            self.charge_amount(self.diagnostics.len().saturating_add(1))?;
+                            if self.diagnostics.contains(&diagnostic) {
+                                continue;
+                            }
+                            self.diagnostic_bytes = self
+                                .diagnostic_bytes
+                                .saturating_add(crate::diagnostic::diagnostic_size(&diagnostic));
+                            self.report_limit()?;
+                            self.diagnostics.push(diagnostic);
+                        }
+                        Ok(())
                     }
                 })();
                 result.map_err(|e| self.source_error(located(e, &d.span)))?;
@@ -899,7 +912,11 @@ impl<'a> Session<'a> {
             AstOperation::Use(name) => {
                 let (_, d) = self.resolve(m, name)?;
                 if !matches!(d.kind, DeclKind::Task(_)) {
-                    return Err(fail("C_NAME", "use requires a task"));
+                    return Err(crate::diagnostic::related(
+                        "C_NAME",
+                        "use requires a task",
+                        &d.span,
+                    ));
                 }
                 let id = self.scope_decl(m, name)?;
                 let f = self.pool.scopes[&id].fields();

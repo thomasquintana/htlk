@@ -289,23 +289,41 @@ pub(crate) fn project(
     }
     require(value, ty, schemas, meter)?;
     let mut value = value;
-    let mut types = vec![copy_type(ty, meter)?];
+    // Keep nonmatching alternatives for declared-path/absence semantics, but never
+    // let a descendant of a rejected outer variant become eligible again.
+    let mut types = vec![(copy_type(ty, meter)?, true)];
     for (index, step) in path.iter().enumerate() {
-        if types.iter().any(contains_schema_head) {
-            return project_schema_members(value, &types, &path[index..], schemas, meter);
+        if types
+            .iter()
+            .any(|(ty, eligible)| *eligible && contains_schema_head(ty))
+        {
+            let eligible = types
+                .iter()
+                .filter(|(_, eligible)| *eligible)
+                .map(|(ty, _)| copy_type(ty, meter))
+                .collect::<Result<Vec<_>, _>>()?;
+            return project_schema_members(value, &eligible, &path[index..], schemas, meter);
         }
         meter.visit(1)?;
         let mut selected = None;
         let mut next_types = Vec::new();
         let mut absent = false;
-        for ty in &types {
-            projected_types(ty, step, &mut next_types, meter, 0)?;
+        for (ty, eligible) in &types {
+            projected_types(
+                (value, schemas),
+                ty,
+                step,
+                *eligible,
+                &mut next_types,
+                meter,
+                0,
+            )?;
         }
         if next_types.is_empty() {
             return Err(Error::InvalidProjection);
         }
-        for ty in &types {
-            if !matches_type(value, ty, schemas, meter, 0)? {
+        for (ty, eligible) in &types {
+            if !eligible || !matches_type(value, ty, schemas, meter, 0)? {
                 continue;
             }
             match select(value, ty, step, schemas, meter, types.len() > 1, 0)? {
@@ -373,16 +391,20 @@ fn project_schema_members(
     }
 }
 fn projected_types(
+    source: (&Value, Option<&NativeSchemas>),
     ty: &T,
     step: &PathStep,
-    out: &mut Vec<T>,
+    eligible: bool,
+    out: &mut Vec<(T, bool)>,
     meter: &mut EvaluationMeter<'_>,
     depth: usize,
 ) -> Result<(), Error> {
+    let (value, schemas) = source;
     if depth > meter.program_limits().max_depth {
         return Err(Error::Limit("projection depth"));
     }
     meter.visit(1)?;
+    let eligible = eligible && matches_type(value, ty, schemas, meter, depth)?;
     let child = match (ty.kind(), step) {
         (K::Record(fields), PathStep::Field(name)) => {
             let mut child = None;
@@ -402,13 +424,13 @@ fn projected_types(
         (K::Builtin(P::Json), _) => Some(ty),
         (K::Union(types), _) => {
             for ty in types {
-                projected_types(ty, step, out, meter, depth + 1)?;
+                projected_types(source, ty, step, eligible, out, meter, depth + 1)?;
             }
             None
         }
         (K::Builtin(p), _) => {
             if let Some(record) = crate::builtin_record_type(*p, meter.program_limits())? {
-                projected_types(&record, step, out, meter, depth + 1)?;
+                projected_types(source, &record, step, eligible, out, meter, depth + 1)?;
             }
             None
         }
@@ -417,7 +439,7 @@ fn projected_types(
     };
     if let Some(child) = child {
         out.try_reserve(1).map_err(|_| Error::AllocationFailed)?;
-        out.push(copy_type(child, meter)?);
+        out.push((copy_type(child, meter)?, eligible));
     }
     Ok(())
 }

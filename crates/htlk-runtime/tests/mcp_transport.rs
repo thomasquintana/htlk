@@ -63,6 +63,166 @@ fn initialize() -> &'static str {
     r#"{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}"#
 }
 
+struct HttpStep {
+    method: &'static str,
+    session: Option<&'static str>,
+    status: u16,
+    result: String,
+    new_session: Option<&'static str>,
+}
+fn lifecycle_peer(steps: Vec<HttpStep>) -> (String, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let peer = std::thread::spawn(move || {
+        for step in steps {
+            let until = Instant::now() + Duration::from_secs(5);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < until =>
+                    {
+                        std::thread::sleep(Duration::from_millis(1))
+                    }
+                    Err(e) => panic!("lifecycle accept: {e}"),
+                }
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let (end, length) = loop {
+                let mut block = [0; 1024];
+                let count = socket.read(&mut block).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&block[..count]);
+                assert!(bytes.len() < 65536);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        break (end + 4, length);
+                    }
+                }
+            };
+            let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+            let session = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("mcp-session-id")
+                    .then(|| value.trim())
+            });
+            assert_eq!(session, step.session);
+            let document =
+                JsonDocument::new(&bytes[end..end + length], &Limits::default()).unwrap();
+            let Value::Map(fields) = document.value() else {
+                panic!()
+            };
+            assert_eq!(fields.get("method"), Some(&Value::Text(step.method.into())));
+            let body = if step.status == 200 {
+                let Some(Value::Integer(id)) = fields.get("id") else {
+                    panic!()
+                };
+                format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{}}}"#, step.result)
+            } else {
+                String::new()
+            };
+            let session = step
+                .new_session
+                .map_or(String::new(), |id| format!("Mcp-Session-Id: {id}\r\n"));
+            write!(socket,"HTTP/1.1 {} response\r\nContent-Type: application/json\r\n{session}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",step.status,body.len()).unwrap();
+        }
+    });
+    (url, peer)
+}
+
+#[test]
+fn expired_http_sessions_renew_without_implicitly_replaying_an_operation() {
+    actix::System::new().block_on(async {
+        for during_call in [false, true] {
+            let step = |method, session, status, result: &str, new_session| HttpStep {
+                method,
+                session,
+                status,
+                result: result.into(),
+                new_session,
+            };
+            let listed = format!(r#"{{"tools":[{DESCRIPTOR}]}}"#);
+            let mut steps = vec![
+                step("initialize", None, 200, initialize(), Some("old")),
+                step("notifications/initialized", Some("old"), 202, "", None),
+                step(
+                    "tools/list",
+                    Some("old"),
+                    if during_call { 200 } else { 404 },
+                    &listed,
+                    None,
+                ),
+            ];
+            if during_call {
+                steps.push(step("tools/call", Some("old"), 404, "", None));
+            }
+            steps.extend([
+                step("initialize", None, 200, initialize(), Some("new")),
+                step("notifications/initialized", Some("new"), 202, "", None),
+                step("tools/list", Some("new"), 200, &listed, None),
+            ]);
+            let (url, peer) = lifecycle_peer(steps);
+            let adapter = NativeMcpAdapter::new(
+                BTreeMap::from([(
+                    "test".into(),
+                    McpEndpoint::Http {
+                        url,
+                        headers: BTreeMap::new(),
+                    },
+                )]),
+                2000,
+            )
+            .unwrap();
+            let binding = binding(McpTransport::StreamableHttp);
+            let limits = Limits::default();
+            let context = htlk_runtime::HostContext::new("test".into(), &limits).unwrap();
+            let mut connection = adapter.connect(&binding, &context, &limits).await.unwrap();
+            assert_eq!(connection.descriptor().digest(), binding.descriptor());
+            if during_call {
+                let outcome = connection.invoke(request(4096)).await;
+                assert_eq!(outcome.delivery, McpDelivery::PossiblySent);
+                assert_eq!(
+                    outcome.result.unwrap_err().code(),
+                    FailureCode::McpTransport
+                );
+            }
+            drop(connection);
+            peer.join().unwrap();
+        }
+    });
+}
+
+#[test]
+fn native_task_required_tools_are_rejected_during_discovery() {
+    actix::System::new().block_on(async {
+        for support in ["required","optional","forbidden"] {
+            let descriptor=DESCRIPTOR.strip_suffix('}').unwrap().to_string()+&format!(r#", "execution":{{"taskSupport":"{support}"}}}}"#);
+            let init=r#"{"protocolVersion":"2025-11-25","capabilities":{"tools":{},"tasks":{"requests":{"tools":{"call":{}}}}},"serverInfo":{"name":"fixture","version":"1"}}"#;
+            let steps=vec![HttpStep{method:"initialize",session:None,status:200,result:init.into(),new_session:Some("test")},HttpStep{method:"notifications/initialized",session:Some("test"),status:202,result:String::new(),new_session:None},HttpStep{method:"tools/list",session:Some("test"),status:200,result:format!(r#"{{"tools":[{descriptor}]}}"#),new_session:None}];
+            let (url,peer)=lifecycle_peer(steps);
+            let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Http{url,headers:BTreeMap::new()})]),2000).unwrap();
+            let l=Limits::default();let base=binding(McpTransport::StreamableHttp);let binding=McpBinding::new(base.server().clone(),JsonDocument::new(descriptor.as_bytes(),&l).unwrap().digest(),base.kind().clone(),&l).unwrap();
+            let context=htlk_runtime::HostContext::new("test".into(),&l).unwrap();
+            match adapter.connect(&binding,&context,&l).await {Err(e)=>{assert_eq!(support,"required");assert_eq!(e.code(),FailureCode::McpDescriptor);},Ok(connection)=>{assert_ne!(support,"required");drop(connection);}}
+            peer.join().unwrap();
+        }
+    });
+}
+
 // A deliberately independent HTTP peer uses raw bytes, so duplicate keys and
 // unsafe numbers reach the adapter without an intermediary JSON parser.
 fn http_peer(result: String, sse: bool) -> (String, std::thread::JoinHandle<()>, Arc<AtomicBool>) {

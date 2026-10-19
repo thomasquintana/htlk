@@ -43,6 +43,8 @@ pub struct WaitView {
 /// Durable run observation with derived blocked status.
 #[derive(Clone, Debug)]
 pub struct RunView {
+    /// Protected contract and destination-validation evidence.
+    pub diagnostics: Vec<DecisionView>,
     /// Persisted run-wide guard choices and protected causes.
     pub guards: Vec<DecisionView>,
     /// Node/public-output/loop-next binding decisions.
@@ -73,6 +75,8 @@ pub struct RunView {
 /// Node occurrence observation. Returned IDs grant no value access.
 #[derive(Clone, Debug)]
 pub struct NodeView {
+    /// Protected contract and destination-validation evidence for this occurrence.
+    pub diagnostics: Vec<DecisionView>,
     /// Owning runtime instance and original local name.
     pub scope_instance_id: ScopeInstanceId,
     /// Original source-local occurrence name.
@@ -319,21 +323,14 @@ impl Runtime {
                 state: "open".into(),
             });
         }
+        let now = self.clock.now_ms()?.max(header.last_time_ms);
         let blocked = header.status == RunStatus::Running
-            && !waits.is_empty()
-            && nodes.iter().filter(|n| !n.final_record).all(|n| {
-                string(&n.payload, "status").is_ok_and(|s| s == "pending")
-                    || string(&n.payload, "reason").is_ok_and(|s| {
-                        matches!(
-                            s.as_str(),
-                            "waiting_reply"
-                                | "awaiting_approval"
-                                | "scope"
-                                | "iteration"
-                                | "retry_delay"
-                        )
-                    })
-            });
+            && self
+                .quiescent
+                .lock()
+                .map_err(|_| err())?
+                .get(run)
+                .is_some_and(|(sequence, wake_at)| *sequence == header.sequence && now < *wake_at);
         let outputs = if header.status == RunStatus::Succeeded
             && string(&root.payload, "status")? == "succeeded"
         {
@@ -352,6 +349,15 @@ impl Runtime {
             .map(|r| r.payload)
             .collect();
         Ok(RunView {
+            diagnostics: all(self, run, RecordFamily::Observation)
+                .await?
+                .into_iter()
+                .filter(|r| map(&r.payload).is_ok_and(|m| m.get("canonical_path").is_some()))
+                .map(|r| DecisionView {
+                    id: r.key.id,
+                    decision: r.payload,
+                })
+                .collect(),
             guards: self
                 .store
                 .inspection_records(run, RecordFamily::Guard, &["value", "failure", "causes"])
@@ -531,7 +537,14 @@ impl Runtime {
             .inspection_records(
                 run,
                 RecordFamily::Observation,
-                &["invocation_id", "attempt_id", "failure_code", "decision"],
+                &[
+                    "invocation_id",
+                    "attempt_id",
+                    "failure_code",
+                    "decision",
+                    "canonical_path",
+                    "failure",
+                ],
             )
             .await?
             .into_iter()
@@ -667,6 +680,14 @@ impl Runtime {
             .collect::<Result<Vec<_>, RuntimeError>>()?;
         attempts.sort_by_key(|a| a.number);
         Ok(NodeView {
+            diagnostics: observations
+                .iter()
+                .filter(|r| map(&r.payload).is_ok_and(|m| m.get("canonical_path").is_some()))
+                .map(|r| DecisionView {
+                    id: r.key.id.clone(),
+                    decision: r.payload.clone(),
+                })
+                .collect(),
             scope_instance_id,
             local_id,
             canonical_path,

@@ -9,6 +9,8 @@ authorizes complete value/control/evidence protection before a view is returned.
 `inspect_run` returns active fingerprint/root/ownership, status and fixed root
 failure, complete current protection, root manifests, runtime scope hierarchy,
 open requests, usage, extension history and persisted guard/binding decisions.
+Run and node views also expose protected `diagnostics`: canonical contract sites
+and all destination-validation failures, with deterministic primary error selection.
 Public output and loop-next decisions use private `$outputs`/`$next` markers,
 separate from source node names. Bindings retain selected edge, source error and
 protected causal links; guard decisions retain actual evaluated outcome causes.
@@ -32,6 +34,13 @@ empty terminal page. Run/node/history readers verify stable committed sequences;
 continuous concurrent changes can return retryable `E_FENCED` instead of a torn view.
 Metadata projection and aggregate byte allowances bound observations independently
 of stored raw response size.
+
+`blocked` uses the scheduler's completed eligibility scan at the exact observed
+journal sequence, rather than interpreting pending-node reason strings. Any new
+commit or due timer invalidates that rebuildable observation. It is false while
+internal scanning/work remains outstanding and is recomputed after recovery.
+Mounted preserved scopes and retry timers follow the same rule. This index is
+bounded, process-local and cannot authorize or suppress graph execution.
 
 `inspect_graph` displays the immutable portable document and use hierarchy even
 when its original native implementation is unavailable. `native_available` reports

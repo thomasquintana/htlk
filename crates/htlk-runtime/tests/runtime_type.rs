@@ -106,6 +106,76 @@ fn union_projection_uses_declared_variants_at_each_path_step() {
         EvaluationValue::Absent
     );
 }
+
+#[test]
+fn nested_projection_cannot_reactivate_a_rejected_outer_variant() {
+    let a = record(vec![
+        ("kind", ty(K::Enum(vec!["a".into()])), true),
+        (
+            "child",
+            record(vec![("a", T::builtin(P::Integer), true)]),
+            true,
+        ),
+    ]);
+    let b = record(vec![
+        ("kind", ty(K::Enum(vec!["b".into()])), true),
+        (
+            "child",
+            record(vec![("b", T::builtin(P::Integer), true)]),
+            true,
+        ),
+    ]);
+    let union = ty(K::Union(vec![a, b]));
+    let value = map(vec![
+        ("kind", Value::Text("a".into())),
+        (
+            "child",
+            map(vec![("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+        ),
+    ]);
+    assert_eq!(
+        project(&value, &union, &["child", "b"]).unwrap(),
+        EvaluationValue::Absent
+    );
+    assert_eq!(
+        project(&value, &union, &["child", "a"]).unwrap(),
+        EvaluationValue::Present(Value::Integer(1))
+    );
+    use htlk_executable::{
+        CoreFunction, Expression, ExpressionContext, ExpressionKind, FunctionId, ValueReference,
+    };
+    let l = Limits::default();
+    let source = ValueReference::Input("item".parse().unwrap());
+    let mut env = ExpressionTypeEnvironment::default();
+    env.references
+        .insert(source.clone(), Port::new(union, true));
+    let reference = Expression::new(
+        ExpressionKind::Ref {
+            source: source.clone(),
+            path: vec![PathStep::Field("child".into()), PathStep::Field("b".into())],
+        },
+        &l,
+    )
+    .unwrap();
+    let expression = Expression::new(
+        ExpressionKind::Call {
+            function: FunctionId::Core(CoreFunction::Present),
+            arguments: vec![reference],
+        },
+        &l,
+    )
+    .unwrap();
+    let checked =
+        CheckedExpression::new(&expression, ExpressionContext::Eval, &env, None, &l).unwrap();
+    let mut frame = EvaluationFrame::default();
+    frame
+        .bind(source, vec![], Ok(EvaluationValue::Present(value)), &l)
+        .unwrap();
+    assert_eq!(
+        checked.evaluate(&frame, None, &policy()).unwrap().value,
+        EvaluationValue::Present(Value::Bool(false))
+    );
+}
 #[test]
 fn maps_indices_json_and_limits_are_strict() {
     let t = ty(K::Map(Box::new(T::builtin(P::Integer))));

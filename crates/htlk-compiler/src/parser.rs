@@ -273,13 +273,17 @@ impl Parser {
             Ok(())
         }
     }
-    fn ports(&mut self) -> Result<Ports> {
+    fn ports(&mut self, record: bool) -> Result<Ports> {
         self.expect("{")?;
         let mut fields = vec![];
         let mut names = BTreeSet::new();
         if !self.eat("}") {
             loop {
-                let k = self.key()?;
+                let k = if record {
+                    self.key()?
+                } else {
+                    self.identifier()?
+                };
                 if !names.insert(k.clone()) {
                     return Err(self.duplicate("duplicate decoded port/field name"));
                 }
@@ -324,7 +328,7 @@ impl Parser {
                     Ty::Map(inner)
                 }
             }
-            "record" => Ty::Record(self.ports()?),
+            "record" => Ty::Record(self.ports(true)?),
             "union" => {
                 self.expect("(")?;
                 let mut members = vec![self.ty()?];
@@ -412,7 +416,7 @@ impl Parser {
             match key.as_str() {
                 "inputs" | "outputs" => {
                     self.expect("=")?;
-                    let ports = self.ports()?;
+                    let ports = self.ports(false)?;
                     if key == "inputs" {
                         b.inputs = Some(ports)
                     } else {
@@ -466,7 +470,7 @@ impl Parser {
                     while !self.eat("}") {
                         let k = self.word()?;
                         self.expect("=")?;
-                        let v = self.expr(0)?;
+                        let v = self.retry_value(&k)?;
                         if !matches!(k.as_str(), "max_attempts" | "on" | "backoff_ms")
                             || m.insert(k, v).is_some()
                         {
@@ -628,10 +632,51 @@ impl Parser {
         self.depth -= 1;
         Ok(b)
     }
+    fn retry_value(&mut self, key: &str) -> Result<Expr> {
+        let start = self.span();
+        let value = match key {
+            "max_attempts" => ExprKind::Literal(ScalarLiteral::Integer(self.integer()?)),
+            "on" | "backoff_ms" => {
+                self.expect("[")?;
+                let mut values = Vec::new();
+                if !self.eat("]") {
+                    loop {
+                        let item_start = self.span();
+                        let literal = if key == "on" {
+                            ScalarLiteral::String(self.string()?)
+                        } else {
+                            ScalarLiteral::Integer(self.integer()?)
+                        };
+                        values.push(Located {
+                            value: ExprKind::Literal(literal),
+                            span: self.finish(item_start),
+                        });
+                        if self.eat("]") {
+                            break;
+                        }
+                        self.expect(",")?;
+                        if self.eat("]") {
+                            break;
+                        }
+                    }
+                }
+                ExprKind::List(values)
+            }
+            _ => return Err(self.error("unknown retry member")),
+        };
+        Ok(Located {
+            value,
+            span: self.finish(start),
+        })
+    }
+    fn qualified_head(&self) -> bool {
+        matches!(self.tokens.get(self.pos + 1).map(|t| &t.value), Some(Token::Symbol(s)) if s == ".")
+    }
     fn expr(&mut self, min: u8) -> Result<Expr> {
         self.enter()?;
         let start = self.span();
-        let mut left = if self.eat("not") {
+        let mut left = if self.is("not") && !self.qualified_head() {
+            self.pos += 1;
             Located {
                 value: ExprKind::Not(Box::new(self.expr(3)?)),
                 span: self.finish(start.clone()),
@@ -674,6 +719,7 @@ impl Parser {
                     .tokens
                     .get(self.pos + 1)
                     .is_some_and(|t| matches!(&t.value,Token::Word(s) if s=="not"))
+                && !matches!(self.tokens.get(self.pos + 2).map(|t| &t.value), Some(Token::Symbol(s)) if s == ".")
             {
                 return Err(self.error("comparison operands must be primary expressions"));
             }
@@ -761,9 +807,9 @@ impl Parser {
                     ExprKind::Literal(lit)
                 }
                 Token::Word(w) => match w.as_str() {
-                    "true" => ExprKind::Literal(ScalarLiteral::Boolean(true)),
-                    "false" => ExprKind::Literal(ScalarLiteral::Boolean(false)),
-                    "null" => ExprKind::Literal(ScalarLiteral::Null),
+                    "true" if !self.is(".") => ExprKind::Literal(ScalarLiteral::Boolean(true)),
+                    "false" if !self.is(".") => ExprKind::Literal(ScalarLiteral::Boolean(false)),
+                    "null" if !self.is(".") => ExprKind::Literal(ScalarLiteral::Null),
                     _ => {
                         let mut name = vec![w];
                         while self.eat(".") {

@@ -144,11 +144,23 @@ A **schema** adds detailed rules about data, such as requiring named fields or f
 
 `record` permits extra fields. Exact JSON Schema restrictions are additionally enforced at an MCP boundary. A structural mismatch known at compile time fails. Where a source is `json` or schema refinements require actual values, the compiler records a checked binding and the runtime checks before dispatch. A declared `eval` result type is also a checked boundary; it never changes a value's representation.
 
+Native record assignability uses declared field coverage: every required destination
+field must be declared by the source record. Permitting extra runtime members does
+not make an undeclared field available for structural narrowing. Thus `record {}`
+does not statically supply `record { id = string }`; an explicitly authored `json`
+boundary can retain uncertainty for actual-value validation. A declared optional
+source field can supply a required destination only with a presence check.
+
 An **index** selects a list item by position. **Zero-based** means the first item is numbered 0, the second 1, and so on. A **projection** selects a field or item from a larger value. A type is **opaque** here when the compiler cannot expose a more specific useful shape without checking actual data.
 
 Lists use zero-based indexing. A record can be accessed with `.field` or `["exact key"]`; a map uses a quoted-key suffix or a library lookup function. Reading a missing declared optional field yields legitimate absence. Access to a missing required field, undeclared field, missing map key, or out-of-range index fails. A union of record variants exposes a field present in only some variants as optional; accessing it on a record variant without that field yields absence. If a union also contains non-record variants, a field projection is statically permitted when at least one record variant declares the field, but selecting a non-record value raises `E_EXPRESSION`. Thus `error(@worker).code` is legal behind a lazy failure guard and errors if evaluated when `error(@worker)` is null. No general flow-sensitive proof is required. Dynamic indexing, slicing, arithmetic, conversion, and collection transforms use library functions.
 
 For `json` or an opaque schema type without a known field/item shape, a literal-key/index projection is runtime-checked and yields `json`. A missing key, out-of-range index, or wrong container kind is an expression error; optional absence is inferred only from an explicitly optional field or record-union rule. The result can be validated by an `eval` annotation or a typed library argument. This permits inspecting schema-open data without assuming that every arbitrary JSON value is an object.
+
+For a nested union projection, only variants matching the complete enclosing value
+remain eligible throughout the path. A rejected outer variant cannot become
+eligible again merely because a nested value also satisfies its child type. The
+record-union absence rule still applies to fields declared only by other variants.
 
 ## 5. Node operations and options
 

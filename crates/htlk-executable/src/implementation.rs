@@ -33,7 +33,7 @@ pub fn implementation_digest() -> Digest {
         include_bytes!("cbor/error.rs"),
         include_bytes!("cbor/limits.rs"),
         include_bytes!("cbor/value.rs"),
-        b"cbor2=1.1.5;half=2.7.1",
+        b"cbor2=1.1.5;half=2.7.1;ryu-js=1.0.3;serde_json=1.0.151;url=2.5.8;sha2=0.10.9",
     ];
     let mut hash = Sha256::new();
     hash.update(b"htlk.model-implementation/0.1\n");

@@ -472,6 +472,8 @@ fn event_value(run: &str, sequence: i64, event: &EventMeta<'_>, payload: &[u8]) 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StoreError {
+    /// An acceptance predicate expired at the authoritative commit timestamp.
+    Deadline(FailureCode),
     /// An authoritative retention tombstone records deliberate expiry.
     Expired,
     /// Backend database operation failed.
@@ -500,6 +502,7 @@ impl StoreError {
     /// remains a host API concern rather than being guessed from backend text.
     pub const fn code(self) -> FailureCode {
         match self {
+            Self::Deadline(code) => code,
             Self::Expired => FailureCode::RetentionExpired,
             Self::Fenced => FailureCode::Fenced,
             Self::Corrupt => FailureCode::Digest,
@@ -518,6 +521,7 @@ impl StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Deadline(_) => "runtime acceptance deadline elapsed",
             Self::Expired => "runtime artifact retention expired",
             Self::Database => "runtime database operation failed",
             Self::Closed => "runtime database connection is closed",
@@ -677,6 +681,41 @@ mod tests {
                 store.commit(&lease, transition("late", vec![], 3)).await,
                 Err(StoreError::Terminal)
             );
+        });
+    }
+
+    #[test]
+    fn committing_timestamp_rejects_success_after_a_worker_deadline_check() {
+        actix::System::new().block_on(async {
+            let store = SqliteStore::in_memory(StoreConfig::default())
+                .await
+                .unwrap();
+            let seed = seed("deadline");
+            store.create_run(seed.clone()).await.unwrap();
+            let lease = store
+                .acquire(&seed.run_id, "owner".into(), 0, 100)
+                .await
+                .unwrap();
+            let mut write = write("scope", None, true, 0);
+            write.key.family = RecordFamily::Scope;
+            write.payload = Value::Map(
+                cbor::Map::try_from_entries([
+                    ("status".into(), Value::Text("succeeded".into())),
+                    ("deadline_ms".into(), Value::Integer(2)),
+                ])
+                .unwrap(),
+            );
+            assert_eq!(
+                store
+                    .commit(&lease, transition("late", vec![write.clone()], 2))
+                    .await,
+                Err(StoreError::Deadline(FailureCode::Timeout))
+            );
+            assert_eq!(
+                store.record(&seed.run_id, &write.key).await,
+                Err(StoreError::Missing)
+            );
+            assert_eq!(store.run_header(&seed.run_id).await.unwrap().sequence, 2);
         });
     }
 

@@ -3,6 +3,19 @@
 **Release:** Draft 0.1\
 **Date:** 2026-09-13
 
+## Alignment clarifications — 2026-10-19
+
+Clarify declared-field native record assignability, variant-preserving nested
+projection, retrieval-root-driven offline schema discovery, URI-aware canonical
+catalog revalidation, source versus canonical prompt parameter presence, and the
+scope-record digest's dependency-environment boundary. Define the existing
+interface-edge-based extension input inheritance consistently with the host API.
+Make atomic approval denial and commit-time reply deadlines explicit. Protected
+diagnostics retain contract sites and secondary boundary-validation causes.
+These clarifications retain the Draft 0.1 wire grammar and hash domains. Corrected
+native implementation sources/backend pins produce new exact profile identities;
+old executable bytes and history are not relabeled.
+
 ## 1. One version for the current specification
 
 This release establishes `0.1` as the version of every current HTLK-owned format. It retains the graph model, modular authoring, and execution rules already developed, while bringing the language, compiler, runtime, examples, and machine-readable references into one baseline.

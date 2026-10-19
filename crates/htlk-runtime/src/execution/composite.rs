@@ -77,7 +77,23 @@ pub(super) async fn operate(
         let pre =
             input_frame.evaluate(&parent.executable, &site, &ExpressionSite::Preconditions)?;
         if let Some(error) = step::condition_error(&pre, FailureCode::Preconditions) {
-            let mut writes = vec![];
+            let mut diagnostic = step::contract_diagnostic(
+                runtime,
+                parent,
+                Some(node),
+                "preconditions",
+                &error,
+                &pre.influence,
+                record.revision,
+            )?;
+            diagnostic.payload = replace(
+                &diagnostic.payload,
+                [(
+                    "canonical_path",
+                    Value::Text(format!("/scopes/{definition}/preconditions")),
+                )],
+            )?;
+            let mut writes = vec![diagnostic];
             match runtime
                 .store
                 .record(lease.run_id(), &key(RecordFamily::Scope, id))
@@ -194,7 +210,7 @@ pub(super) async fn operate(
                 ],
             )?;
         }
-        let node_payload = replace(
+        let mut node_payload = replace(
             &record.payload,
             [
                 ("child_scope", Value::Text(id.to_string())),
@@ -211,6 +227,9 @@ pub(super) async fn operate(
                 ),
             ],
         )?;
+        if let Some(index) = iteration {
+            node_payload = replace(&node_payload, [("iteration", Value::Integer(index as i64))])?;
+        }
         let child_write = match runtime
             .store
             .record(lease.run_id(), &key(RecordFamily::Scope, id))
@@ -377,7 +396,7 @@ pub(super) async fn close_iteration(
         )
         .map_err(|_| err())
     };
-    let (next_manifest, next_error) = step::validate_selected(
+    let (next_manifest, next_error, next_errors) = step::validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
@@ -387,7 +406,7 @@ pub(super) async fn close_iteration(
         true,
     )
     .await?;
-    let (output_manifest, output_error) = step::validate_selected(
+    let (output_manifest, output_error, output_errors) = step::validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
@@ -397,6 +416,22 @@ pub(super) async fn close_iteration(
         true,
     )
     .await?;
+    writes.extend(step::validation_diagnostics(
+        runtime,
+        scope,
+        None,
+        "carried",
+        &next_errors,
+        &influence,
+    )?);
+    writes.extend(step::validation_diagnostics(
+        runtime,
+        scope,
+        None,
+        "outputs",
+        &output_errors,
+        &influence,
+    )?);
     if let Some(error) = next_error.or(output_error) {
         step::scope_failure_with(runtime, lease, scope, error, influence, writes).await?;
         return Ok(true);
@@ -466,6 +501,15 @@ pub(super) async fn close_iteration(
             }
         },
         Err(error) => {
+            writes.push(step::contract_diagnostic(
+                runtime,
+                scope,
+                None,
+                "until",
+                &RuntimeFailure::new(error.code()),
+                &influence,
+                scope.record.revision,
+            )?);
             step::scope_failure_with(
                 runtime,
                 lease,
@@ -491,6 +535,23 @@ pub(super) async fn close_iteration(
             ),
         ],
     )?;
+    let fresh = runtime
+        .store
+        .coordinator_time(runtime.clock.now_ms()?)
+        .await?;
+    if fresh >= number(&scope.record.payload, "deadline_ms")? {
+        super::control::stop(
+            runtime,
+            lease,
+            Some(&scope.id.to_string()),
+            None,
+            FailureCode::Timeout,
+            false,
+            vec![],
+        )
+        .await?;
+        return Ok(true);
+    }
     writes.push(update(&scope.record, payload, true));
     step::commit(
         runtime,

@@ -47,6 +47,7 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
         .await?;
     let mut cursor = None;
     let mut scopes = Vec::new();
+    let mut wake_at = i64::MAX;
     loop {
         let page = runtime
             .store
@@ -70,6 +71,9 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
             continue;
         }
         let id: ScopeInstanceId = record.key.id.parse().map_err(|_| err())?;
+        if let Some(Value::Integer(deadline)) = map(&record.payload)?.get("deadline_ms") {
+            wake_at = wake_at.min(*deadline);
+        }
         let executable = runtime
             .admitted(digest(&record.payload, "origin_executable")?)
             .await?;
@@ -183,6 +187,9 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
             if record.final_record {
                 continue;
             }
+            if let Some(Value::Integer(deadline)) = map(&record.payload)?.get("deadline_ms") {
+                wake_at = wake_at.min(*deadline);
+            }
             if due(&record.payload, now)? {
                 let code = super::control::node_timeout_code(&runtime, &lease, record).await?;
                 super::control::stop(
@@ -215,17 +222,28 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
     if runtime.store.run_header(lease.run_id()).await?.sequence != header.sequence {
         return Ok(Progress::Changed);
     }
+    let mut external = false;
     for wait in super::control::all(&runtime, &lease, RecordFamily::Wait).await? {
         if !wait.final_record && string(&wait.payload, "state")? == "open" {
-            return Ok(Progress::Blocked);
+            external = true;
+            wake_at = wake_at.min(number(&wait.payload, "expires_at")?);
         }
     }
     for invocation in super::control::all(&runtime, &lease, RecordFamily::Invocation).await? {
         if !invocation.final_record
             && matches!(map(&invocation.payload)?.get("retry_at"),Some(Value::Integer(due))if *due>now)
         {
-            return Ok(Progress::Blocked);
+            external = true;
+            wake_at = wake_at.min(number(&invocation.payload, "retry_at")?);
         }
+    }
+    if external {
+        let mut observations = runtime.quiescent.lock().map_err(|_| err())?;
+        if observations.len() >= 4096 && !observations.contains_key(lease.run_id()) {
+            observations.pop_first();
+        }
+        observations.insert(lease.run_id().clone(), (header.sequence, wake_at));
+        return Ok(Progress::Blocked);
     }
     Err(RuntimeError::failure(FailureCode::Invariant))
 }
@@ -654,7 +672,7 @@ async fn admit(
         AdmissionDecision::InputsReady(influence) => influence,
         _ => return Err(err()),
     };
-    let (manifest, first_error) = validate_selected(
+    let (manifest, first_error, validation_errors) = validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
@@ -665,6 +683,15 @@ async fn admit(
     )
     .await?;
     if let Some(error) = first_error {
+        let mut writes = binding_writes(scope.id, node.id().as_str(), &selected, runtime)?;
+        writes.extend(validation_diagnostics(
+            runtime,
+            scope,
+            Some(node),
+            "inputs",
+            &validation_errors,
+            &influence,
+        )?);
         finish_node(
             runtime,
             lease,
@@ -672,7 +699,7 @@ async fn admit(
             "failed",
             Some(error),
             influence,
-            binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
+            writes,
         )
         .await?;
         return Ok(true);
@@ -705,6 +732,16 @@ async fn admit(
     )?;
     let error = condition_error(&evaluated, FailureCode::Preconditions);
     if let Some(error) = error {
+        let mut writes = binding_writes(scope.id, node.id().as_str(), &selected, runtime)?;
+        writes.push(contract_diagnostic(
+            runtime,
+            scope,
+            Some(node),
+            "preconditions",
+            &error,
+            &evaluated.influence,
+            record.revision,
+        )?);
         finish_node(
             runtime,
             lease,
@@ -712,7 +749,7 @@ async fn admit(
             "failed",
             Some(error),
             evaluated.influence,
-            binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
+            writes,
         )
         .await?;
         return Ok(true);
@@ -785,10 +822,18 @@ pub(super) async fn validate_selected(
     selected: &BTreeMap<Identifier, BindingDecision>,
     influence: &SecurityLabels,
     public: bool,
-) -> Result<(Option<InputManifest>, Option<RuntimeFailure>), RuntimeError> {
+) -> Result<
+    (
+        Option<InputManifest>,
+        Option<RuntimeFailure>,
+        Vec<(Identifier, RuntimeFailure)>,
+    ),
+    RuntimeError,
+> {
     let mut entries = Vec::new();
     let mut first = None;
     let mut extra = Vec::new();
+    let mut errors = Vec::new();
     for (name, port) in ports.iter() {
         match &selected[name] {
             BindingDecision::Value {
@@ -804,16 +849,19 @@ pub(super) async fn validate_selected(
                         Some(executable.schemas()),
                         &runtime.config.limits,
                         &executable.policy().fields().evaluator_limits,
-                    ) && first.is_none()
-                    {
-                        first = Some(RuntimeFailure::new(FailureCode::for_evaluation(
+                    ) {
+                        let failure = RuntimeFailure::new(FailureCode::for_evaluation(
                             &error,
                             if public {
                                 crate::failure::FailureBoundary::Output
                             } else {
                                 crate::failure::FailureBoundary::Input
                             },
-                        )))
+                        ));
+                        if first.is_none() {
+                            first = Some(failure.clone());
+                        }
+                        errors.push((name.clone(), failure));
                     }
                     entries.push((
                         name.clone(),
@@ -826,6 +874,7 @@ pub(super) async fn validate_selected(
                     extra.push(edge_labels.clone());
                 }
                 Err(error) => {
+                    errors.push((name.clone(), RuntimeFailure::new(error.code())));
                     if first.is_none() {
                         first = Some(RuntimeFailure::new(error.code()))
                     }
@@ -841,7 +890,7 @@ pub(super) async fn validate_selected(
         }
     }
     if first.is_some() {
-        return Ok((None, first));
+        return Ok((None, first, errors));
     }
     if public
         && entries.iter().any(|(name, entry)| {
@@ -849,7 +898,11 @@ pub(super) async fn validate_selected(
                 && matches!(entry, ManifestEntry::Absent)
         })
     {
-        return Ok((None, Some(RuntimeFailure::new(FailureCode::OutputMissing))));
+        return Ok((
+            None,
+            Some(RuntimeFailure::new(FailureCode::OutputMissing)),
+            errors,
+        ));
     }
     let labels = SecurityLabels::combine(
         std::iter::once(influence).chain(extra.iter()),
@@ -863,6 +916,118 @@ pub(super) async fn validate_selected(
             &runtime.config.limits,
         )?),
         None,
+        errors,
+    ))
+}
+
+pub(super) fn contract_diagnostic(
+    runtime: &Runtime,
+    scope: &ScopeState,
+    node: Option<&Node>,
+    site: &str,
+    error: &RuntimeFailure,
+    influence: &SecurityLabels,
+    revision: i64,
+) -> Result<RecordWrite, RuntimeError> {
+    let definition = digest(&scope.record.payload, "definition_digest")?;
+    let (owner, path) = if let Some(node) = node {
+        let index = scope
+            .definition
+            .fields()
+            .nodes
+            .iter()
+            .position(|n| n.id() == node.id())
+            .ok_or_else(err)?;
+        (
+            InvocationId::new(scope.id, node.id(), &runtime.config.limits)
+                .map_err(|_| err())?
+                .to_string(),
+            format!("/scopes/{definition}/nodes/{index}/{site}"),
+        )
+    } else if site == "until" {
+        let ScopeUse::Node { scope: owner, node } = &scope.site else {
+            return Err(err());
+        };
+        let nodes = &scope.executable.document().fields().scopes[owner]
+            .fields()
+            .nodes;
+        let index = nodes.iter().position(|n| n.id() == node).ok_or_else(err)?;
+        (
+            scope.id.to_string(),
+            format!("/scopes/{owner}/nodes/{index}/operation/3"),
+        )
+    } else {
+        (scope.id.to_string(), format!("/scopes/{definition}/{site}"))
+    };
+    diagnostic(
+        runtime,
+        scope,
+        node,
+        format!("{owner}:{revision}:{site}"),
+        path,
+        error,
+        influence,
+    )
+}
+
+pub(super) fn validation_diagnostics(
+    runtime: &Runtime,
+    scope: &ScopeState,
+    node: Option<&Node>,
+    boundary: &str,
+    errors: &[(Identifier, RuntimeFailure)],
+    influence: &SecurityLabels,
+) -> Result<Vec<RecordWrite>, RuntimeError> {
+    errors
+        .iter()
+        .map(|(port, error)| {
+            contract_diagnostic(
+                runtime,
+                scope,
+                node,
+                &format!("{boundary}/{port}"),
+                error,
+                influence,
+                scope.record.revision,
+            )
+        })
+        .collect()
+}
+
+fn diagnostic(
+    runtime: &Runtime,
+    scope: &ScopeState,
+    node: Option<&Node>,
+    id: String,
+    path: String,
+    error: &RuntimeFailure,
+    influence: &SecurityLabels,
+) -> Result<RecordWrite, RuntimeError> {
+    let invocation = node
+        .map(|node| {
+            InvocationId::new(scope.id, node.id(), &runtime.config.limits).map_err(|_| err())
+        })
+        .transpose()?;
+    Ok(insert(
+        RecordFamily::Observation,
+        format!("diagnostic:{id}"),
+        object([
+            ("scope_instance_id", Value::Text(scope.id.to_string())),
+            (
+                "invocation_id",
+                invocation.map_or(Value::Null, |id| Value::Text(id.to_string())),
+            ),
+            ("canonical_path", Value::Text(path)),
+            (
+                "failure",
+                error.to_value(&runtime.config.limits).map_err(|_| err())?,
+            ),
+            (
+                "influence_labels",
+                influence.to_value(&runtime.config.limits)?,
+            ),
+        ])?,
+        true,
     ))
 }
 pub(super) fn binding_writes(
@@ -1134,7 +1299,24 @@ pub(super) async fn accept_node(
     )?;
     let influence = influence.union(&post.influence, &runtime.config.limits)?;
     if let Some(error) = condition_error(&post, FailureCode::Postconditions) {
+        let diagnostic = contract_diagnostic(
+            runtime,
+            scope,
+            Some(node),
+            "postconditions",
+            &error,
+            &influence,
+            record.revision,
+        )?;
         if matches!(node.fields().operation, Operation::Mcp { .. }) {
+            commit(
+                runtime,
+                lease,
+                format!("contract:{}:{}", record.key.id, record.revision),
+                vec![diagnostic],
+                None,
+            )
+            .await?;
             return Err(error.into());
         }
         return finish_node(
@@ -1144,7 +1326,7 @@ pub(super) async fn accept_node(
             "failed",
             Some(error),
             influence,
-            vec![],
+            vec![diagnostic],
         )
         .await;
     }
@@ -1321,7 +1503,7 @@ async fn close_scope(
             ),
         &runtime.config.limits,
     )?;
-    let (manifest, error) = validate_selected(
+    let (manifest, error, validation_errors) = validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
@@ -1331,6 +1513,14 @@ async fn close_scope(
         true,
     )
     .await?;
+    boundary_writes.extend(validation_diagnostics(
+        runtime,
+        scope,
+        None,
+        "outputs",
+        &validation_errors,
+        &influence,
+    )?);
     if let Some(error) = error {
         scope_failure_with(runtime, lease, scope, error, influence, boundary_writes).await?;
         return Ok(true);
@@ -1356,6 +1546,15 @@ async fn close_scope(
         .influence_labels()
         .union(&post.influence, &runtime.config.limits)?;
     if let Some(error) = condition_error(&post, FailureCode::Postconditions) {
+        boundary_writes.push(contract_diagnostic(
+            runtime,
+            scope,
+            None,
+            "postconditions",
+            &error,
+            &influence,
+            scope.record.revision,
+        )?);
         scope_failure_with(runtime, lease, scope, error, influence, boundary_writes).await?;
         return Ok(true);
     }
@@ -1371,6 +1570,14 @@ async fn close_scope(
         ],
     )?;
     let root = runtime.store.run_header(lease.run_id()).await?.root_scope == scope.id;
+    let fresh = runtime
+        .store
+        .coordinator_time(runtime.clock.now_ms()?)
+        .await?;
+    if due(&scope.record.payload, fresh)? {
+        stop_scope(runtime, lease, scope, FailureCode::Timeout).await?;
+        return Ok(true);
+    }
     boundary_writes.push(update(&scope.record, payload, true));
     commit(
         runtime,

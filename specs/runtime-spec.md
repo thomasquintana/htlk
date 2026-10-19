@@ -497,6 +497,14 @@ Resource notifications start new runs through trusted trigger configuration by d
 
 Remote durable jobs can use start/query/cancel tools and an explicit wait/loop graph. The runtime does not add a second MCP-task-specific execution state machine in 0.1.
 
+Approval denial and invocation failure commit atomically with the authenticated
+disposition and receipt. A later policy version or removal of the approval
+requirement cannot replace that denial or authorize another dispatch. Reply and
+approval deadline predicates are checked against the committing transaction's
+authoritative timestamp, after classification and proposal construction. The same
+rule applies to a reply combined with extension installation. Historical accepted
+receipts remain available after expiry.
+
 ## 12. Additive live extension
 
 A **join** combines two complete graphs by connecting public output ports to public input ports. **Compile-time** means while preparing and checking a graph, before executing that proposed structure. **Live extension** means adding checked work to a run that has already started and has not finished.
@@ -529,6 +537,14 @@ flowchart LR
 ```
 
 **Diagram 18 — Extending a run preserves identity.** The existing scope instance is mounted under a new parent. Its workers and artifacts remain associated with their original invocation IDs.
+
+The preserved-input mapping is explicit in the composed interface: an unconditional
+edge from a composed public input to a preserved-operand input may supply that
+public input from the corresponding frozen old manifest entry when the host omits
+it. Repeated mappings must agree. This preserves optional absence as well as typed
+content and label identities. A required input without such a mapping must be
+supplied. Supplied values are validated normally and cannot change a preserved
+input. No matching by historical names, other artifacts, or guessed values occurs.
 
 ### 12.1 Durable installation window
 
@@ -677,9 +693,14 @@ read_artifact(artifact_id) -> AuthorizedValue
 
 The caller principal comes from authenticated request context. Idempotency keys are required for mutating host operations. They are scoped by principal, method, and target; the stored request digest includes all semantic arguments. Same key with a different request yields `E_IDEMPOTENCY_CONFLICT`. Retention bounds are advertised by the host.
 
-`start_run` rejects invalid input or unsupported budget enforcement before creating work. A valid run whose root precondition fails is created and terminates failed with that evidence. `extend_run` inputs exactly match the composed root's public input declarations; no hidden old-value inference occurs.
+`start_run` rejects invalid input or unsupported budget enforcement before creating work. A valid run whose root precondition fails is created and terminates failed with that evidence. `extend_run` accepts only declared composed-root input names. Missing required inputs fail except for the explicit preserved-input mapping in section 12; optional omission remains absence unless that mapping preserves an existing entry. No other old-value inference occurs.
 
 RunView exposes active fingerprint, root scope ID, terminal/blocked status and reasons, inputs, outputs, open waits, usage, and extension history. NodeView exposes definition/operation identity, status, guard result, each candidate binding, admitted input hash, attempts, wait, loop iteration, output artifacts, and causes. GraphView exposes scope hierarchy, ports, data and guard dependencies, types, descriptors, library identities, and completion checks.
+
+Protected inspection retains canonical sites for contract expression errors and
+every actual-value destination-validation failure, including secondary failures
+that do not become the primary graph-visible error. Diagnostic evidence is not a
+successful artifact and cannot change the fixed graph-visible error record.
 
 ## 16. Stable failures
 

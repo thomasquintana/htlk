@@ -220,6 +220,25 @@ impl SqliteStore {
             if header.status.is_terminal() { return Err(StoreError::Terminal); }
             if transition.expected_fingerprint.is_some_and(|fp|fp!=header.fingerprint) { return Err(StoreError::Conflict); }
             if transition.next_status.is_some_and(|status|!header.status.can_transition_to(status)) { return Err(StoreError::Terminal); }
+            // Classification and proposal construction can cross expiry. Check
+            // acceptance in the same transaction as the wait, receipt and graph.
+            for write in &transition.writes {
+                if matches!(write.key.family, RecordFamily::Scope | RecordFamily::Invocation)
+                    && let Value::Map(record) = &write.payload
+                    && record.get("status") == Some(&Value::Text("succeeded".into()))
+                    && matches!(record.get("deadline_ms"), Some(Value::Integer(expiry)) if now >= *expiry) {
+                    return Err(StoreError::Deadline(FailureCode::Timeout));
+                }
+                if write.key.family != RecordFamily::Wait { continue; }
+                let Value::Map(wait) = &write.payload else { return Err(StoreError::Invalid); };
+                if wait.get("state") != Some(&Value::Text("accepted".into())) { continue; }
+                let Some(Value::Integer(expiry)) = wait.get("expires_at") else { return Err(StoreError::Invalid); };
+                if now >= *expiry {
+                    return Err(StoreError::Deadline(if wait.get("purpose") == Some(&Value::Text("approval".into())) {
+                        FailureCode::ApprovalDenied
+                    } else { FailureCode::WaitExpired }));
+                }
+            }
             for (write,payload) in transition.writes.iter().zip(&writes) {
                 artifacts::check_artifact_write(&tx,&lease.run_id,write,&limits)?;
                 let old=tx.query_row("SELECT revision,final FROM records WHERE run_id=?1 AND family=?2 AND record_id=?3",params![lease.run_id.as_str(),write.key.family.as_str(),write.key.id],|r| Ok((r.get::<_,i64>(0)?,r.get::<_,bool>(1)?))).optional()?;

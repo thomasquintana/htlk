@@ -159,6 +159,50 @@ fn dynamic_reference_rebinding_is_performed_by_the_native_validator() {
 }
 
 #[test]
+fn nonconsuming_recursive_schemas_are_checked_in_an_isolated_process() {
+    const CHILD: &str = "HTLK_SCHEMA_RECURSION_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let l = Limits::default();
+        for source in [
+            r##"{"$ref":"#"}"##,
+            r##"{"allOf":[{"$ref":"#"}]}"##,
+            r##"{"$defs":{"a":{"$ref":"#/$defs/b"},"b":{"$ref":"#/$defs/a"}},"$ref":"#/$defs/a"}"##,
+        ] {
+            let catalog = C::new(vec![("https://e.test/root".into(), j(source))], &l).unwrap();
+            if let Ok(native) = N::compile(&catalog, O::default(), &l) {
+                let _ = native.validate("https://e.test/root", &j("{}"), &l);
+            }
+        }
+        return;
+    }
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "nonconsuming_recursive_schemas_are_checked_in_an_isolated_process",
+        ])
+        .env(CHILD, "1")
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(
+                status.success(),
+                "native recursive-schema child failed: {status}"
+            );
+            break;
+        }
+        if std::time::Instant::now() >= until {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("native recursive-schema child exceeded its watchdog");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn format_is_annotation_and_unsupported_vocabulary_or_patterns_fail_compilation() {
     let l = Limits::default();
     let n = compile(r#"{"type":"string","format":"email"}"#);
