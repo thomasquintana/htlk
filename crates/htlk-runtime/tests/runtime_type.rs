@@ -50,6 +50,171 @@ fn project(value: &Value, t: &T, fields: &[&str]) -> Result<EvaluationValue, Err
     )?
     .value)
 }
+
+#[test]
+fn native_type_value_cartesian_product_has_no_coercion_or_container_shape_shortcuts() {
+    let l = Limits::default();
+    let values = [
+        Value::Null,
+        Value::Bool(false),
+        Value::Integer(-1),
+        Value::Integer(9007199254740993),
+        Value::Float(htlk_cbor::FiniteFloat::new(1.5).unwrap()),
+        Value::Text("yes".into()),
+        Value::Text("no".into()),
+        Value::Bytes(vec![0, 255]),
+        Value::Array(vec![]),
+        Value::Array(vec![Value::Integer(1)]),
+        Value::Array(vec![Value::Bool(false)]),
+        map(vec![]),
+        map(vec![("x", Value::Integer(1))]),
+        map(vec![("x", Value::Bool(false))]),
+    ];
+    for value in &values {
+        for primitive in [
+            P::Null,
+            P::Boolean,
+            P::Integer,
+            P::Float,
+            P::String,
+            P::Bytes,
+            P::Json,
+        ] {
+            let expected = match primitive {
+                P::Null => matches!(value, Value::Null),
+                P::Boolean => matches!(value, Value::Bool(_)),
+                P::Integer => matches!(value, Value::Integer(_)),
+                P::Float => matches!(value, Value::Float(_)),
+                P::String => matches!(value, Value::Text(_)),
+                P::Bytes => matches!(value, Value::Bytes(_)),
+                P::Json => !matches!(value, Value::Bytes(_) | Value::Integer(9007199254740993)),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                validate_typed_value(value, &T::builtin(primitive), None, &l, &policy()).is_ok(),
+                expected,
+                "{primitive:?} {value:?}"
+            );
+        }
+        for (shape, expected) in [
+            (
+                ty(K::List(Box::new(T::builtin(P::Integer)))),
+                matches!(value,Value::Array(items)if items.iter().all(|v|matches!(v,Value::Integer(_)))),
+            ),
+            (
+                ty(K::Map(Box::new(T::builtin(P::Integer)))),
+                matches!(value,Value::Map(items)if items.iter().all(|(_,v)|matches!(v,Value::Integer(_)))),
+            ),
+            (
+                record(vec![("x", T::builtin(P::Integer), true)]),
+                matches!(value,Value::Map(items)if matches!(items.get("x"),Some(Value::Integer(_)))),
+            ),
+            (
+                ty(K::Enum(vec!["yes".into()])),
+                value == &Value::Text("yes".into()),
+            ),
+            (
+                ty(K::Union(vec![T::builtin(P::Boolean), T::builtin(P::Null)])),
+                matches!(value, Value::Bool(_) | Value::Null),
+            ),
+        ] {
+            assert_eq!(
+                validate_typed_value(value, &shape, None, &l, &policy()).is_ok(),
+                expected,
+                "{shape:?} {value:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn regex_protocol_shapes_and_projection_steps_preserve_operational_limit_errors() {
+    let l = Limits::default();
+    for value in [
+        Value::Null,
+        map(vec![]),
+        map(vec![
+            ("pattern", Value::Integer(1)),
+            ("flags", Value::Text("".into())),
+        ]),
+        map(vec![
+            ("pattern", Value::Text("a".into())),
+            ("flags", Value::Text("".into())),
+            ("extra", Value::Null),
+        ]),
+        map(vec![
+            ("pattern", Value::Text("[".into())),
+            ("flags", Value::Text("".into())),
+        ]),
+    ] {
+        assert_eq!(
+            validate_typed_value(&value, &T::builtin(P::Regex), None, &l, &policy()),
+            Err(Error::OperandType)
+        );
+    }
+    let regex = map(vec![
+        ("pattern", Value::Text("[a-z]{100}".into())),
+        ("flags", Value::Text("".into())),
+    ]);
+    let mut small = policy();
+    small.max_regex_compiled_bytes = 1;
+    assert!(matches!(
+        validate_typed_value(&regex, &T::builtin(P::Regex), None, &l, &small),
+        Err(Error::Limit(_))
+    ));
+    for primitive in [P::McpResourceResult, P::McpPromptResult] {
+        for value in [Value::Null, Value::Bytes(vec![]), map(vec![])] {
+            assert!(
+                validate_typed_value(&value, &T::builtin(primitive), None, &l, &policy()).is_err()
+            );
+        }
+    }
+    let array = Value::Array(vec![Value::Integer(7)]);
+    let list = ty(K::List(Box::new(T::builtin(P::Integer))));
+    for value_type in [&list, &T::builtin(P::Json)] {
+        for path in [
+            vec![PathStep::Index(0)],
+            vec![PathStep::Index(1)],
+            vec![PathStep::Index(u64::MAX)],
+            vec![PathStep::Field("x".into())],
+        ] {
+            let actual = project_typed_value(&array, value_type, &path, None, &l, &policy());
+            assert_eq!(actual.is_ok(), path == [PathStep::Index(0)]);
+        }
+    }
+    let object = map(vec![("x", Value::Integer(7))]);
+    let dictionary = ty(K::Map(Box::new(T::builtin(P::Integer))));
+    for value_type in [&dictionary, &T::builtin(P::Json)] {
+        for path in [
+            vec![PathStep::Field("x".into())],
+            vec![PathStep::Field("missing".into())],
+            vec![PathStep::Index(0)],
+        ] {
+            let actual = project_typed_value(&object, value_type, &path, None, &l, &policy());
+            assert_eq!(actual.is_ok(), path == [PathStep::Field("x".into())]);
+        }
+    }
+    assert!(
+        project_typed_value(
+            &Value::Integer(7),
+            &T::builtin(P::Integer),
+            &[PathStep::Field("x".into())],
+            None,
+            &l,
+            &policy()
+        )
+        .is_err()
+    );
+    let schema = ty(K::Schema(htlk_executable::digest::Digest::from_bytes(
+        [0; 32],
+    )));
+    assert_eq!(
+        project_typed_value(&Value::Null, &schema, &[], None, &l, &policy()).unwrap_err(),
+        Error::UnresolvedType
+    );
+    let signature = T::new(K::Var("t".parse().unwrap()), TypeContext::Signature, &l).unwrap();
+    assert!(validate_typed_value(&Value::Null, &signature, None, &l, &policy()).is_err());
+}
 #[test]
 fn optional_fields_extra_members_and_null_are_distinct() {
     let t = record(vec![("optional", T::builtin(P::Integer), false)]);

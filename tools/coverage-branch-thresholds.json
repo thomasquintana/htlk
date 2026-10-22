@@ -1,0 +1,7 @@
+{
+  "htlk-analyzer": { "lines": 91.7, "branches": 80.7 },
+  "htlk-compiler": { "lines": 93.1, "branches": 87.3 },
+  "htlk-executable": { "lines": 98.1, "branches": 95.8 },
+  "htlk-runtime": { "lines": 89, "branches": 69.8 },
+  "htlk": { "lines": 100, "branches": 100 }
+}

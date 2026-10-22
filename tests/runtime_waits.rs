@@ -263,3 +263,110 @@ fn cancellation_closes_waits_and_expiry_is_not_an_approval_or_success() {
         engine.shutdown().await.unwrap();
     })
 }
+
+#[test]
+fn accepted_waits_return_the_same_disposition_under_fresh_keys_and_reject_changed_values() {
+    actix::System::new().block_on(async {
+        let (runtime, engine, clock, run, store) = setup().await;
+        let wait = open(&runtime, &run).await;
+        assert_eq!(
+            runtime
+                .submit_approval(
+                    &context("alice"),
+                    wait,
+                    Digest::from_bytes([0; 32]),
+                    true,
+                    "wrong-kind"
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            FailureCode::Policy
+        );
+        let accepted = runtime
+            .submit_reply(
+                &context("alice"),
+                wait,
+                Value::Text("answer".into()),
+                "first",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .submit_reply(
+                    &context("alice"),
+                    wait,
+                    Value::Text("answer".into()),
+                    "fresh-key"
+                )
+                .await
+                .unwrap(),
+            accepted
+        );
+        assert_eq!(
+            runtime
+                .submit_reply(
+                    &context("alice"),
+                    wait,
+                    Value::Text("changed".into()),
+                    "changed-key"
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            FailureCode::IdempotencyConflict
+        );
+        assert_eq!(terminal(&runtime, &run).await, RunStatus::Succeeded);
+        let terminal_header = store.run_header(&run).await.unwrap();
+        clock.0.store(9000, Ordering::SeqCst);
+        assert_eq!(
+            runtime
+                .submit_reply(
+                    &context("alice"),
+                    wait,
+                    Value::Text("answer".into()),
+                    "terminal-fresh-key"
+                )
+                .await
+                .unwrap(),
+            accepted
+        );
+        assert_eq!(
+            runtime
+                .submit_reply(
+                    &context("alice"),
+                    wait,
+                    Value::Text("changed".into()),
+                    "terminal-changed-key"
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            FailureCode::IdempotencyConflict
+        );
+        let after = store.run_header(&run).await.unwrap();
+        assert_eq!(after.status, terminal_header.status);
+        assert_eq!(after.root_scope, terminal_header.root_scope);
+        assert_eq!(after.fingerprint, terminal_header.fingerprint);
+        engine.shutdown().await.unwrap();
+        let (runtime, engine, clock, run, _) = setup().await;
+        let wait = open(&runtime, &run).await;
+        clock.0.store(1500, Ordering::SeqCst);
+        assert_eq!(terminal(&runtime, &run).await, RunStatus::Failed);
+        assert_eq!(
+            runtime
+                .submit_reply(
+                    &context("alice"),
+                    wait,
+                    Value::Text("late".into()),
+                    "expired-reply"
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            FailureCode::WaitExpired
+        );
+        engine.shutdown().await.unwrap();
+    });
+}

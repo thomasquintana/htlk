@@ -20,6 +20,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  coverage:
+    name: Coverage and deep tests
+    uses: ./.github/workflows/coverage.yml
+
   validate:
     name: Validate release and build docs
     runs-on: ubuntu-latest
@@ -112,7 +116,7 @@ jobs:
 
   publish:
     name: Publish crates
-    needs: validate
+    needs: [validate, coverage]
     if: github.ref_type == 'tag' && (github.event_name == 'push' || !inputs.dry_run)
     runs-on: ubuntu-latest
     timeout-minutes: 30

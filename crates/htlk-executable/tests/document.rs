@@ -95,6 +95,126 @@ fn policy_is_exact_jcs_with_closed_positive_fields_and_required_defaults() {
         );
     }
 }
+
+#[test]
+fn policy_fields_have_independent_positive_ranges_closed_shapes_and_source_chains() {
+    use std::error::Error as _;
+    let l = Limits::default();
+    let policy = PolicyDocument::new(policy_fields(), &l).unwrap();
+    for kind in 0..9 {
+        for number in [0, u64::MAX] {
+            let mut fields = policy_fields();
+            let e = &mut fields.evaluator_limits;
+            match kind {
+                0 => e.max_expression_depth = number,
+                1 => e.max_value_bytes = number,
+                2 => e.max_collection_visits = number,
+                3 => e.max_regex_bytes = number,
+                4 => e.max_regex_compiled_bytes = number,
+                5 => e.max_output_bytes = number,
+                6 => e.max_steps = number,
+                7 => fields.maximum_scope_depth = number,
+                _ => fields.maximum_expanded_nodes = number,
+            }
+            let error = PolicyDocument::new(fields, &l).unwrap_err();
+            assert!(matches!(error, PolicyError::InvalidPositive(_)));
+            assert!(!error.to_string().is_empty());
+            assert!(error.source().is_none());
+        }
+    }
+    let Value::Map(fields) = policy.document().value() else {
+        panic!()
+    };
+    for (key, _) in fields.iter() {
+        let missing = replace(policy.document().value(), key, None);
+        let document = JsonDocument::from_value(&missing, &l).unwrap();
+        assert!(matches!(
+            PolicyDocument::from_document(document, &l),
+            Err(PolicyError::MissingField(_))
+        ));
+    }
+    let Value::Map(evaluator) = fields.get("evaluator_limits").unwrap() else {
+        panic!()
+    };
+    for (key, _) in evaluator.iter() {
+        for replacement in [
+            None,
+            Some(Value::Null),
+            Some(Value::Integer(-1)),
+            Some(Value::Float(cbor::FiniteFloat::new(1.5).unwrap())),
+        ] {
+            let changed = replace(fields.get("evaluator_limits").unwrap(), key, replacement);
+            let document = JsonDocument::from_value(
+                &replace(policy.document().value(), "evaluator_limits", Some(changed)),
+                &l,
+            )
+            .unwrap();
+            assert!(
+                PolicyDocument::from_document(document, &l).is_err(),
+                "{key}"
+            );
+        }
+    }
+    for changed in [
+        Value::Null,
+        replace(policy.document().value(), "cost_unit", Some(Value::Null)),
+        replace(
+            policy.document().value(),
+            "evaluator_limits",
+            Some(Value::Null),
+        ),
+        replace(
+            policy.document().value(),
+            "defaults",
+            Some(Value::Bool(false)),
+        ),
+    ] {
+        let error =
+            PolicyDocument::from_document(JsonDocument::from_value(&changed, &l).unwrap(), &l)
+                .unwrap_err();
+        assert!(!error.to_string().is_empty());
+        assert_eq!(
+            error.source().is_some(),
+            matches!(error, PolicyError::Json(_) | PolicyError::Options(_))
+        );
+    }
+    let json_error = PolicyDocument::decode(b"{", &l).unwrap_err();
+    assert!(json_error.source().is_some());
+    assert!(!json_error.to_string().is_empty());
+    let mut tight = l.clone();
+    tight.max_document_bytes = 1;
+    assert!(PolicyDocument::from_document(policy.document().clone(), &tight).is_err());
+}
+
+#[test]
+fn document_stage_errors_preserve_typed_causes_and_safe_display() {
+    use std::error::Error as _;
+    let l = Limits::default();
+    let errors = [
+        Error::from(cbor::decode(&[], &l).unwrap_err()),
+        Error::from(EnvelopeError::FingerprintMismatch),
+        Error::from(GraphRecordError::InvalidScopeRole),
+        Error::from(MetadataError::UnknownField("metadata")),
+        Error::from(ExpressionError::UnknownConstructor),
+        Error::from(TypeError::UnknownPortField),
+        Error::from("bad".parse::<Digest>().unwrap_err()),
+        Error::from(JsonDocument::new(b"{", &l).unwrap_err()),
+    ];
+    for error in errors {
+        assert!(error.source().is_some(), "{error:?}");
+        assert!(error.to_string().starts_with("canonical document error:"));
+    }
+    for error in [
+        Error::UnknownField,
+        Error::UnsupportedVersion,
+        Error::InvalidGraphId,
+        Error::InvalidSchemaUri,
+        Error::AllocationFailed,
+    ] {
+        assert!(error.source().is_none());
+        assert!(!error.to_string().is_empty());
+    }
+}
 #[test]
 fn document_and_envelope_round_trip_with_strict_field_shapes() {
     let l = Limits::default();

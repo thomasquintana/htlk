@@ -1398,3 +1398,1061 @@ fn import_depth_and_missing_dependency_locations_are_checked() {
     };
     assert_eq!(p, &format!("/packages/{pin}/manifest/dependencies/missing"));
 }
+
+#[test]
+fn complete_bundle_json_ingress_validates_closed_shapes_versions_and_pins() {
+    let l = Limits::default();
+    let source = r#"ir_version=\"0.1\" graph test.empty{inputs={}outputs={}nodes{}edges{}}"#;
+    let pin = Digest::from_bytes([7; 32]);
+    let json = format!(
+        r#"{{"format":"htlk_source_bundle","format_version":"0.1","entry":{{"package_digest":"{pin}","module_path":"main"}},"packages":{{"{pin}":{{"manifest":{{"manifest_version":"0.1","package_name":"test.app","package_version":"1","modules":{{"main":"src/main.htlk"}},"dependencies":{{"shared":"{pin}"}}}},"sources":{{"src/main.htlk":"{source}"}}}}}}}}"#
+    );
+    let bundle = SourceBundle::from_json(json.as_bytes(), &l).unwrap();
+    assert_eq!(bundle.entry.package_digest, pin);
+    assert_eq!(bundle.packages[&pin].manifest.dependencies["shared"], pin);
+    for invalid in [
+        "null".to_owned(),
+        json.replace("htlk_source_bundle", "other"),
+        json.replace("\"format_version\":\"0.1\"", "\"format_version\":\"9\""),
+        json.replace("\"manifest_version\":\"0.1\"", "\"manifest_version\":\"9\""),
+        json.replace("\"module_path\":\"main\"", "\"module_path\":17"),
+        json.replace("\"main\":\"src/main.htlk\"", "\"main\":false"),
+        json.replace(
+            "\"package_digest\":",
+            "\"unexpected\":0,\"package_digest\":",
+        ),
+        json.replace(
+            &format!("\"package_digest\":\"{pin}\""),
+            "\"package_digest\":\"invalid\"",
+        ),
+        json.replace(&format!("\"shared\":\"{pin}\""), "\"shared\":\"invalid\""),
+        json.replace(
+            &format!("\"packages\":{{\"{pin}\""),
+            "\"packages\":{\"invalid\"",
+        ),
+        json.replace(
+            &format!("\"src/main.htlk\":\"{source}\""),
+            "\"src/main.htlk\":false",
+        ),
+    ] {
+        let failure = SourceBundle::from_json(invalid.as_bytes(), &l).unwrap_err();
+        assert!(
+            matches!(
+                failure.diagnostics[0].location,
+                DiagnosticLocation::SourceBundlePath(_)
+            ),
+            "{failure:?}"
+        );
+        assert!(!failure.to_string().is_empty());
+    }
+    let (compiler, _) = compiler();
+    assert_eq!(
+        compiler
+            .compile_bundle(&bundle, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_PACKAGE_PIN"
+    );
+}
+
+#[test]
+fn typed_snapshots_enforce_every_manifest_and_dependency_boundary() {
+    let (base, _) = compiler();
+    let main = r#"ir_version="0.1" graph test.empty{inputs={}outputs={}nodes{}edges{}}"#;
+    let original = bundle_with_sources(&[("main", main)]);
+    for kind in 0..10 {
+        let mut package = original.packages.values().next().unwrap().clone();
+        match kind {
+            0 => package.manifest.package_name = "BadName".into(),
+            1 => package.manifest.package_version.clear(),
+            2 => package.manifest.modules.clear(),
+            3 => {
+                package
+                    .manifest
+                    .modules
+                    .insert("second".into(), "src/main.htlk".into());
+                package.sources.insert("src/extra.htlk".into(), main.into());
+            }
+            4 => {
+                package
+                    .manifest
+                    .modules
+                    .insert("main".into(), "src/missing.htlk".into());
+            }
+            5 => {
+                package.manifest.modules =
+                    BTreeMap::from([("../main".into(), "src/main.htlk".into())]);
+            }
+            6 => {
+                package
+                    .manifest
+                    .dependencies
+                    .insert("self".into(), Digest::from_bytes([9; 32]));
+            }
+            7 => {
+                package
+                    .manifest
+                    .dependencies
+                    .insert("bad-alias".into(), Digest::from_bytes([9; 32]));
+            }
+            8 => {
+                package
+                    .manifest
+                    .dependencies
+                    .insert("missing".into(), Digest::from_bytes([9; 32]));
+            }
+            _ => {
+                package
+                    .sources
+                    .insert("src/main.htlk".into(), "ir_version=\"9\"".into());
+            }
+        }
+        let pin = package.digest(&Limits::default()).unwrap();
+        let bundle = SourceBundle {
+            entry: ModuleRef {
+                package_digest: pin,
+                module_path: "main".into(),
+            },
+            packages: BTreeMap::from([(pin, package)]),
+        };
+        assert!(
+            base.compile_bundle(&bundle, &catalogs()).is_err(),
+            "case {kind}"
+        );
+    }
+    let mut missing = original.clone();
+    missing.entry.package_digest = Digest::from_bytes([9; 32]);
+    assert_eq!(
+        base.compile_bundle(&missing, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_PACKAGE_PIN"
+    );
+    let mut missing = original.clone();
+    missing.entry.module_path = "missing".into();
+    assert_eq!(
+        base.compile_bundle(&missing, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_IMPORT"
+    );
+    let mut extra = original.clone();
+    let mut package = extra.packages.values().next().unwrap().clone();
+    package.manifest.package_name = "unused.package".into();
+    extra
+        .packages
+        .insert(package.digest(&Limits::default()).unwrap(), package);
+    assert_eq!(
+        base.compile_bundle(&extra, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SOURCE_BUNDLE"
+    );
+    for kind in 0..4 {
+        let mut config = base.config().clone();
+        match kind {
+            0 => config.frontend.max_packages = 1,
+            1 => config.frontend.max_modules = 1,
+            2 => config.frontend.max_source_bytes = 1,
+            _ => config.frontend.max_depth = 1,
+        }
+        let bounded = Compiler::new(config).unwrap();
+        let bundle = if kind == 0 {
+            extra.clone()
+        } else if kind == 1 {
+            bundle_with_sources(&[("main", main), ("other", "ir_version=\"0.1\"")])
+        } else if kind == 3 {
+            let mut app = original.packages.values().next().unwrap().clone();
+            let dependency = app.clone();
+            let pin = dependency.digest(&Limits::default()).unwrap();
+            app.manifest.dependencies.insert("shared".into(), pin);
+            let root = app.digest(&Limits::default()).unwrap();
+            SourceBundle {
+                entry: ModuleRef {
+                    package_digest: root,
+                    module_path: "main".into(),
+                },
+                packages: BTreeMap::from([(root, app), (pin, dependency)]),
+            }
+        } else {
+            original.clone()
+        };
+        assert_eq!(
+            bounded
+                .compile_bundle(&bundle, &catalogs())
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_SOURCE_LIMIT",
+            "case {kind}"
+        );
+    }
+    let tiny = Limits {
+        max_document_bytes: 8,
+        ..Limits::default()
+    };
+    assert_eq!(
+        original
+            .packages
+            .values()
+            .next()
+            .unwrap()
+            .digest(&tiny)
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SOURCE_LIMIT"
+    );
+}
+
+#[test]
+fn public_interfaces_include_all_export_kinds_and_enforce_requested_report_bounds() {
+    let (base, _) = compiler();
+    let bundle = bundle_with_sources(&[
+        (
+            "main",
+            r#"ir_version="0.1" graph test.empty{inputs={}outputs={}nodes{}edges{}}"#,
+        ),
+        (
+            "library",
+            r#"ir_version="0.1" export type Value=string export prompt greeting(name=Value)="Hello {name}" export task echo{description="Public task"inputs={value=Value}outputs={value=Value}nodes{}edges{edge value{from=inputs.value to=outputs.value}}preconditions=true postconditions=true limits{timeout_ms=100}}"#,
+        ),
+    ]);
+    let module = ModuleRef {
+        package_digest: bundle.entry.package_digest,
+        module_path: "library".into(),
+    };
+    let symbols = vec!["greeting".into(), "Value".into(), "echo".into()];
+    let report = base
+        .inspect_module(&bundle, &module, &symbols, &catalogs())
+        .unwrap();
+    assert_eq!(report.interface_version, "0.1");
+    assert_eq!(report.module, module);
+    assert_eq!(report.profile, base.config().profile);
+    assert_eq!(
+        report
+            .available_exports
+            .iter()
+            .map(|e| e.kind)
+            .collect::<Vec<_>>(),
+        [ExportKind::Type, ExportKind::Task, ExportKind::Prompt]
+    );
+    assert!(
+        matches!(&report.exports[0],ExportSummary::Type{name,value_type}if name=="Value"&&*value_type==ValueType::builtin(BuiltinType::String))
+    );
+    assert!(
+        matches!(&report.exports[1],ExportSummary::Task{description,limits,..}if description=="Public task"&&limits.timeout_ms()==Some(100))
+    );
+    assert!(
+        matches!(&report.exports[2],ExportSummary::Prompt{parameters,..}if parameters.len()==1&&parameters[0].0.as_str()=="name")
+    );
+    assert_eq!(
+        base.inspect_module(
+            &bundle,
+            &module,
+            &["echo".into(), "echo".into()],
+            &catalogs()
+        )
+        .unwrap_err()
+        .diagnostics[0]
+            .code,
+        "C_DUPLICATE"
+    );
+    for missing in [
+        ModuleRef {
+            package_digest: Digest::from_bytes([0; 32]),
+            module_path: "library".into(),
+        },
+        ModuleRef {
+            module_path: "missing".into(),
+            ..module.clone()
+        },
+    ] {
+        assert!(
+            base.inspect_module(&bundle, &missing, &[], &catalogs())
+                .is_err()
+        );
+    }
+    let mut config = base.config().clone();
+    config.frontend.max_report_bytes = 1;
+    assert_eq!(
+        Compiler::new(config)
+            .unwrap()
+            .inspect_module(&bundle, &module, &symbols, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SOURCE_LIMIT"
+    );
+}
+
+#[test]
+fn join_json_round_trips_complete_requests_and_rejects_each_malformed_component() {
+    let (compiler, _) = compiler();
+    let operand = pass(&compiler, false);
+    let json = r#"{"id":"test.joined","left_alias":"left","right_alias":"right","edges":[{"id":"pipe","from":{"graph":"left","port":"value"},"to":{"graph":"right","port":"value"}}],"inputs":[{"name":"value","to":[{"graph":"left","port":"value"}]}],"outputs":[{"name":"value","from":{"graph":"right","port":"value"}}]}"#;
+    let join = JoinSpec::from_json(json.as_bytes(), &Limits::default()).unwrap();
+    assert_eq!(
+        compiler
+            .join_graphs(&operand, &operand, &join, &catalogs())
+            .unwrap()
+            .executable_bytes,
+        compiler
+            .join_graphs(&operand, &operand, &chain_join(), &catalogs())
+            .unwrap()
+            .executable_bytes
+    );
+    for invalid in [
+        "{".to_owned(),
+        "[]".into(),
+        json.replace("\"left\"", "\"third\""),
+        json.replace("\"port\":\"value\"", "\"port\":null"),
+        json.replace("\"graph\":", "\"extra\":1,\"graph\":"),
+        json.replace("\"edges\":[", "\"edges\":false,\"unused\":["),
+        json.replace("\"inputs\":[", "\"inputs\":null,\"unused\":["),
+        json.replace("\"outputs\":[", "\"outputs\":{},\"unused\":["),
+    ] {
+        assert_eq!(
+            JoinSpec::from_json(invalid.as_bytes(), &Limits::default())
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_JOIN",
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn join_rejects_every_invalid_public_binding_and_preserves_operand_error_context() {
+    let (base, _) = compiler();
+    let operand = pass(&base, false);
+    for kind in 0..13 {
+        let mut join = chain_join();
+        match kind {
+            0 => join.right_alias = join.left_alias.clone(),
+            1 => join.left_alias = "bad-name".into(),
+            2 => join.edges[0].to.graph = JoinOperand::Left,
+            3 => join.edges[0].from.port = "missing".into(),
+            4 => join.edges[0].to.port = "missing".into(),
+            5 => join.edges.push(join.edges[0].clone()),
+            6 => join.inputs.push(join.inputs[0].clone()),
+            7 => join.inputs[0].to.clear(),
+            8 => join.inputs.clear(),
+            9 => join.outputs.push(join.outputs[0].clone()),
+            10 => join.outputs[0].from.port = "missing".into(),
+            11 => join.edges[0].id = "join_out_0".into(),
+            _ => join.inputs[0].name = "bad-name".into(),
+        }
+        assert_eq!(
+            base.join_graphs(&operand, &operand, &join, &catalogs())
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_JOIN",
+            "case {kind}"
+        );
+    }
+    let integer=base.compile_source(r#"ir_version="0.1"graph test.integer{inputs={value=integer}outputs={value=integer}nodes{}edges{edge value{from=inputs.value to=outputs.value}}}"#,&catalogs()).unwrap().canonical_document;
+    let mut fanout = chain_join();
+    fanout.edges.clear();
+    fanout.inputs[0].to.push(JoinEndpoint {
+        graph: JoinOperand::Right,
+        port: "value".into(),
+    });
+    assert_eq!(
+        base.join_graphs(&operand, &integer, &fanout, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_JOIN"
+    );
+    for kind in 0..2 {
+        let mut config = base.config().clone();
+        if kind == 0 {
+            config.frontend.max_intermediate_bytes = 1
+        } else {
+            config.frontend.max_work = 1
+        }
+        assert_eq!(
+            Compiler::new(config)
+                .unwrap()
+                .join_graphs(&operand, &operand, &chain_join(), &catalogs())
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_SOURCE_LIMIT"
+        );
+    }
+    let mut fields = operand.fields().clone();
+    fields.documents.clear();
+    let invalid = CanonicalDocument::new(fields, &Limits::default()).unwrap();
+    for (left, right, label) in [
+        (&invalid, &operand, "left operand:"),
+        (&operand, &invalid, "right operand:"),
+    ] {
+        assert!(
+            base.join_graphs(left, right, &chain_join(), &catalogs())
+                .unwrap_err()
+                .diagnostics[0]
+                .message
+                .starts_with(label)
+        );
+    }
+    let mut cyclic = chain_join();
+    cyclic.inputs.clear();
+    cyclic.edges.push(JoinEdge {
+        id: "back".into(),
+        from: JoinEndpoint {
+            graph: JoinOperand::Right,
+            port: "value".into(),
+        },
+        to: JoinEndpoint {
+            graph: JoinOperand::Left,
+            port: "value".into(),
+        },
+    });
+    let error = base
+        .join_graphs(&operand, &operand, &cyclic, &catalogs())
+        .unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "C_DEPENDENCY_CYCLE");
+    assert!(error.diagnostics[0].message.starts_with("composed result:"));
+}
+
+#[test]
+fn compiler_configuration_rejects_each_zero_ceiling_and_mismatched_identity() {
+    let (base, document) = compiler();
+    for kind in 0..11 {
+        let mut config = base.config().clone();
+        match kind {
+            0 => config.frontend.max_source_bytes = 0,
+            1 => config.frontend.max_packages = 0,
+            2 => config.frontend.max_modules = 0,
+            3 => config.frontend.max_depth = 0,
+            4 => config.frontend.max_tokens = 0,
+            5 => config.frontend.max_report_bytes = 0,
+            6 => config.frontend.max_work = 0,
+            7 => config.frontend.max_intermediate_bytes = 0,
+            8 => config.schema_options.max_pattern_bytes = 0,
+            9 => config.schema_options.max_regex_compiled_bytes = 0,
+            _ => config.frontend.max_depth = 129,
+        }
+        assert_eq!(
+            Compiler::new(config).err().unwrap().diagnostics[0].code,
+            "C_POLICY",
+            "case {kind}"
+        );
+    }
+    let mut config = base.config().clone();
+    config.limits.max_depth = 129;
+    assert_eq!(
+        Compiler::new(config).err().unwrap().diagnostics[0].code,
+        "C_POLICY"
+    );
+    let mut config = base.config().clone();
+    let p = &config.profile;
+    config.profile = ExecutionProfile::new(
+        p.core_digest(),
+        p.regex_engine().clone(),
+        p.schema_validator().clone(),
+        p.uri_template_engine().clone(),
+        Digest::from_bytes([9; 32]),
+        &config.limits,
+    )
+    .unwrap();
+    assert_eq!(
+        Compiler::new(config).err().unwrap().diagnostics[0].code,
+        "C_POLICY"
+    );
+    let output = base.compile_ir(document, &catalogs()).unwrap();
+    assert!(format!("{output:?}").contains("CompilationSuccess"));
+}
+
+#[test]
+fn lexical_and_grammar_failures_are_located_at_valid_original_utf8_boundaries() {
+    let (compiler, _) = compiler();
+    let empty = "graph test.empty{inputs={}outputs={}nodes{}edges{}}";
+    for declaration in [
+        "type lower=string",
+        "type Error=string",
+        "type Bad_Name=string",
+        "type inputs.Value=string",
+        "task inputs{}",
+        "type X=string type X=integer",
+        "prompt p=\"{unterminated\"",
+        "prompt p=\"unescaped }\"",
+        "prompt p=\"{bad-name}\"",
+        "prompt p(a=string,a=string)=\"{a}\"",
+        "prompt p(a=bytes)=\"{a}\"",
+        "export graph test.export{inputs={}outputs={}nodes{}edges{}}",
+        "predicate_library lib=predicates.library(\"id\"){version=\"1\"}",
+        "predicate_library lib=predicates.library(\"id\"){digest=\"bad\"}",
+        "predicate_library lib=predicates.library(\"id\"){version=\"1\" digest=\"bad\"}",
+        "predicate_library lib=predicates.library(\"id\"){version=\"1\" version=\"2\" digest=\"bad\"}",
+        "export predicate_library lib=predicates.library(\"id\"){version=\"1\" digest=\"bad\"}",
+        "unknown declaration=string",
+        "import BadAlias from \"self/lib\"",
+        "prompt p=\"\\q\"",
+        "prompt p=\"\\uZZZZ\"",
+        "prompt p=\"\\uDC00\"",
+        "prompt p=\"\\uD800x\"",
+    ] {
+        let source = format!("ir_version=\"0.1\" -- café 🦀\n{declaration}\n{empty}");
+        let error = compiler.compile_source(&source, &catalogs()).unwrap_err();
+        for diagnostic in &error.diagnostics {
+            if let DiagnosticLocation::SourceSpan(s) = &diagnostic.location {
+                assert!(s.start_byte <= s.end_byte && s.end_byte <= source.len());
+                assert!(
+                    source.is_char_boundary(s.start_byte) && source.is_char_boundary(s.end_byte)
+                );
+            }
+        }
+        assert!(!error.to_string().is_empty(), "{declaration}");
+    }
+    for source in [
+        "",
+        "ir_version=\"9\"",
+        "ir_version=\"0.1\" graph",
+        "ir_version=\"0.1\" @",
+        "ir_version=\"0.1\" prompt p=\"line\ninvalid\"",
+        "ir_version=\"0.1\" prompt p=\"\\uD800\\u0041\"",
+    ] {
+        assert!(
+            compiler.compile_source(source, &catalogs()).is_err(),
+            "{source:?}"
+        );
+    }
+    let source = r#"ir_version="0.1"prompt p="\b\f\n\r\t\/\\\"\uD83E\uDD80" graph test.literal{inputs={}outputs={value=string}nodes{n=eval(string,render(&p,{}))}edges{edge value{from=n.outputs.value to=outputs.value}}}"#;
+    compiler.compile_source(source, &catalogs()).unwrap();
+}
+
+#[test]
+fn expression_operation_and_scope_error_matrix_rejects_without_partial_artifacts() {
+    let (compiler, _) = compiler();
+    for expression in [
+        "@n",
+        "&length",
+        "&unknown",
+        "unknown.value",
+        "status(1)",
+        "status(@n, @n)",
+        "error()",
+        "render(1,{})",
+        "render(&missing,{})",
+        "length()",
+        "unknown.function()",
+        "a.b.c()",
+        "/[/",
+        "1e999",
+        "9223372036854775808",
+        "{a=1,a=2}",
+        "[1][-1]",
+    ] {
+        let source = format!(
+            r#"ir_version="0.1"graph test.expression{{inputs={{}}outputs={{value=json}}nodes{{n=eval(json,{expression})}}edges{{edge value{{from=n.outputs.value to=outputs.value}}}}}}"#
+        );
+        assert!(
+            compiler.compile_source(&source, &catalogs()).is_err(),
+            "{expression}"
+        );
+    }
+    for node in [
+        "n=eval(integer,1){unknown=true}",
+        "n=eval(integer,1){inputs={}inputs={}}",
+        "n=eval(integer,1){topic=\"x\"}",
+        "n=eval(integer,1){retry{max_attempts=2 on=[] backoff_ms=[0]}}",
+        "n=eval(integer,1){limits{unknown=1}}",
+        "n=eval(integer,1){limits{timeout_ms=-1}}",
+        "n=wait(string){timeout_ms=1}",
+        "n=wait(string){topic=\"\" timeout_ms=1}",
+        "n=wait(string){topic=\"x\" timeout_ms=0}",
+        "n=wait(string){topic=\"x\" timeout_ms=1 limits{timeout_ms=2}}",
+        "n=use(missing)",
+        "n=read(mcp.tool(\"service\",\"tool\"))",
+        "n=call(mcp.resource(\"service\",\"uri\"))",
+        "n=eval(integer,1){when=17}",
+        "n=loop{inputs={}outputs={}carried={}body{nodes{}edges{}}until=true max_iterations=0}",
+    ] {
+        let source = format!(
+            "ir_version=\"0.1\"graph test.operation{{inputs={{}}outputs={{value=integer}}nodes{{{node}}}edges{{edge value{{from=n.outputs.value to=outputs.value}}}}}}"
+        );
+        assert!(
+            compiler.compile_source(&source, &catalogs()).is_err(),
+            "{node}"
+        );
+    }
+    for edge in [
+        "from=missing.outputs.value to=outputs.value",
+        "from=inputs.value to=next.value",
+        "from=next.value to=outputs.value",
+        "from=n.inputs.value to=outputs.value",
+        "from=n.outputs.value to=inputs.value",
+        "from=n.outputs.value to=n.outputs.value",
+    ] {
+        let source = format!(
+            "ir_version=\"0.1\"graph test.edge{{inputs={{}}outputs={{value=integer}}nodes{{n=eval(integer,1)}}edges{{edge value{{{edge}}}}}}}"
+        );
+        assert!(
+            compiler.compile_source(&source, &catalogs()).is_err(),
+            "{edge}"
+        );
+    }
+}
+
+#[test]
+fn every_utf8_truncated_source_is_rejected_and_comment_variants_are_canonical() {
+    let (compiler, _) = compiler();
+    let source = r#"ir_version="0.1"prompt p(name=string,)="""Hello 🦀 {name}"""graph test.truncation{inputs={name=string}outputs={value=string}nodes{n=eval(string,render(&p,{name=inputs.name})){inputs={name=string}}}edges{edge input{from=inputs.name to=n.inputs.name}edge value{from=n.outputs.value to=outputs.value}}}"#;
+    let original = compiler.compile_source(source, &catalogs()).unwrap();
+    for (end, _) in source.char_indices() {
+        assert!(
+            compiler
+                .compile_source(&source[..end], &catalogs())
+                .is_err(),
+            "prefix ending at {end}"
+        );
+    }
+    for comment in [
+        "-- line\n",
+        "--[[ block café 🦀 ]]\n",
+        "--[[ -- nested-looking text ]]\n",
+    ] {
+        let changed = format!("{comment}{source}\n{comment}");
+        assert_eq!(
+            compiler
+                .compile_source(&changed, &catalogs())
+                .unwrap()
+                .executable_bytes,
+            original.executable_bytes
+        );
+    }
+}
+
+fn ingress_mutations(value: &cbor::Value, depth: usize) -> Vec<cbor::Value> {
+    use cbor::{Map, Value};
+    let mut variants = vec![
+        Value::Null,
+        Value::Bool(false),
+        Value::Integer(-1),
+        Value::Text(String::new()),
+        Value::Array(vec![]),
+        Value::Map(Map::new()),
+    ];
+    if depth == 0 {
+        return variants;
+    }
+    match value {
+        Value::Map(fields) => {
+            for (key, child) in fields.iter() {
+                variants.push(Value::Map(
+                    Map::try_from_entries(
+                        fields
+                            .iter()
+                            .filter(|(k, _)| *k != key)
+                            .map(|(k, v)| (k.to_owned(), v.clone())),
+                    )
+                    .unwrap(),
+                ));
+                for changed in ingress_mutations(child, depth - 1) {
+                    variants.push(Value::Map(
+                        Map::try_from_entries(fields.iter().map(|(k, v)| {
+                            (
+                                k.to_owned(),
+                                if k == key { changed.clone() } else { v.clone() },
+                            )
+                        }))
+                        .unwrap(),
+                    ));
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                for changed in ingress_mutations(child, depth - 1) {
+                    let mut items = items.clone();
+                    items[index] = changed;
+                    variants.push(Value::Array(items));
+                }
+            }
+        }
+        _ => {}
+    }
+    variants
+}
+
+#[test]
+fn catalog_ingress_mutations_are_panic_free_and_valid_unused_inventory_preserves_identity() {
+    let l = Limits::default();
+    let (compiler, _) = compiler();
+    let empty = r#"ir_version="0.1"graph test.empty{inputs={}outputs={}nodes{}edges{}}"#;
+    let valid=JsonDocument::new(br#"{
+      "tools":{"catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{"service":{"deployment_id":"fixture","transport":"stdio","implementation_name":"fixture","implementation_version":"1"}},"schema_documents":{"https://example.test/common":{"type":"object"}},"tools":[{"server":"service","descriptor":{"name":"echo","description":"fixture","inputSchema":{"type":"object","properties":{"value":{"type":["string","null"]}},"required":["value"],"additionalProperties":false},"outputSchema":{"type":"object","properties":{"value":{"type":["string","null"]}},"required":["value"],"additionalProperties":false}}}]},
+      "resources":{"catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{"service":{"deployment_id":"fixture","transport":"stdio","implementation_name":"fixture","implementation_version":"1"}},"schema_documents":{},"resources":[{"server":"service","descriptor":{"name":"fixed","uri":"context://fixed"}}],"templates":[{"server":"service","descriptor":{"name":"topic","uriTemplate":"context://{topic}"}}]},
+      "prompts":{"catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{"service":{"deployment_id":"fixture","transport":"stdio","implementation_name":"fixture","implementation_version":"1"}},"schema_documents":{},"prompts":[{"server":"service","descriptor":{"name":"review","arguments":[{"name":"subject","required":true}]}}]}
+    }"#,&l).unwrap();
+    let original = MCPCatalogInputs::from_json(valid.as_bytes(), &l).unwrap();
+    let expected = compiler
+        .compile_source(empty, &original)
+        .unwrap()
+        .executable_bytes;
+    let mutations = ingress_mutations(valid.value(), 8);
+    assert!(mutations.len() > 500);
+    let mut rejected = 0;
+    let mut accepted = 0;
+    for value in mutations {
+        let json = JsonDocument::from_value(&value, &l).unwrap();
+        match MCPCatalogInputs::from_json(json.as_bytes(), &l) {
+            Ok(catalogs) => {
+                accepted += 1;
+                assert_eq!(
+                    compiler
+                        .compile_source(empty, &catalogs)
+                        .unwrap()
+                        .executable_bytes,
+                    expected
+                );
+            }
+            Err(error) => {
+                rejected += 1;
+                assert!(
+                    error
+                        .diagnostics
+                        .iter()
+                        .all(|d| ["C_MCP", "C_VERSION", "C_SCHEMA"].contains(&d.code.as_str())),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+    assert!(rejected > 100 && accepted > 0);
+}
+
+#[test]
+fn source_bundle_shape_mutations_never_publish_unchecked_implementations() {
+    let l = Limits::default();
+    let (compiler, _) = compiler();
+    let catalog = catalogs();
+    let original = bundle_with_sources(&[
+        (
+            "main",
+            r#"ir_version="0.1"import lib from "self/library"graph test.bundle{inputs={value=lib.Value}outputs={value=lib.Value}nodes{}edges{edge value{from=inputs.value to=outputs.value}}}"#,
+        ),
+        ("library", r#"ir_version="0.1"export type Value=string"#),
+    ]);
+    let pin = original.entry.package_digest;
+    let package = &original.packages[&pin];
+    let sources = cbor::Value::Map(
+        cbor::Map::try_from_entries(
+            package
+                .sources
+                .iter()
+                .map(|(path, text)| (path.clone(), cbor::Value::Text(text.clone()))),
+        )
+        .unwrap(),
+    );
+    let sources = JsonDocument::from_value(&sources, &l).unwrap();
+    let valid=JsonDocument::new(format!(r#"{{"format":"htlk_source_bundle","format_version":"0.1","entry":{{"package_digest":"{pin}","module_path":"main"}},"packages":{{"{pin}":{{"manifest":{{"manifest_version":"0.1","package_name":"test.package","package_version":"0.1","modules":{{"main":"src/main.htlk","library":"src/library.htlk"}},"dependencies":{{}}}},"sources":{}}}}}}}"#,std::str::from_utf8(sources.as_bytes()).unwrap()).as_bytes(),&l).unwrap();
+    let expected = compiler
+        .compile_bundle(&original, &catalog)
+        .unwrap()
+        .executable_bytes;
+    let mut failed = 0;
+    for value in ingress_mutations(valid.value(), 5) {
+        let json = JsonDocument::from_value(&value, &l).unwrap();
+        if let Ok(bundle) = SourceBundle::from_json(json.as_bytes(), &l) {
+            match compiler.compile_bundle(&bundle, &catalog) {
+                Ok(output) => assert_eq!(output.executable_bytes, expected),
+                Err(_) => failed += 1,
+            }
+        } else {
+            failed += 1
+        }
+    }
+    assert!(failed > 100);
+}
+
+#[test]
+fn module_import_aliases_roles_and_diamond_closures_are_exact() {
+    let (compiler, _) = compiler();
+    for imports in [
+        "import x from \"self/library\" import x from \"self/library\"",
+        "import x from \"unpinned/library\"",
+        "import x from \"library\"",
+        "import x from \"self/../library\"",
+    ] {
+        let main = format!(
+            "ir_version=\"0.1\"{imports} graph test.empty{{inputs={{}}outputs={{}}nodes{{}}edges{{}}}}"
+        );
+        let bundle = bundle_with_sources(&[
+            ("main", &main),
+            ("library", "ir_version=\"0.1\"export type Value=string"),
+        ]);
+        assert!(compiler.compile_bundle(&bundle, &catalogs()).is_err());
+    }
+    for main in [
+        "ir_version=\"0.1\"",
+        "ir_version=\"0.1\"graph one{inputs={}outputs={}nodes{}edges{}}graph two{inputs={}outputs={}nodes{}edges{}}",
+    ] {
+        assert!(
+            compiler
+                .compile_bundle(&bundle_with_sources(&[("main", main)]), &catalogs())
+                .is_err()
+        );
+        assert!(compiler.compile_source(main, &catalogs()).is_err());
+    }
+    let main = r#"ir_version="0.1"import a from "self/left"import b from "self/right"graph test.diamond{inputs={value=a.Value}outputs={value=b.Value}nodes{}edges{edge value{from=inputs.value to=outputs.value}}}"#;
+    let bundle = bundle_with_sources(&[
+        ("main", main),
+        (
+            "left",
+            r#"ir_version="0.1"import lib from "self/library"export type Value=lib.Value"#,
+        ),
+        (
+            "right",
+            r#"ir_version="0.1"import lib from "self/library"export type Value=lib.Value"#,
+        ),
+        ("library", r#"ir_version="0.1"export type Value=string"#),
+    ]);
+    compiler.compile_bundle(&bundle, &catalogs()).unwrap();
+    assert_eq!(compiler.compile_source(r#"ir_version="0.1"import lib from "self/library"graph test.empty{inputs={}outputs={}nodes{}edges{}}"#,&catalogs()).unwrap_err().diagnostics[0].code,"C_IMPORT");
+}
+
+#[test]
+fn task_cycles_mcp_pins_and_retry_numeric_bounds_are_checked_during_lowering() {
+    let (compiler, _) = compiler();
+    let cyclic = r#"ir_version="0.1"task a{inputs={}outputs={value=integer}nodes{b=use(b)}edges{edge value{from=b.outputs.value to=outputs.value}}}task b{inputs={}outputs={value=integer}nodes{a=use(a)}edges{edge value{from=a.outputs.value to=outputs.value}}}graph test.cycle{inputs={}outputs={value=integer}nodes{a=use(a)}edges{edge value{from=a.outputs.value to=outputs.value}}}"#;
+    assert_eq!(
+        compiler
+            .compile_source(cyclic, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_DEPENDENCY_CYCLE"
+    );
+    let inventory = operation_catalogs(
+        r#"[{"server":"service","descriptor":{"name":"tool","inputSchema":{"type":"object"},"outputSchema":{"type":"object"}}}]"#,
+        "[]",
+        "[]",
+        "[]",
+        "{}",
+    );
+    let source = r#"ir_version="0.1"graph test.retry{inputs={}outputs={value=json}nodes{args=eval(json,{})n=call(mcp.tool("service","tool")){OPTIONS}}edges{edge args{from=args.outputs.value to=n.inputs.arguments}edge value{from=n.outputs.value to=outputs.value}}}"#;
+    for options in [
+        format!("pin=\"{}\"", Digest::from_bytes([0; 32])),
+        "pin=\"bad\"".into(),
+        "retry{max_attempts=-1 on=[]backoff_ms=[]}".into(),
+        "retry{max_attempts=2 on=[\"x\"]backoff_ms=[-1]}".into(),
+        "retry{max_attempts=0 on=[]backoff_ms=[]}".into(),
+        "retry{max_attempts=3 on=[]backoff_ms=[0]}".into(),
+        "retry{max_attempts=2 on=[]backoff_ms=[]}".into(),
+    ] {
+        assert!(
+            compiler
+                .compile_source(&source.replace("OPTIONS", &options), &inventory)
+                .is_err(),
+            "{options}"
+        );
+    }
+    for changed in [
+        source.replace("service", "missing"),
+        source.replace("\"tool\"", "\"missing\""),
+    ] {
+        assert_eq!(
+            compiler
+                .compile_source(&changed.replace("OPTIONS", ""), &inventory)
+                .unwrap_err()
+                .diagnostics[0]
+                .code,
+            "C_MCP"
+        );
+    }
+    let valid = source.replace("OPTIONS", "");
+    let output = compiler.compile_source(&valid, &inventory).unwrap();
+    let binding = output
+        .canonical_document
+        .fields()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(
+        compiler
+            .compile_source(
+                &source.replace("OPTIONS", &format!("pin=\"{}\"", binding.descriptor())),
+                &inventory
+            )
+            .unwrap()
+            .executable_bytes,
+        output.executable_bytes
+    );
+    let loop_source = r#"ir_version="0.1"graph test.loop{inputs={}outputs={}nodes{n=loop{inputs={}outputs={}carried={x=inputs.missing}body{nodes{}edges{}}until=true max_iterations=1}}edges{}postconditions=status(@n)=="succeeded"}"#;
+    assert_eq!(
+        compiler
+            .compile_source(loop_source, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_LOOP"
+    );
+    assert!(
+        compiler
+            .compile_source(
+                &loop_source
+                    .replace("carried={x=inputs.missing}", "carried={}")
+                    .replace("max_iterations=1", "max_iterations=-1"),
+                &catalogs()
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn canonical_ingress_rechecks_serialization_catalog_and_diagnostic_allowances() {
+    let (base, document) = compiler();
+    let mut config = base.config().clone();
+    config.limits.max_document_bytes = 1024;
+    let bounded = Compiler::new(config).unwrap();
+    let mut fields = document.fields().clone();
+    fields.graph_id = "long".repeat(2000);
+    let oversized = CanonicalDocument::new(fields, &Limits::default()).unwrap();
+    assert_eq!(
+        bounded
+            .compile_document(oversized, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SERIALIZATION"
+    );
+    let source = r#"ir_version="0.1"graph test.overlap{inputs={flag=boolean}outputs={value=boolean}nodes{}edges{edge a{from=inputs.flag to=outputs.value when=inputs.flag}edge b{from=inputs.flag to=outputs.value when=inputs.flag}}}"#;
+    let output = base.compile_source(source, &catalogs()).unwrap();
+    let mut config = base.config().clone();
+    config.frontend.max_report_bytes = 1;
+    assert_eq!(
+        Compiler::new(config)
+            .unwrap()
+            .compile_document(output.canonical_document, &catalogs())
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SOURCE_LIMIT"
+    );
+    let schema = r#"{"https://example.test/large":{"description":"TEXT","type":"object"}}"#
+        .replace("TEXT", &"x".repeat(2000));
+    let large = operation_catalogs("[]", "[]", "[]", "[]", &schema);
+    assert_eq!(
+        bounded
+            .compile_document(document, &large)
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_SOURCE_LIMIT"
+    );
+}
+
+#[test]
+fn compiler_linked_library_keys_and_unbound_generic_signatures_are_validated() {
+    let (base, _) = compiler();
+    let l = Limits::default();
+    let digest = Digest::from_bytes([44; 32]);
+    let signature = FunctionSignature::new(
+        vec![],
+        vec![],
+        Port::new(ValueType::builtin(BuiltinType::String), true),
+        &l,
+    )
+    .unwrap();
+    let library = Library::new(
+        "test.library".into(),
+        "1".into(),
+        digest,
+        vec![("get".parse().unwrap(), signature)],
+        &l,
+    )
+    .unwrap();
+    let mut config = base.config().clone();
+    config
+        .libraries
+        .insert(Digest::from_bytes([45; 32]), library);
+    assert_eq!(
+        Compiler::new(config).err().unwrap().diagnostics[0].code,
+        "C_LIBRARY"
+    );
+    let signature = FunctionSignature::new(
+        vec![],
+        vec![],
+        Port::new(
+            ValueType::new(
+                ValueTypeKind::Var("unbound".parse().unwrap()),
+                TypeContext::Signature,
+                &l,
+            )
+            .unwrap(),
+            true,
+        ),
+        &l,
+    )
+    .unwrap();
+    let library = Library::new(
+        "test.library".into(),
+        "1".into(),
+        digest,
+        vec![("get".parse().unwrap(), signature)],
+        &l,
+    )
+    .unwrap();
+    let mut config = base.config().clone();
+    config.libraries.insert(digest, library);
+    assert_eq!(
+        Compiler::new(config).err().unwrap().diagnostics[0].code,
+        "C_LIBRARY"
+    );
+}
+
+#[test]
+fn diagnostic_location_order_is_total_and_multi_error_display_retains_each_code() {
+    use std::error::Error as _;
+    let locations = [
+        DiagnosticLocation::CanonicalRecordPath("/a".into()),
+        DiagnosticLocation::SourceBundlePath("/a".into()),
+        DiagnosticLocation::SourceSpan(SourceSpan {
+            source: SourceLocation::Inline,
+            start_byte: 0,
+            end_byte: 1,
+        }),
+        DiagnosticLocation::SourceSpan(SourceSpan {
+            source: SourceLocation::Module {
+                package_digest: Digest::from_bytes([0; 32]),
+                module_path: "m".into(),
+                source_path: "m.htlk".into(),
+            },
+            start_byte: 0,
+            end_byte: 1,
+        }),
+    ];
+    for (i, a) in locations.iter().enumerate() {
+        for (j, b) in locations.iter().enumerate() {
+            assert_eq!(a.cmp(b), i.cmp(&j));
+            assert_eq!(a.partial_cmp(b), Some(a.cmp(b)));
+        }
+    }
+    let error = CompilationFailure {
+        diagnostics: locations
+            .into_iter()
+            .enumerate()
+            .map(|(index, location)| Diagnostic {
+                code: format!("C_TEST_{index}"),
+                severity: analyzer::DiagnosticSeverity::Error,
+                message: "redacted explanation".into(),
+                location,
+                related_locations: vec![],
+            })
+            .collect(),
+    };
+    assert_eq!(error.to_string().lines().count(), 4);
+    assert!(error.to_string().contains("C_TEST_3"));
+    assert!(error.source().is_none());
+}

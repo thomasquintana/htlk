@@ -215,3 +215,92 @@ fn unavailable_profile_corrupt_checkpoint_and_impossible_progress_fail_clearly()
         }
     })
 }
+
+#[test]
+fn recovery_rejects_corrupt_scope_invocation_wait_and_accounting_facts_without_publishing() {
+    actix::System::new().block_on(async {
+        let (compiler,registry)=support::native_compiler_with_timeouts(30000,10000);let registry=Arc::new(registry);
+        let graph=compiler.compile_source(r#"ir_version="0.1"task question{inputs={}outputs={value=boolean}nodes{args=eval(json,{})reply=wait(boolean){topic="recover"timeout_ms=20000}}edges{edge args{from=args.outputs.value to=reply.inputs.request}edge value{from=reply.outputs.value to=outputs.value}}}graph test.corruption{inputs={}outputs={value=boolean}nodes{question=use(question)}edges{edge value{from=question.outputs.value to=outputs.value}}}"#,&support::catalogs()).unwrap();
+        let bad_digest=Value::Text(Digest::from_bytes([0;32]).to_string());
+        let cases=[
+            (RecordFamily::Scope,"definition_digest",bad_digest.clone()),
+            (RecordFamily::Scope,"input_checkpoint",Value::Bytes(vec![0])),
+            (RecordFamily::Scope,"input_hash",bad_digest.clone()),
+            (RecordFamily::Scope,"inputs",Value::Null),
+            (RecordFamily::Scope,"scope_use",Value::Null),
+            (RecordFamily::Scope,"status",Value::Text("impossible".into())),
+            (RecordFamily::Invocation,"definition_digest",bad_digest.clone()),
+            (RecordFamily::Invocation,"local_id",Value::Text("missing".into())),
+            (RecordFamily::Invocation,"input_checkpoint",Value::Bytes(vec![0])),
+            (RecordFamily::Invocation,"input_hash",bad_digest.clone()),
+            (RecordFamily::Invocation,"inputs",Value::Null),
+            (RecordFamily::Invocation,"child_scope",bad_digest.clone()),
+            (RecordFamily::Invocation,"status",Value::Text("impossible".into())),
+            (RecordFamily::Wait,"invocation_id",bad_digest.clone()),
+            (RecordFamily::Wait,"generation",Value::Integer(1)),
+            (RecordFamily::Wait,"purpose",Value::Text("approval".into())),
+            (RecordFamily::Wait,"response_type",Value::Null),
+            (RecordFamily::Wait,"topic",Value::Text("changed".into())),
+            (RecordFamily::Wait,"authorization_policy",object([("authority",Value::Text("".into())),("version",Value::Text("1".into())),("requester",Value::Text("alice".into()))])),
+            (RecordFamily::Wait,"expires_at",Value::Integer(i64::MAX)),
+            (RecordFamily::Wait,"state",Value::Text("impossible".into())),
+            (RecordFamily::Usage,"limits",Value::Null),
+            (RecordFamily::Usage,"concurrency_reserved",Value::Integer(1)),
+            (RecordFamily::Usage,"calls_spent",Value::Integer(-1)),
+        ];
+        for(family,field,value)in cases{
+            let clock=Arc::new(Clock(AtomicI64::new(1000)));let store=SqliteStore::in_memory(StoreConfig::default()).await.unwrap();
+            let runtime=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock.clone()));let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();
+            let config=ExecutionConfig{lease_ms:100,poll_interval:Duration::from_millis(1),..Default::default()};let engine=ExecutionEngine::launch(runtime.clone(),config.clone()).unwrap();let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::new(),"corrupt",None).await.unwrap();open_wait(&runtime,&caller,&run.run_id,None).await;
+            engine.shutdown().await.unwrap();clock.0.store(1200,Ordering::SeqCst);let lease=store.acquire(&run.run_id,"corruption".into(),1200,1300).await.unwrap();
+            let records=store.records(&run.run_id,family,None,100).await.unwrap();
+            let record=if family==RecordFamily::Scope{let header=store.run_header(&run.run_id).await.unwrap();records.iter().find(|r|r.key.id==header.root_scope.to_string()).unwrap()}else{records.iter().find(|r|!r.final_record).unwrap()};
+            let artifact_count=store.records(&run.run_id,RecordFamily::Artifact,None,100).await.unwrap().len();
+            store.commit(&lease,transaction(vec![update(record,change(&record.payload,[(field,value)]),false)],1200)).await.unwrap();
+            clock.0.store(1400,Ordering::SeqCst);let recovered=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock));let engine=ExecutionEngine::launch(recovered.clone(),config).unwrap();
+            let deadline=std::time::Instant::now()+Duration::from_secs(5);
+            loop{let header=store.run_header(&run.run_id).await.unwrap();if header.status.is_terminal(){assert_eq!(header.status,RunStatus::Failed,"{family:?}/{field}");break;}assert!(std::time::Instant::now()<deadline,"recovery stalled for {family:?}/{field}");actix::clock::sleep(Duration::from_millis(2)).await;}
+            if let Ok(view)=recovered.inspect_run(&caller,&run.run_id).await{assert!(view.outputs.is_none(),"{family:?}/{field}");}
+            assert_eq!(store.records(&run.run_id,RecordFamily::Artifact,None,100).await.unwrap().len(),artifact_count,"corrupt recovery published an artifact: {family:?}/{field}");
+            engine.shutdown().await.unwrap();store.close().await.unwrap();
+        }
+    });
+}
+
+#[test]
+fn recorded_mcp_checkpoint_corruption_cannot_change_the_frozen_request_or_publish_a_response() {
+    actix::System::new().block_on(async {
+        let(compiler,registry)=support::native_compiler_with_timeouts(30000,10000);let registry=Arc::new(registry);
+        let graph=compiler.compile_source(r#"ir_version="0.1"graph test.checkpoint{inputs={}outputs={value=json}nodes{args=eval(json,{query="question"})lookup=call(mcp.tool("research","lookup"))}edges{edge args{from=args.outputs.value to=lookup.inputs.arguments}edge value{from=lookup.outputs.value to=outputs.value}}}"#,&support::catalogs()).unwrap();
+        let bad=Value::Text(Digest::from_bytes([0;32]).to_string());
+        let cases=[
+            (false,"invocation_id",bad.clone()),(false,"method",Value::Text("prompts/get".into())),
+            (false,"params",object([])),(false,"requested_uri",Value::Text("context://forged".into())),
+            (false,"timeout_ms",Value::Integer(0)),(false,"timeout_ms",Value::Integer(i64::MAX)),
+            (false,"owner_fence",Value::Integer(0)),(false,"owner_fence",Value::Integer(i64::MAX)),
+            (false,"number",Value::Integer(2)),(false,"deduplication",Value::Text("forged".into())),
+            (false,"protocol_key",Value::Text("forged".into())),(false,"encoded_request",Value::Null),
+            (false,"encoded_request",Value::Bytes(b"{}".to_vec())),(false,"dispatch_state",Value::Text("prepared".into())),
+            (true,"delivery",Value::Text("not_sent".into())),(true,"delivery",Value::Text("unknown".into())),
+            (true,"raw_digest",bad),(true,"raw",Value::Null),
+            (true,"failure_code",Value::Text("E_POLICY".into())),
+        ];
+        for(response_field,field,value)in cases{
+            let adapter=Arc::new(Held{descriptors:graph.canonical_document.fields().bindings.values().map(|b|(b.descriptor(),graph.canonical_document.fields().documents[&b.descriptor()].clone())).collect(),sent:AtomicUsize::new(0),release:AtomicBool::new(false)});
+            let clock=Arc::new(Clock(AtomicI64::new(1000)));let store=SqliteStore::in_memory(StoreConfig::default()).await.unwrap();let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();let runtime=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock.clone()).with_mcp(adapter.clone()));runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();
+            let config=ExecutionConfig{lease_ms:100,poll_interval:Duration::from_millis(1),..Default::default()};let engine=ExecutionEngine::launch(runtime.clone(),config.clone()).unwrap();let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::new(),"checkpoint",None).await.unwrap();
+            let deadline=std::time::Instant::now()+Duration::from_secs(10);while adapter.sent.load(Ordering::SeqCst)==0{assert!(std::time::Instant::now()<deadline);actix::clock::sleep(Duration::from_millis(1)).await;}
+            engine.shutdown().await.unwrap();clock.0.store(1200,Ordering::SeqCst);let lease=store.acquire(&run.run_id,"checkpoint".into(),1200,1300).await.unwrap();let attempt=store.records(&run.run_id,RecordFamily::Attempt,None,100).await.unwrap().pop().unwrap();
+            let mut attempt_payload=change(&attempt.payload,[("dispatch_state",Value::Text("response_recorded".into()))]);
+            let mut response=object([("raw",Value::Bytes(RESPONSE.to_vec())),("raw_digest",Value::Text(htlk_executable::digest::hash_bytes(RESPONSE).to_string())),("delivery",Value::Text("response_received".into())),("influence_labels",SecurityLabels::default().to_value(&Limits::default()).unwrap())]);
+            if response_field{response=change(&response,[(field,value)]);}else{attempt_payload=change(&attempt_payload,[(field,value)]);}
+            let mut writes=vec![update(&attempt,attempt_payload,true),RecordWrite{key:RecordKey{family:RecordFamily::Response,id:attempt.key.id.clone()},expected_revision:None,final_record:true,payload:response}];
+            for reservation in store.records(&run.run_id,RecordFamily::Reservation,None,100).await.unwrap(){writes.push(update(&reservation,change(&reservation.payload,[("state",Value::Text("released".into()))]),true));}
+            for usage in store.records(&run.run_id,RecordFamily::Usage,None,100).await.unwrap(){writes.push(update(&usage,change(&usage.payload,[("concurrency_reserved",Value::Integer(0))]),false));}
+            store.commit(&lease,transaction(writes,1200)).await.unwrap();adapter.release.store(true,Ordering::SeqCst);clock.0.store(1400,Ordering::SeqCst);
+            let recovered=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock));let engine=ExecutionEngine::launch(recovered.clone(),config).unwrap();
+            let deadline=std::time::Instant::now()+Duration::from_secs(5);loop{let header=store.run_header(&run.run_id).await.unwrap();if header.status.is_terminal(){assert_eq!(header.status,RunStatus::Failed,"response={response_field}/{field}");break;}assert!(std::time::Instant::now()<deadline,"stalled response={response_field}/{field}");actix::clock::sleep(Duration::from_millis(2)).await;}
+            assert_eq!(adapter.sent.load(Ordering::SeqCst),1);assert_eq!(store.records(&run.run_id,RecordFamily::Artifact,None,100).await.unwrap().len(),1,"corrupt checkpoint published an output");engine.shutdown().await.unwrap();store.close().await.unwrap();
+        }
+    });
+}

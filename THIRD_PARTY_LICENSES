@@ -37931,7 +37931,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 
 ================================================================================
-webpki-root-certs 1.0.9
+webpki-root-certs 1.0.10
 License: Community Data License Agreement Permissive 2.0
 Source: https://github.com/rustls/webpki-roots
 ================================================================================
@@ -38063,7 +38063,7 @@ THIS SOFTWARE.
 
 
 ================================================================================
-rustls-webpki 0.103.15
+rustls-webpki 0.103.16
 License: ISC License
 Source: https://github.com/rustls/webpki
 ================================================================================

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Update transitive TLS certificate-validation dependencies for
+  RUSTSEC-2026-0382 and RUSTSEC-2026-0383.
 - Close the Draft 0.1 alignment review's compiler catalog, contextual-name, grammar,
   typed-bundle, schema-comparison and nested union-projection gaps.
 - Make approval denial atomic and final; enforce wait deadlines at commit; retain
@@ -23,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add per-crate line/branch coverage reports and regression ratchets, with complete
+  instrumented suites required on every PR and before release publication.
+- Add full source-to-native stdio/HTTP/SSE tests for every MCP operation, standalone
+  and modular decision briefs, exact-action approvals, cancellation and repeated joins.
+- Add real process-kill recovery checkpoints, competing-coordinator concurrency
+  campaigns, durable checkpoint corruption matrices, canonical-ingress mutations
+  and compiler/analyzer/runtime boundary and diagnostic tests.
 - Add a beginner-friendly interactive terminal guide with six real compiler/runtime
   lessons, editable graph examples, Rust setup notes, and a scripted walkthrough check.
 - Add protected detached source maps/descriptions with unchanged canonical join

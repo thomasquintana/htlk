@@ -5,6 +5,11 @@ real compiler-produced envelopes, independent native admission, SQLite authority
 Actix workers. Handcrafted records are confined to adversarial storage/crash checkpoints;
 the reducer oracle and Node fixture checker are independent implementations.
 
+The [coverage and deep-testing guide](test-coverage.md) adds native transport
+source-to-execution scenarios, actual process-kill recovery, checkpoint-corruption
+matrices and competing-coordinator campaigns. Every campaign runs on every PR,
+with pinned line/branch coverage reports and per-crate regression gates.
+
 ## Required scenario matrix
 
 | Runtime §17 scenario | Executable evidence |

@@ -1,0 +1,81 @@
+name: Coverage and deep tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: ${{ matrix.mode }} coverage and complete suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: line
+            toolchain: 1.98.0
+            flags: ''
+            thresholds: tools/coverage-thresholds.json
+          - mode: branch
+            toolchain: nightly-2026-10-20
+            flags: --branch
+            thresholds: tools/coverage-branch-thresholds.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust and LLVM tools
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: llvm-tools-preview
+
+      - name: Install Node.js for independent wire peers
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Cache Cargo data
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage-${{ matrix.mode }}
+          cache-targets: false
+
+      - name: Install coverage collector
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+
+      - name: Check coverage gate implementation
+        run: node --test tools/coverage.test.mjs
+
+      - name: Execute all unit, integration, native E2E, crash and stress tests
+        run: cargo +${{ matrix.toolchain }} llvm-cov --workspace --all-features --all-targets --locked ${{ matrix.flags }} --no-report
+
+      - name: Export coverage evidence
+        if: always()
+        run: |
+          mkdir -p target/coverage
+          cargo +${{ matrix.toolchain }} llvm-cov report --workspace --json --output-path target/coverage/coverage.json
+          cargo +${{ matrix.toolchain }} llvm-cov report --workspace --lcov --output-path target/coverage/lcov.info
+          cargo +${{ matrix.toolchain }} llvm-cov report --workspace --html --output-dir target/coverage
+
+      - name: Enforce per-crate coverage ratchets
+        run: node tools/coverage.mjs target/coverage/coverage.json --check ${{ matrix.thresholds }}
+
+      - name: Write per-crate summary
+        if: always()
+        run: node tools/coverage.mjs target/coverage/coverage.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload annotated coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.mode }}-${{ github.sha }}
+          path: target/coverage/
+          if-no-files-found: error
+          retention-days: 30

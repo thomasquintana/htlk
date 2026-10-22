@@ -91,6 +91,114 @@ fn bind(frame: &mut Frame, name: &str, state: Result<V, Err>) {
 }
 
 #[test]
+fn scalar_comparison_cartesian_product_matches_native_representation_semantics() {
+    let literals = [
+        S::Null,
+        S::Boolean(false),
+        S::Boolean(true),
+        S::Integer(-1),
+        S::Integer(0),
+        S::Integer(1),
+        S::Float(FiniteFloat::new(-1.0).unwrap()),
+        S::Float(FiniteFloat::new(1.0).unwrap()),
+        S::String("".into()),
+        S::String("é".into()),
+        S::Bytes(vec![]),
+        S::Bytes(vec![0, 255]),
+    ];
+    for left in &literals {
+        for right in &literals {
+            for op in [B::Eq, B::Ne, B::Lt, B::Le, B::Gt, B::Ge] {
+                let result = run(
+                    &binary(op, E::literal(left.clone()), E::literal(right.clone())),
+                    &Frame::default(),
+                );
+                if matches!(op, B::Eq | B::Ne)
+                    && matches!((left, right), (S::Null, _) | (_, S::Null))
+                {
+                    let equal = matches!((left, right), (S::Null, S::Null));
+                    assert_eq!(
+                        result,
+                        Ok(V::Present(Value::Bool(if op == B::Eq {
+                            equal
+                        } else {
+                            !equal
+                        })))
+                    );
+                    continue;
+                }
+                let ordering = match (left, right) {
+                    (S::Boolean(a), S::Boolean(b)) if matches!(op, B::Eq | B::Ne) => Some(a.cmp(b)),
+                    (S::Integer(a), S::Integer(b)) => Some(a.cmp(b)),
+                    (S::Float(a), S::Float(b)) => a.get().partial_cmp(&b.get()),
+                    (S::String(a), S::String(b)) => Some(a.cmp(b)),
+                    _ => None,
+                };
+                if let Some(order) = ordering {
+                    let expected = match op {
+                        B::Eq => order.is_eq(),
+                        B::Ne => !order.is_eq(),
+                        B::Lt => order.is_lt(),
+                        B::Le => !order.is_gt(),
+                        B::Gt => order.is_gt(),
+                        B::Ge => !order.is_lt(),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        result,
+                        Ok(V::Present(Value::Bool(expected))),
+                        "{left:?} {op:?} {right:?}"
+                    );
+                } else {
+                    assert_eq!(result, Err(Err::OperandType), "{left:?} {op:?} {right:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn evaluator_preflights_each_zero_budget_and_preserves_wrapped_error_sources() {
+    use std::error::Error as _;
+    for field in 0..7 {
+        let mut p = policy();
+        match field {
+            0 => p.max_expression_depth = 0,
+            1 => p.max_value_bytes = 0,
+            2 => p.max_collection_visits = 0,
+            3 => p.max_regex_bytes = 0,
+            4 => p.max_regex_compiled_bytes = 0,
+            5 => p.max_output_bytes = 0,
+            _ => p.max_steps = 0,
+        };
+        assert_eq!(
+            evaluate(
+                &E::literal(S::Null),
+                Context::Eval,
+                &Frame::default(),
+                &Limits::default(),
+                &p
+            )
+            .unwrap_err(),
+            Err::InvalidLimits
+        );
+    }
+    let errors = [
+        Err::from(htlk_cbor::decode(&[], &Limits::default()).unwrap_err()),
+        Err::from(htlk_executable::ExpressionError::UnknownConstructor),
+        Err::from(htlk_executable::TypeError::UnknownPortField),
+        Err::from(htlk_analyzer::NativeSchemaError::InvalidSchema),
+        Err::from(htlk_analyzer::ExpressionTypeError::TypeMismatch),
+        Err::from(htlk_runtime::NativeRegistryError::PolicyNotLinked),
+    ];
+    for error in errors {
+        assert!(error.source().is_some());
+        assert!(error.to_string().starts_with(error.code()));
+    }
+    assert!(Err::OperandType.source().is_none());
+}
+
+#[test]
 fn lazy_booleans_preserve_pending_error_and_absence() {
     let mut f = Frame::default();
     bind(&mut f, "pending", Ok(V::Pending));

@@ -20,6 +20,102 @@ fn ports(required: bool) -> PortTable {
     )
     .unwrap()
 }
+
+#[test]
+fn all_failure_codes_round_trip_and_malformed_closed_records_fail_without_leaking_data() {
+    use htlk_runtime::failure::FailureRecordError;
+    use std::error::Error as _;
+    let l = Limits::default();
+    let codes = [
+        FailureCode::Executable,
+        FailureCode::Digest,
+        FailureCode::RetentionExpired,
+        FailureCode::Profile,
+        FailureCode::Input,
+        FailureCode::BindingConflict,
+        FailureCode::Dependency,
+        FailureCode::OutputMissing,
+        FailureCode::Expression,
+        FailureCode::ExpressionAbsent,
+        FailureCode::ExpressionLimit,
+        FailureCode::Preconditions,
+        FailureCode::Postconditions,
+        FailureCode::McpIdentity,
+        FailureCode::McpDescriptor,
+        FailureCode::McpTransport,
+        FailureCode::McpTimeout,
+        FailureCode::McpProtocol,
+        FailureCode::McpToolError,
+        FailureCode::OutputSchema,
+        FailureCode::EffectUncertain,
+        FailureCode::WaitExpired,
+        FailureCode::ApprovalDenied,
+        FailureCode::Policy,
+        FailureCode::Budget,
+        FailureCode::BudgetUnsupported,
+        FailureCode::Timeout,
+        FailureCode::LoopLimit,
+        FailureCode::ExtensionConflict,
+        FailureCode::Extension,
+        FailureCode::IdempotencyConflict,
+        FailureCode::Cancelled,
+        FailureCode::Fenced,
+        FailureCode::Invariant,
+    ];
+    for code in codes {
+        let failure = RuntimeFailure::new(code);
+        let value = failure.to_value(&l).unwrap();
+        assert_eq!(RuntimeFailure::from_value(&value, &l).unwrap(), failure);
+        assert_eq!(code.as_str().parse::<FailureCode>().unwrap(), code);
+        assert_eq!(failure.message(), code.message());
+        assert!(failure.to_string().contains(code.as_str()));
+        assert!(failure.source().is_none());
+        let bytes = cbor::encode(&value, &l).unwrap();
+        let exact = Limits {
+            max_document_bytes: bytes.len(),
+            ..l.clone()
+        };
+        assert_eq!(failure.to_value(&exact).unwrap(), value);
+        let tiny = Limits {
+            max_document_bytes: bytes.len() - 1,
+            ..l.clone()
+        };
+        let error = failure.to_value(&tiny).unwrap_err();
+        assert!(error.source().is_some());
+        assert!(!error.to_string().is_empty());
+    }
+    for value in [
+        Value::Null,
+        Value::Map(Map::new()),
+        Value::Map(
+            Map::try_from_entries([
+                ("code".into(), Value::Bool(false)),
+                ("message".into(), Value::Text("SECRET".into())),
+            ])
+            .unwrap(),
+        ),
+        Value::Map(
+            Map::try_from_entries([
+                ("code".into(), Value::Text("E_POLICY".into())),
+                ("message".into(), Value::Text("SECRET".into())),
+                ("extra".into(), Value::Null),
+            ])
+            .unwrap(),
+        ),
+    ] {
+        let error = RuntimeFailure::from_value(&value, &l).unwrap_err();
+        assert_eq!(error, FailureRecordError::Shape);
+        assert!(error.source().is_none());
+        assert!(!error.to_string().contains("SECRET"));
+    }
+    assert_eq!(
+        "UNKNOWN_SECRET".parse::<FailureCode>(),
+        Err(FailureRecordError::Shape)
+    );
+    let error = FailureRecordError::from(cbor::decode(&[], &l).unwrap_err());
+    assert!(error.source().is_some());
+    assert!(!error.to_string().is_empty());
+}
 fn entry(producer: &str, labels: &[&str]) -> ManifestEntry {
     let l = Limits::default();
     let content_digest = ValueDigest::new(

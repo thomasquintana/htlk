@@ -7,11 +7,17 @@ Contributions to Harness Toolkit are welcome.
 The repository's `rust-toolchain.toml` selects latest stable Rust and installs
 the required formatting and linting components.
 
+Install Node.js 24 as well: the full compiler/runtime E2E suite launches independent
+local stdio/HTTP/SSE MCP peers. Every E2E, crash/restart and bounded concurrency
+campaign runs on every PR. See [coverage and deep testing](docs/test-coverage.md)
+for pinned coverage toolchains, reports, per-crate ratchets and focused commands.
+
 Before opening a pull request, run:
 
 ```console
 node specs/validate-specs.mjs
 node tools/validate-executable-fixtures.mjs
+node --test tools/coverage.test.mjs
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
@@ -47,6 +53,11 @@ treated as errors. Download the `rustdoc-<commit SHA>` artifact from the CI run;
 after extracting it, open `htlk/index.html` or `htlk_executable/index.html`.
 CI artifacts are retained for 30 days. CI also checks workflow syntax and the
 tracked Draft 0.1 specifications.
+
+The reusable coverage workflow uploads `coverage-line-<SHA>` and
+`coverage-branch-<SHA>` artifacts containing annotated HTML, JSON and LCOV reports.
+Both complete instrumented suites are required, including during release
+validation. Coverage targets and remaining gaps are documented in the testing guide.
 
 The Release workflow builds the same docs and uploads `release-rustdoc-<SHA>`
 and `crates-<SHA>` artifacts, retained for 90 days. Documentation and package

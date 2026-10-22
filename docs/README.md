@@ -7,3 +7,5 @@
   module inspection, diagnostics, and graph joins.
 - [Compiler implementation roadmap](htlk-compiler-roadmap.md) records architecture
   and conformance milestones.
+- [Coverage and deep testing](test-coverage.md) documents measurements, regression
+  gates, full native transport tests, process-kill recovery and concurrency campaigns.

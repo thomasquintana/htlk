@@ -267,3 +267,233 @@ fn missing_actual_read_metadata_fails_closed_without_dropping_base_influence() {
     assert_eq!(result.result.err().unwrap().code(), FailureCode::Invariant);
     assert_eq!(result.influence.as_slice(), &["scope"]);
 }
+
+#[test]
+fn composed_contexts_preserve_native_callback_identity_arguments_and_shared_meter() {
+    use htlk::runtime::{
+        EvaluationArgument, EvaluationContext, EvaluationError, EvaluationMeter, evaluate,
+    };
+    use htlk_analyzer::{ExpressionCallType, ExpressionCallbackType};
+    use htlk_executable::*;
+    struct Target(Cell<u64>);
+    impl EvaluationContext for Target {
+        fn resolve(
+            &self,
+            _: &ValueReference,
+            _: &[PathStep],
+            _: &mut EvaluationMeter<'_>,
+        ) -> Result<EvaluationValue, EvaluationError> {
+            Err(EvaluationError::UnknownReference)
+        }
+        fn outcome(&self, _: &Identifier) -> Option<&EvaluationOutcome> {
+            None
+        }
+        fn template(&self, _: &digest::Digest) -> Option<&PromptTemplate> {
+            None
+        }
+        fn call(
+            &self,
+            library: digest::Digest,
+            name: &Identifier,
+            args: &[EvaluationArgument],
+            meter: &mut EvaluationMeter<'_>,
+        ) -> Result<EvaluationValue, EvaluationError> {
+            assert_eq!(library, digest::Digest::from_bytes([23; 32]));
+            assert_eq!(name.as_str(), "callback");
+            assert_eq!(
+                args,
+                [EvaluationArgument::Value(EvaluationValue::Present(
+                    Value::Integer(3)
+                ))]
+            );
+            meter.charge(7)?;
+            self.0.set(self.0.get() + 1);
+            Ok(EvaluationValue::Present(Value::Integer(7)))
+        }
+    }
+    struct Driver(Target);
+    impl EvaluationContext for Driver {
+        fn resolve(
+            &self,
+            _: &ValueReference,
+            _: &[PathStep],
+            _: &mut EvaluationMeter<'_>,
+        ) -> Result<EvaluationValue, EvaluationError> {
+            Err(EvaluationError::UnknownReference)
+        }
+        fn outcome(&self, _: &Identifier) -> Option<&EvaluationOutcome> {
+            None
+        }
+        fn template(&self, _: &digest::Digest) -> Option<&PromptTemplate> {
+            None
+        }
+        fn call(
+            &self,
+            _: digest::Digest,
+            _: &Identifier,
+            args: &[EvaluationArgument],
+            meter: &mut EvaluationMeter<'_>,
+        ) -> Result<EvaluationValue, EvaluationError> {
+            let limits = Limits::default();
+            let environment = InfluenceEnvironment::default();
+            let authorize = |_: &SecurityLabels| Ok(());
+            let wrapped =
+                InfluenceContext::new(&self.0, &environment, &authorize, &limits).unwrap();
+            let library = digest::Digest::from_bytes([23; 32]);
+            let name: Identifier = "callback".parse().unwrap();
+            let port = Port::new(ValueType::builtin(BuiltinType::Integer), true);
+            let expression = Expression::literal(ScalarLiteral::Null);
+            let boundary = ExpressionCallType {
+                expression_path: vec![0],
+                library,
+                name: name.clone(),
+                parameters: vec![port.clone()],
+                returns: port.clone(),
+                callbacks: vec![],
+            };
+            let callback = ExpressionCallbackType {
+                expression_path: vec![0, 0],
+                argument_index: 0,
+                library,
+                name: name.clone(),
+                signature: ValueType::new(
+                    ValueTypeKind::Function {
+                        parameters: vec![port.clone()],
+                        returns: Box::new(port),
+                    },
+                    TypeContext::Signature,
+                    &limits,
+                )
+                .unwrap(),
+            };
+            let expected = EvaluationValue::Present(Value::Integer(7));
+            assert_eq!(wrapped.call(library, &name, args, meter)?, expected);
+            assert_eq!(
+                wrapped.call_at(&expression, library, &name, args, meter)?,
+                expected
+            );
+            assert_eq!(
+                wrapped.call_typed(&expression, &boundary, args, meter)?,
+                expected
+            );
+            assert_eq!(wrapped.call_callback(&callback, args, meter)?, expected);
+            assert_eq!(
+                wrapped.call_callback_typed(&callback, &boundary, args, meter)?,
+                expected
+            );
+            Ok(expected)
+        }
+    }
+    let (compiler, _) = native_compiler();
+    let policy = &compiler.config().policy.fields().evaluator_limits;
+    let expression = Expression::new(
+        ExpressionKind::Call {
+            function: FunctionId::Library {
+                library: digest::Digest::from_bytes([1; 32]),
+                name: "driver".parse().unwrap(),
+            },
+            arguments: vec![Expression::literal(ScalarLiteral::Integer(3))],
+        },
+        &Limits::default(),
+    )
+    .unwrap();
+    let driver = Driver(Target(Cell::new(0)));
+    let result = evaluate(
+        &expression,
+        ExpressionContext::Eval,
+        &driver,
+        &Limits::default(),
+        policy,
+    )
+    .unwrap();
+    assert_eq!(driver.0.0.get(), 5);
+    assert!(result.usage.steps >= 35);
+    assert_eq!(result.value, EvaluationValue::Present(Value::Integer(7)));
+}
+
+#[test]
+fn raw_context_composition_keeps_templates_projection_and_base_metadata_bounds() {
+    use htlk::runtime::{EvaluationError, evaluate};
+    use htlk_executable::*;
+    use std::error::Error as _;
+    let (compiler, _) = native_compiler();
+    let limits = Limits::default();
+    let policy = &compiler.config().policy.fields().evaluator_limits;
+    let mut frame = EvaluationFrame::default();
+    let template =
+        PromptTemplate::new(vec![], vec![TemplatePart::Text("rendered".into())], &limits).unwrap();
+    let digest = frame.insert_template(template, &limits).unwrap();
+    let env = InfluenceEnvironment {
+        base: labels("scope"),
+        references: [
+            ValueReference::ScopeOutput("value".parse().unwrap()),
+            ValueReference::Carried("value".parse().unwrap()),
+            ValueReference::Next("value".parse().unwrap()),
+            ValueReference::Output {
+                node: "n".parse().unwrap(),
+                port: "value".parse().unwrap(),
+            },
+        ]
+        .into_iter()
+        .map(|r| (r, meta("value")))
+        .collect(),
+        outcomes: BTreeMap::new(),
+    };
+    let authorize = |_: &SecurityLabels| Ok(());
+    let context = InfluenceContext::new(&frame, &env, &authorize, &limits).unwrap();
+    let render = Expression::new(
+        ExpressionKind::Render {
+            template: digest,
+            arguments: vec![],
+        },
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        evaluate(&render, ExpressionContext::Eval, &context, &limits, policy)
+            .unwrap()
+            .value,
+        EvaluationValue::Present(Value::Text("rendered".into()))
+    );
+    let get = Expression::new(
+        ExpressionKind::Get {
+            value: Box::new(
+                Expression::new(
+                    ExpressionKind::List(vec![Expression::literal(ScalarLiteral::Integer(7))]),
+                    &limits,
+                )
+                .unwrap(),
+            ),
+            path: vec![PathStep::Index(0)],
+        },
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        evaluate(&get, ExpressionContext::Eval, &context, &limits, policy)
+            .unwrap()
+            .value,
+        EvaluationValue::Present(Value::Integer(7))
+    );
+    assert!(
+        InfluenceContext::new(
+            &frame,
+            &env,
+            &authorize,
+            &Limits {
+                max_document_bytes: 1,
+                ..limits.clone()
+            }
+        )
+        .is_err()
+    );
+    for error in [
+        htlk::runtime::influence::InfluencedError::Evaluation(EvaluationError::OperandType),
+        htlk::runtime::influence::InfluencedError::Failure(RuntimeFailure::new(
+            FailureCode::Policy,
+        )),
+    ] {
+        assert!(error.source().is_some());
+        assert!(!error.to_string().is_empty());
+    }
+}

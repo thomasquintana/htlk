@@ -134,6 +134,142 @@ fn schema(
 }
 
 #[test]
+fn schema_family_refinements_cover_constants_alternatives_tuples_and_open_members() {
+    use htlk_analyzer::check_expression_with_schemas;
+    use htlk_executable::*;
+    let l = Limits::default();
+    for (inner, path, expected) in [
+        (r#"{"const":null}"#, vec![], BuiltinType::Null),
+        (r#"{"const":true}"#, vec![], BuiltinType::Boolean),
+        (r#"{"enum":["a","b"]}"#, vec![], BuiltinType::String),
+        (
+            r#"{"allOf":[{"type":"string"},{"minLength":1}]}"#,
+            vec![],
+            BuiltinType::String,
+        ),
+        (
+            r#"{"anyOf":[{"type":"boolean"},{"const":false}]}"#,
+            vec![],
+            BuiltinType::Boolean,
+        ),
+        (
+            r#"{"oneOf":[{"const":"a"},{"const":"b"}]}"#,
+            vec![],
+            BuiltinType::String,
+        ),
+        (
+            r#"{"type":"array","prefixItems":[{"type":"null"},{"type":"boolean"}],"items":{"type":"string"}}"#,
+            vec![PathStep::Index(0)],
+            BuiltinType::Null,
+        ),
+        (
+            r#"{"type":"array","prefixItems":[{"type":"null"},{"type":"boolean"}],"items":{"type":"string"}}"#,
+            vec![PathStep::Index(1)],
+            BuiltinType::Boolean,
+        ),
+        (
+            r#"{"type":"array","prefixItems":[{"type":"null"}],"items":{"type":"string"}}"#,
+            vec![PathStep::Index(3)],
+            BuiltinType::String,
+        ),
+        (
+            r#"{"type":"object","additionalProperties":{"type":"boolean"}}"#,
+            vec![PathStep::Field("dynamic".into())],
+            BuiltinType::Boolean,
+        ),
+    ] {
+        let (schemas, id) = schema(&format!(
+            r#"{{"type":"object","required":["value"],"properties":{{"value":{inner}}}}}"#
+        ));
+        let reference = ValueReference::Input("source".parse().unwrap());
+        let mut env = ExpressionTypeEnvironment::default();
+        env.references.insert(
+            reference.clone(),
+            Port::new(
+                ValueType::new(ValueTypeKind::Schema(id), TypeContext::Value, &l).unwrap(),
+                true,
+            ),
+        );
+        let mut steps = vec![PathStep::Field("value".into())];
+        steps.extend(path);
+        let expression = Expression::new(
+            ExpressionKind::Ref {
+                source: reference,
+                path: steps,
+            },
+            &l,
+        )
+        .unwrap();
+        let target = Port::new(ValueType::builtin(expected), false);
+        let analysis = check_expression_with_schemas(
+            &expression,
+            ExpressionContext::Eval,
+            &env,
+            Some(&target),
+            &schemas,
+            &l,
+        )
+        .unwrap();
+        assert!(!analysis.runtime_checks().is_empty());
+        for wrong in [BuiltinType::Bytes, BuiltinType::Regex] {
+            assert!(
+                check_expression_with_schemas(
+                    &expression,
+                    ExpressionContext::Eval,
+                    &env,
+                    Some(&Port::new(ValueType::builtin(wrong), false)),
+                    &schemas,
+                    &l
+                )
+                .is_err(),
+                "{inner}"
+            );
+        }
+    }
+    // Unknown/open and impossible schemas preserve runtime checks rather than
+    // manufacturing declarations or an unjustified static presence guarantee.
+    for inner in [
+        "true",
+        "false",
+        r#"{"type":["null","boolean","number","string","array","object"]}"#,
+        r#"{"enum":[null,true,1,"x",[],{}]}"#,
+        r#"{"type":"array"}"#,
+        r#"{"type":"object","patternProperties":{".*":{"type":"string"}}}"#,
+    ] {
+        let (schemas, id) = schema(&format!(
+            r#"{{"type":"object","properties":{{"value":{inner}}}}}"#
+        ));
+        let reference = ValueReference::Input("source".parse().unwrap());
+        let mut env = ExpressionTypeEnvironment::default();
+        env.references.insert(
+            reference.clone(),
+            Port::new(
+                ValueType::new(ValueTypeKind::Schema(id), TypeContext::Value, &l).unwrap(),
+                true,
+            ),
+        );
+        let expression = Expression::new(
+            ExpressionKind::Ref {
+                source: reference,
+                path: vec![PathStep::Field("value".into())],
+            },
+            &l,
+        )
+        .unwrap();
+        let analysis = check_expression_with_schemas(
+            &expression,
+            ExpressionContext::Eval,
+            &env,
+            None,
+            &schemas,
+            &l,
+        )
+        .unwrap();
+        assert!(!analysis.result().required());
+    }
+}
+
+#[test]
 fn whole_schema_roots_reject_disjoint_eval_and_edge_boundaries() {
     use htlk_analyzer::{
         ExpressionSite, ExpressionTypeError, ScopeVerificationErrorKind,
