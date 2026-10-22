@@ -35,8 +35,10 @@ The verified Rust 1.98.0 measurement before and after this expansion is:
 | Workspace | 89.30% | 92.47% | 2,410 |
 
 This exercises 1,017 previously uncovered lines. The runtime ratchet allows a
-12-line margin for alternate legal race outcomes; pure-crate uncovered-line
-budgets match the measured counts. The nightly branch measurement is 80.72%
+27-line margin for alternate legal race outcomes across local and clean Linux
+runs (the first complete Linux measurement had 1,629 uncovered runtime lines);
+pure-crate uncovered-line budgets match the measured counts. The nightly branch
+measurement is 80.72%
 for the analyzer, 87.32% for the compiler, 95.85% for executable records and
 70.15% for the runtime. Its runtime floor likewise allows a small race margin.
 

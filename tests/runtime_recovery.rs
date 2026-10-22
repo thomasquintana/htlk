@@ -124,19 +124,30 @@ async fn open_wait(
     exclude: Option<htlk::runtime::identity::WaitId>,
 ) -> htlk::runtime::identity::WaitId {
     for _ in 0..2000 {
-        if let Ok(view) = runtime.inspect_run(caller, run).await
-            && let Some(wait) = view.waits.iter().find(|w| Some(w.wait_id) != exclude)
-        {
-            return wait.wait_id;
+        match runtime.inspect_run(caller, run).await {
+            Ok(view) => {
+                assert!(
+                    !view.header.status.is_terminal(),
+                    "run terminated before its wait settled: {view:#?}"
+                );
+                if view.blocked
+                    && let Some(wait) = view.waits.iter().find(|w| Some(w.wait_id) != exclude)
+                {
+                    return wait.wait_id;
+                }
+            }
+            Err(error) if error.code() == htlk::runtime::failure::FailureCode::Fenced => {}
+            Err(error) => panic!("wait inspection failed: {error:?}"),
         }
         actix::clock::sleep(Duration::from_millis(2)).await;
     }
-    panic!("wait did not open")
+    panic!("scheduler did not settle at an open wait")
 }
 #[test]
 fn reopened_loop_resumes_committed_feedback_and_the_same_open_wait() {
     actix::System::new().block_on(async {
-        let path=std::env::temp_dir().join(format!("htlk-loop-recovery-{}.sqlite",std::process::id()));
+        static NEXT:AtomicU64=AtomicU64::new(0);
+        let path=std::env::temp_dir().join(format!("htlk-loop-recovery-{}-{}.sqlite",std::process::id(),NEXT.fetch_add(1,Ordering::SeqCst)));
         let (compiler,registry)=support::native_compiler_with_timeouts(10000,1000);let registry=Arc::new(registry);
         let graph=compiler.compile_source(r#"
             ir_version="0.1" graph test.loop_recovery {
@@ -152,6 +163,8 @@ fn reopened_loop_resumes_committed_feedback_and_the_same_open_wait() {
         "#,&support::catalogs()).unwrap();
         let clock=Arc::new(Clock(AtomicI64::new(1000)));let store=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();let runtime=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock.clone()));runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();
         let config=ExecutionConfig{lease_ms:100,poll_interval:Duration::from_millis(1),..Default::default()};let engine=ExecutionEngine::launch(runtime.clone(),config.clone()).unwrap();let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::from([("seed".parse().unwrap(),InputValue::Inline(Value::Bool(false)))]),"start",None).await.unwrap();
+        // Freeze this checkpoint only after feedback and the next wait have both
+        // settled; merely observing the wait row can precede scheduler quiescence.
         let first=open_wait(&runtime,&caller,&run.run_id,None).await;runtime.submit_reply(&caller,first,Value::Bool(false),"first").await.unwrap();let second=open_wait(&runtime,&caller,&run.run_id,Some(first)).await;assert_ne!(first,second);
         let before=store.records(&run.run_id,RecordFamily::Invocation,None,100).await.unwrap();engine.shutdown().await.unwrap();store.close().await.unwrap();drop(runtime);
         clock.0.store(1200,Ordering::SeqCst);let store=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();let runtime=Arc::new(Runtime::new(store.clone(),registry,Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock));let engine=ExecutionEngine::launch(runtime.clone(),config).unwrap();assert_eq!(open_wait(&runtime,&caller,&run.run_id,Some(first)).await,second);
@@ -162,7 +175,7 @@ fn reopened_loop_resumes_committed_feedback_and_the_same_open_wait() {
             }
             actix::clock::sleep(Duration::from_millis(2)).await;
         }
-        assert!(submitted);assert_eq!(terminal(&runtime,&caller,&run.run_id).await.header.status,RunStatus::Succeeded);
+        assert!(submitted);let view=terminal(&runtime,&caller,&run.run_id).await;assert_eq!(view.header.status,RunStatus::Succeeded,"reopened loop failed: {view:#?}");
         assert_eq!(store.records(&run.run_id,RecordFamily::Wait,None,100).await.unwrap().len(),2);
         for record in before{let after=store.record(&run.run_id,&record.key).await.unwrap();let (Value::Map(before),Value::Map(after))=(&record.payload,&after.payload)else{panic!()};assert_eq!(before.get("input_hash"),after.get("input_hash"));}
         runtime.submit_reply(&caller,first,Value::Bool(false),"first").await.unwrap();engine.shutdown().await.unwrap();store.close().await.unwrap();std::fs::remove_file(&path).unwrap();

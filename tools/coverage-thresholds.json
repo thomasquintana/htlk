@@ -2,6 +2,6 @@
   "htlk-analyzer": { "lines": 91.6, "max_uncovered_lines": 506 },
   "htlk-compiler": { "lines": 94.8, "max_uncovered_lines": 193 },
   "htlk-executable": { "lines": 98.1, "max_uncovered_lines": 100 },
-  "htlk-runtime": { "lines": 90.3, "max_uncovered_lines": 1623 },
+  "htlk-runtime": { "lines": 90.3, "max_uncovered_lines": 1638 },
   "htlk": { "lines": 100, "max_uncovered_lines": 0 }
 }
