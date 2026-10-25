@@ -52,7 +52,7 @@ exercise the same durable engine paths used by this example.
 The [2026-10-19 alignment review](spec-alignment.md) adds regressions for atomic
 denial, commit-time expiry, nested union projection, schema-aware comparison,
 canonical catalog revalidation, protected diagnostics and scheduler observations.
-It also covers task-required rejection, session-bearing HTTP 404 renewal, output
+It also covers task-required rejection, session-bearing HTTP 404 handling, output
 fuel classification and simultaneous response/extension accounting.
 
 - **Admission/identities:** exact policy/library/native implementation, source/bundle
@@ -68,6 +68,10 @@ fuel classification and simultaneous response/extension accounting.
   drift, numeric/Unicode/duplicate/byte/depth checks before normalization, exact frozen
   parameters, all four operation results, explicit delivery and deterministic retry
   exclusions, stable verified dedup, per-returned-URI scope and data-only prompts.
+- **Stateful MCP:** compiled browser open/inspect and sandbox
+  create/execute/inspect/destroy sequences over stdio/HTTP JSON/SSE, one initialization
+  per run/server, isolated same-principal runs, session-local handles, sticky expiry/
+  ambiguity, ownership takeover and bounded terminal/cancellation/shutdown cleanup.
 - **Stops/policy:** current exact parameter grants before connection, rechecked
   approvals after connection, classified replies/dispositions, spent-call and ancestor
   concurrency accounting, ambiguity retention, bounded cooperative native/ignoring

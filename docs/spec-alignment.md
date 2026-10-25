@@ -23,7 +23,7 @@ alignment suite uses compiler-produced executables, real actors and SQLite autho
 | F09 | Blocked derives from an actual completed scheduler scan at an unchanged sequence before the earliest timer, including mounted scopes. | `runtime_alignment::blocked_requires_a_quiescent_scheduler_and_first_loop_iteration_is_visible` and mounted-wait test |
 | F10 | Protected observations retain contract sites and secondary actual-value validation failures without rewriting graph-visible errors. | `runtime_alignment::inspection_retains_contract_sites_and_every_boundary_validation_failure` |
 | F11 | Native discovery rejects task-required tools when the server advertises task-call capability, before operation dispatch. | Runtime `mcp_transport::native_task_required_tools_are_rejected_during_discovery` |
-| F12 | HTTP session-bearing 404 starts bounded session renewal without the old session ID; operation resend remains a coordinator replay decision. | Runtime `mcp_transport::expired_http_sessions_renew_without_implicitly_replaying_an_operation` |
+| F12 | HTTP session-bearing 404 never implicitly replays an operation. Run-scoped integration now fails the session without renewal to preserve handle semantics. | Runtime `mcp_transport::expired_http_sessions_fail_without_renewal_or_implicit_operation_replay` |
 | F13 | Public port declarations require identifier tokens; retry members use their dedicated literal/list grammar. | Compiler `canonical::public_ports_and_retry_members_follow_their_closed_grammar` |
 | F14 | Opening iteration zero persists the invocation iteration exposed by inspection. | First-loop-iteration test in `runtime_alignment` |
 

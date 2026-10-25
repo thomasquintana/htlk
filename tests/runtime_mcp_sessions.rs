@@ -310,6 +310,16 @@ fn handles_reject_fresh_sessions_unknown_objects_and_use_after_destroy() {
             let adapter = peer.adapter();
             let first = context("first");
             let fresh = context("fresh-negative-control");
+            let selection = binding(&peer, "browser_open");
+            let descriptor = adapter
+                .descriptor(&selection, &first, &Limits::default())
+                .await
+                .unwrap();
+            assert_eq!(descriptor.digest(), selection.descriptor());
+            assert!(
+                peer.calls().is_empty(),
+                "discovery must not send an operation"
+            );
             let opened = call(
                 &adapter,
                 &peer,
@@ -402,6 +412,9 @@ fn expiry_and_ambiguous_timeout_never_renew_or_replay_a_session() {
             let outcome = lease.invoke(request("browser_open", r#"{"marker":"hold"}"#, 100)).await;
             assert_eq!(outcome.delivery, McpDelivery::PossiblySent);
             assert_eq!(outcome.result.unwrap_err().code(), if mode == "stateful-expire" { FailureCode::McpTransport } else { FailureCode::McpTimeout });
+            let blocked = lease.invoke(request("browser_open", r#"{"marker":"never-replayed"}"#, 100)).await;
+            assert_eq!(blocked.delivery, McpDelivery::NotSent);
+            assert_eq!(blocked.result.unwrap_err().code(), FailureCode::McpTransport);
             lease.close().await.unwrap();
             assert!(matches!(adapter.connect(&binding, &context, &limits).await, Err(e) if e.code() == FailureCode::McpTransport));
             assert_eq!(methods(&peer, "initialize").len(), 1);

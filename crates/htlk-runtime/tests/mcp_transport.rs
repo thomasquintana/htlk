@@ -68,6 +68,30 @@ fn request(max: usize) -> McpRequest {
         idempotency_key: None,
     }
 }
+
+#[test]
+fn native_discovery_and_request_preflight_fail_without_dispatch() {
+    actix::System::new().block_on(async {
+        assert!(NativeMcpAdapter::new(BTreeMap::new(), 0).is_err());
+        let adapter = NativeMcpAdapter::new(BTreeMap::new(), 1000).unwrap();
+        let binding = binding(McpTransport::Stdio);
+        let context = run_context();
+        let limits = Limits::default();
+        assert_eq!(adapter.descriptor(&binding, &context, &limits).await.unwrap_err().code(), FailureCode::McpIdentity);
+        // Argument/deadline preflight must precede even endpoint resolution.
+        let cancelled = request(4096);
+        cancelled.cancellation.cancel();
+        assert_eq!(adapter.invoke(&binding, &context, cancelled).await.unwrap_err().code(), FailureCode::Cancelled);
+        for grace in [false, true] {
+            let mut invalid = request(4096);
+            if grace { invalid.cancellation_grace_ms = 0; } else { invalid.timeout_ms = 0; }
+            assert_eq!(adapter.invoke(&binding, &context, invalid).await.unwrap_err().code(), FailureCode::Profile);
+        }
+        context.cancellation.cancel();
+        assert!(matches!(adapter.connect(&binding, &context, &limits).await, Err(error) if error.code() == FailureCode::Cancelled));
+        adapter.shutdown().await.unwrap();
+    });
+}
 fn initialize() -> &'static str {
     r#"{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}"#
 }

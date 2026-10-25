@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve native MCP sessions across operations within each run/server, including
+  browser pages and sandbox handles. Expired or ambiguous sessions now fail without
+  replacing state or replaying operations.
+- Update pinned Tokio to 1.53.3 for RUSTSEC-2026-0386.
 - Update transitive TLS certificate-validation dependencies for
   RUSTSEC-2026-0382 and RUSTSEC-2026-0383.
 - Close the Draft 0.1 alignment review's compiler catalog, contextual-name, grammar,
@@ -17,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract sites and secondary validation causes; report scheduler quiescence and
   loop iteration zero accurately.
 - Preserve MCP evaluator-limit classifications, reject task-required native calls,
-  renew expired HTTP sessions without implicit operation replay, and persist replies
+  reject expired run-owned HTTP sessions without operation replay, and persist replies
   independently of extension-sensitive accounting revisions.
 - Bound accumulated compiler diagnostics and pin/include additional semantic backend
   identities. Clarify native record assignability, schema discovery, explicit
@@ -25,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add trusted run/principal/fence/lifetime context to MCP adapter methods, dedicated
+  native transport ownership, per-attempt session leases and acknowledged shutdown.
+- Add stateful stdio/HTTP/SSE browser and sandbox capability sequences, isolated
+  concurrent-run and session-loss checks, and an opt-in live-server graph runner.
 - Add per-crate line/branch coverage reports and regression ratchets, with complete
   instrumented suites required on every PR and before release publication.
 - Add full source-to-native stdio/HTTP/SSE tests for every MCP operation, standalone

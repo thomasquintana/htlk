@@ -111,6 +111,13 @@ authoritative record families through two-entry journal/record pages. Polling is
 bounded and retries the explicitly transient fenced-snapshot inspection result.
 Unexpected inspection failures remain failures.
 
+[`tests/runtime_mcp_sessions.rs`](../tests/runtime_mcp_sessions.rs) additionally
+executes stateful browser and sandbox sequences against session-local stdio/HTTP/
+SSE peers. It verifies concurrent-run isolation, fresh-session negative controls,
+sticky session loss, ownership takeover and terminal/shutdown cleanup. The
+[capability spike report](mcp-capability-spike.md) documents the transport matrix
+and opt-in live-server runner.
+
 [`tests/runtime_crash.rs`](../tests/runtime_crash.rs) kills real worker processes
 at four observed checkpoints: response persistence before acceptance, an unsafe
 in-flight dispatch, an open typed wait, and committed loop feedback followed by

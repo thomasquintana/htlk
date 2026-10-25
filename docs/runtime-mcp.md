@@ -9,10 +9,15 @@ resource reads, URI-template reads and prompt retrievals.
 `NativeMcpAdapter` routes deployment IDs to operator-supplied `McpEndpoint::Stdio`
 or `McpEndpoint::Http` configurations. Executables contain compound server identity
 and operation/schema pins; credentials and connection locations remain host data.
-Every session negotiates MCP 2025-11-25, checks implementation name/version and the
-operation capability, and follows bounded descriptor pagination. `McpConnection`
-owns the live checked session: no renegotiation remains after the final policy/
-approval decision and intent. Failed negotiation cannot turn into a tool send.
+Native sessions are scoped to the run, authenticated principal, ownership fence
+and compound server identity. Different tools on that server share its session;
+different runs, including those by the same principal, remain isolated. A dedicated
+I/O thread retains transport resources across the execution workers' temporary
+reactors. One session negotiates MCP 2025-11-25 once and checks implementation
+name/version; every attempt checks the selected capability and live descriptor
+through bounded pagination. `McpConnection` leases that checked session exclusively:
+no renegotiation remains after the final policy/approval decision and intent.
+Failed negotiation cannot turn into a tool send.
 HTTP redirects and automatic decompression are disabled. HTTP JSON/SSE and newline-
 framed stdio responses are bounded before strict JSON parsing, preserving duplicate-
 key, depth, Unicode and numeric-token rejection. Complete `Limits` reach the parser;
@@ -20,8 +25,28 @@ RPC matching and session/content-type checks precede completion claims. Native
 clients answer reverse `ping` and reject unadvertised sampling instead of invoking
 a model. Native processes are killed on drop; HTTP cleanup is best-effort.
 
+Closing an attempt's connection releases its lease. Sessions remain live between
+nodes and while a locally owned run waits. Run completion, failure, cancellation,
+shutdown or ownership loss cancels their lifetime and triggers bounded transport
+cleanup. A higher ownership fence cancels the old local execution; old cleanup is
+keyed to its own generation and cannot close a new owner's session. Requests on one
+session serialize; separate sessions can progress concurrently. The host can call
+`NativeMcpAdapter::shutdown().await` after stopping execution to acknowledge cleanup
+before process exit (two-second caller bound). This permanently stops that adapter.
+
+An expired HTTP session or ambiguous/interrupted exchange poisons the session.
+Later connections fail `MCP_TRANSPORT`; the adapter never initializes a replacement
+under existing handles or silently resends an operation. A correlated JSON-RPC
+error completes the exchange and does not by itself poison the session. Per-call
+response limits are reset for each request rather than shrinking future calls.
+Sessions are process-local: durable graph recovery does not reconstruct browser
+pages or sandbox handles after restart or ownership transfer. Reconciliation and
+recreation belong in explicit graph operations supported by the external service.
+
 `McpAdapter` is a trusted integration contract. Its connection resolver receives the
-actual run principal. Runtime independently checks descriptor
+`McpRunContext`, containing the actual run ID, host principal, ownership fence and
+execution-lifetime cancellation signal. All adapter methods that discover or send
+operations receive this context. Runtime independently checks descriptor
 digests and result values and imposes finite discovery/attempt timeouts. An adapter
 returns raw result-object JSON; it cannot substitute text for structured tool output.
 Resource results preserve text/decoded-byte order and separately authorize every
@@ -35,9 +60,9 @@ An admitted invocation freezes arguments and its input hash. Each one-based atte
 persists the exact method, parameters, encoded request, requested URI, timeout,
 deduplication mechanism and ownership fence in `prepared`. Exact method, native
 parameters, canonical encoded parameters and protocol key reach current authorization
-before opening a connection. `mcp_policy_for_request` supports trusted argument-specific
-approval, safety and protection decisions. Approval opens without holding a live
-session; policy/disposition are rechecked after connection and discovery. The transaction that
+before acquiring a connection lease. `mcp_policy_for_request` supports trusted
+argument-specific approval, safety and protection decisions. Approval opens before
+acquiring an attempt lease; policy/disposition are rechecked after discovery. The transaction that
 records `possibly_sent` also spends a call and reserves concurrency in the run,
 invocation and every containing scope/wrapper. Only then can the adapter send.
 
@@ -121,6 +146,11 @@ raw duplicate keys, unsafe integer tokens, byte/depth bounds, cancellation, corr
 errors, reverse ping and refusal of sampling. Delivery tests cover known-unsent retry,
 ambiguous protocol capacity, ignoring-adapter/shutdown grace, deterministic drift,
 pre-connection parameter scope and invocation-stable dedup keys.
+
+The [stateful capability spike](mcp-capability-spike.md) executes browser
+open → inspect and sandbox create → execute → inspect → destroy through compiled
+graphs on all three transports. Session-local fixtures, fresh-session negative
+controls, concurrent-run isolation and teardown evidence verify actual continuity.
 
 The roadmap tracks remaining source metadata, richer inspection, host examples and
 final conformance/release checks. [Recovery](runtime-recovery.md),

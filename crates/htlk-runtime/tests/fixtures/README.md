@@ -1,5 +1,12 @@
 # Complete native executable fixture
 
+The run-scoped MCP integration refreshes core, regex and URI-template profile
+identities because the native source manifest changes and now includes
+`mcp/native_sessions.rs`. The independent Node checker includes that same source
+in its explicit contribution list. The fixed fixture was refreshed from the
+documented generator and checked independently; its root scope and policy retain
+their previous identities.
+
 The 2026-10-19 alignment fixes refresh the source-derived profile identities and
 add exact JSON/number/URI/backend dependency contributions. The empty scope record,
 policy, wire grammar, hash domains and independent runtime identity vectors remain
