@@ -24,23 +24,24 @@ Existing crate-local unit tests share their production source files and appear
 in LLVM's file totals. All tests still execute. No production coverage-skipping
 attributes or coverage-specific behavior are used.
 
-The verified Rust 1.98.0 measurement before and after this expansion is:
+The latest verified Rust 1.98.0 snapshot, including run-scoped MCP integration,
+is compared with the pre-expansion baseline below:
 
 | Crate | Baseline lines | Current lines | Uncovered lines |
 | --- | --- | --- | --- |
 | `htlk-analyzer` | 89.33% | 91.61% | 506 |
 | `htlk-compiler` | 86.89% | 94.82% | 193 |
 | `htlk-executable` | 95.46% | 98.14% | 100 |
-| `htlk-runtime` | 87.86% | 90.46% | 1,611 |
-| Workspace | 89.30% | 92.47% | 2,410 |
+| `htlk-runtime` | 87.86% | 90.55% | 1,619 |
+| Workspace | 89.30% | 92.51% | 2,418 |
 
-This exercises 1,017 previously uncovered lines. The runtime ratchet allows a
-27-line margin for alternate legal race outcomes across local and clean Linux
-runs (the first complete Linux measurement had 1,629 uncovered runtime lines);
-pure-crate uncovered-line budgets match the measured counts. The nightly branch
-measurement is 80.72%
-for the analyzer, 87.32% for the compiler, 95.85% for executable records and
-70.15% for the runtime. Its runtime floor likewise allows a small race margin.
+The initial deep-test expansion exercised 1,017 previously uncovered lines. The
+runtime ratchet allows 1,638 uncovered lines, a 19-line margin above the latest
+measurement for alternate legal race outcomes across local and clean Linux runs.
+Pure-crate uncovered-line budgets match the measured counts. The latest nightly
+branch measurement is 80.72% for the analyzer, 87.32% for the compiler, 95.85% for
+executable records and 70.61% for the runtime. Its runtime floor likewise allows
+a small race margin.
 
 Download the `coverage-line-<SHA>` and `coverage-branch-<SHA>` CI artifacts for
 current exact counts, machine-readable JSON, LCOV and annotated HTML. Open
