@@ -38,11 +38,17 @@ impl McpAdapter for FaultAdapter {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
         _: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move { Ok(self.descriptors[&binding.descriptor()].clone()) })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, request: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        request: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             self.requests.lock().unwrap().push(request.params);
             let reply = self
@@ -584,6 +590,7 @@ impl McpAdapter for Script {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
         _: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move {
@@ -594,7 +601,12 @@ impl McpAdapter for Script {
             Ok(self.descriptors[&binding.descriptor()].clone())
         })
     }
-    fn invoke<'a>(&'a self, binding: &'a McpBinding, _: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let McpBindingKind::Tool { name, .. } = binding.kind() else {

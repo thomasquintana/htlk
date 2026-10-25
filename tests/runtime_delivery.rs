@@ -52,10 +52,20 @@ impl McpAdapter for Deduplicating {
             htlk::runtime::mcp::McpDeduplication::Protocol
         }))
     }
-    fn descriptor<'a>(&'a self, b: &'a McpBinding, _: &'a Limits) -> McpFuture<'a, JsonDocument> {
+    fn descriptor<'a>(
+        &'a self,
+        b: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: &'a Limits,
+    ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move { Ok(self.descriptors[&b.descriptor()].clone()) })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, request: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        request: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             let mut keys = self.keys.lock().unwrap();
             let first = keys.is_empty();
@@ -122,6 +132,7 @@ impl McpAdapter for Adapter {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
         _: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move {
@@ -132,7 +143,12 @@ impl McpAdapter for Adapter {
             Ok(self.descriptors[&binding.descriptor()].clone())
         })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, _: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             self.sent.fetch_add(1, Ordering::SeqCst);
             if self.protocol_fault {
@@ -153,6 +169,7 @@ fn descriptor_drift_is_known_unsent_and_never_repaired_by_an_authored_retry() {
 struct KnownConnection<'a> {
     adapter: &'a Adapter,
     binding: &'a McpBinding,
+    context: &'a htlk::runtime::mcp::McpRunContext,
     descriptor: JsonDocument,
 }
 impl McpConnection for KnownConnection<'_> {
@@ -163,30 +180,44 @@ impl McpConnection for KnownConnection<'_> {
         Box::pin(async move {
             McpOutcome {
                 delivery: McpDelivery::ResponseReceived,
-                result: self.adapter.invoke(self.binding, request).await,
+                result: self
+                    .adapter
+                    .invoke(self.binding, self.context, request)
+                    .await,
             }
         })
     }
 }
 impl McpAdapter for Correlated {
-    fn descriptor<'a>(&'a self, b: &'a McpBinding, l: &'a Limits) -> McpFuture<'a, JsonDocument> {
-        self.0.descriptor(b, l)
+    fn descriptor<'a>(
+        &'a self,
+        b: &'a McpBinding,
+        context: &'a htlk::runtime::mcp::McpRunContext,
+        l: &'a Limits,
+    ) -> McpFuture<'a, JsonDocument> {
+        self.0.descriptor(b, context, l)
     }
-    fn invoke<'a>(&'a self, b: &'a McpBinding, r: McpRequest) -> McpFuture<'a, Vec<u8>> {
-        self.0.invoke(b, r)
+    fn invoke<'a>(
+        &'a self,
+        b: &'a McpBinding,
+        context: &'a htlk::runtime::mcp::McpRunContext,
+        r: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
+        self.0.invoke(b, context, r)
     }
     fn connect<'a>(
         &'a self,
         b: &'a McpBinding,
-        context: &'a HostContext,
+        context: &'a htlk::runtime::mcp::McpRunContext,
         l: &'a Limits,
     ) -> McpFuture<'a, Box<dyn McpConnection + 'a>> {
         Box::pin(async move {
-            assert_eq!(context.principal(), "alice");
-            let descriptor = self.0.descriptor(b, l).await?;
+            assert_eq!(context.host.principal(), "alice");
+            let descriptor = self.0.descriptor(b, context, l).await?;
             Ok(Box::new(KnownConnection {
                 adapter: &self.0,
                 binding: b,
+                context,
                 descriptor,
             }) as Box<dyn McpConnection + 'a>)
         })
@@ -338,10 +369,20 @@ fn exact_parameter_scope_is_authorized_before_opening_any_connection() {
     })
 }
 impl McpAdapter for Ignoring {
-    fn descriptor<'a>(&'a self, b: &'a McpBinding, _: &'a Limits) -> McpFuture<'a, JsonDocument> {
+    fn descriptor<'a>(
+        &'a self,
+        b: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: &'a Limits,
+    ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move { Ok(self.descriptors[&b.descriptor()].clone()) })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, _: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             struct Finished<'a>(&'a AtomicBool);
             impl Drop for Finished<'_> {

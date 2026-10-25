@@ -21,6 +21,15 @@ use std::{
 const DESCRIPTOR: &str =
     r#"{"name":"lookup","inputSchema":{"type":"object"},"outputSchema":{"type":"object"}}"#;
 const RESULT: &str = r#"{"content":[],"structuredContent":{"answer":42}}"#;
+fn run_context() -> htlk_runtime::mcp::McpRunContext {
+    let limits = Limits::default();
+    htlk_runtime::mcp::McpRunContext {
+        run_id: htlk_runtime::identity::RunId::new("wire-test".into(), &limits).unwrap(),
+        host: htlk_runtime::HostContext::new("test".into(), &limits).unwrap(),
+        fence: 1,
+        cancellation: Arc::new(htlk_runtime::mcp::McpCancellation::new()),
+    }
+}
 fn binding(transport: McpTransport) -> McpBinding {
     let l = Limits::default();
     McpBinding::new(
@@ -145,7 +154,7 @@ fn lifecycle_peer(steps: Vec<HttpStep>) -> (String, std::thread::JoinHandle<()>)
 }
 
 #[test]
-fn expired_http_sessions_renew_without_implicitly_replaying_an_operation() {
+fn expired_http_sessions_fail_without_renewal_or_implicit_operation_replay() {
     actix::System::new().block_on(async {
         for during_call in [false, true] {
             let step = |method, session, status, result: &str, new_session| HttpStep {
@@ -170,11 +179,6 @@ fn expired_http_sessions_renew_without_implicitly_replaying_an_operation() {
             if during_call {
                 steps.push(step("tools/call", Some("old"), 404, "", None));
             }
-            steps.extend([
-                step("initialize", None, 200, initialize(), Some("new")),
-                step("notifications/initialized", Some("new"), 202, "", None),
-                step("tools/list", Some("new"), 200, &listed, None),
-            ]);
             let (url, peer) = lifecycle_peer(steps);
             let adapter = NativeMcpAdapter::new(
                 BTreeMap::from([(
@@ -189,18 +193,19 @@ fn expired_http_sessions_renew_without_implicitly_replaying_an_operation() {
             .unwrap();
             let binding = binding(McpTransport::StreamableHttp);
             let limits = Limits::default();
-            let context = htlk_runtime::HostContext::new("test".into(), &limits).unwrap();
-            let mut connection = adapter.connect(&binding, &context, &limits).await.unwrap();
-            assert_eq!(connection.descriptor().digest(), binding.descriptor());
+            let context = run_context();
             if during_call {
+                let mut connection = adapter.connect(&binding, &context, &limits).await.unwrap();
+                assert_eq!(connection.descriptor().digest(), binding.descriptor());
                 let outcome = connection.invoke(request(4096)).await;
                 assert_eq!(outcome.delivery, McpDelivery::PossiblySent);
                 assert_eq!(
                     outcome.result.unwrap_err().code(),
                     FailureCode::McpTransport
                 );
+                drop(connection);
             }
-            drop(connection);
+            assert!(matches!(adapter.connect(&binding, &context, &limits).await, Err(e) if e.code() == FailureCode::McpTransport));
             peer.join().unwrap();
         }
     });
@@ -216,7 +221,7 @@ fn native_task_required_tools_are_rejected_during_discovery() {
             let (url,peer)=lifecycle_peer(steps);
             let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Http{url,headers:BTreeMap::new()})]),2000).unwrap();
             let l=Limits::default();let base=binding(McpTransport::StreamableHttp);let binding=McpBinding::new(base.server().clone(),JsonDocument::new(descriptor.as_bytes(),&l).unwrap().digest(),base.kind().clone(),&l).unwrap();
-            let context=htlk_runtime::HostContext::new("test".into(),&l).unwrap();
+            let context=run_context();
             match adapter.connect(&binding,&context,&l).await {Err(e)=>{assert_eq!(support,"required");assert_eq!(e.code(),FailureCode::McpDescriptor);},Ok(connection)=>{assert_ne!(support,"required");drop(connection);}}
             peer.join().unwrap();
         }
@@ -410,7 +415,11 @@ fn sse_reverse_ping_is_answered_and_unadvertised_sampling_cannot_execute() {
             )
             .unwrap();
             let result = adapter
-                .invoke(&binding(McpTransport::StreamableHttp), request(4096))
+                .invoke(
+                    &binding(McpTransport::StreamableHttp),
+                    &run_context(),
+                    request(4096),
+                )
                 .await
                 .unwrap();
             assert_eq!(
@@ -462,7 +471,12 @@ fn native_protocol_dedup_requires_explicit_compound_binding_support_and_sends_th
             Some(htlk_runtime::mcp::McpDeduplication::Protocol)
         );
         request.idempotency_key = Some(key);
-        assert!(adapter.invoke(&binding, request).await.is_ok());
+        assert!(
+            adapter
+                .invoke(&binding, &run_context(), request)
+                .await
+                .is_ok()
+        );
         peer.join().unwrap();
     })
 }
@@ -510,7 +524,11 @@ fn http_json_and_sse_preserve_frozen_requests_and_validate_raw_ingress() {
             )
             .unwrap();
             let result = adapter
-                .invoke(&binding(McpTransport::StreamableHttp), request(max))
+                .invoke(
+                    &binding(McpTransport::StreamableHttp),
+                    &run_context(),
+                    request(max),
+                )
                 .await;
             if let Some(code) = expected {
                 assert_eq!(result.unwrap_err().code(), code)
@@ -545,8 +563,7 @@ fn live_http_connection_reports_correlated_errors_and_cancels_the_actual_request
             )
             .unwrap();
             let binding = binding(McpTransport::StreamableHttp);
-            let context =
-                htlk_runtime::HostContext::new("test".into(), &Limits::default()).unwrap();
+            let context = run_context();
             let limits = Limits::default();
             let mut connection = adapter.connect(&binding, &context, &limits).await.unwrap();
             let mut request = request(4096);
@@ -590,7 +607,7 @@ fn full_response_depth_limit_is_enforced_on_the_live_connection() {
         )
         .unwrap();
         let binding = binding(McpTransport::StreamableHttp);
-        let context = htlk_runtime::HostContext::new("test".into(), &Limits::default()).unwrap();
+        let context = run_context();
         let limits = Limits::default();
         let mut connection = adapter.connect(&binding, &context, &limits).await.unwrap();
         let mut request = request(4096);
@@ -625,7 +642,7 @@ fn stdio_negotiates_pages_checks_identity_and_bounds_raw_lines() {
                 done
             "#;
             let adapter = NativeMcpAdapter::new(BTreeMap::from([("test".into(), McpEndpoint::Stdio {program: "/bin/sh".into(), arguments: vec!["-c".into(), script.into()], environment: BTreeMap::from([("DESCRIPTOR".into(), DESCRIPTOR.into()), ("INIT".into(), initialize().into()), ("REPLY".into(), reply)])})]), 2000).unwrap();
-            let result = adapter.invoke(&binding(McpTransport::Stdio), request(max)).await;
+            let result = adapter.invoke(&binding(McpTransport::Stdio), &run_context(), request(max)).await;
             if let Some(code) = code {assert_eq!(result.unwrap_err().code(), code)} else {assert!(result.is_ok(), "{result:?}")}
         }
     })
@@ -656,7 +673,7 @@ fn stdio_cancellation_keeps_the_reader_live_for_the_correlated_completion() {
                 printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$result"
             done
         "#;
-        let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Stdio{program:"/bin/sh".into(),arguments:vec!["-c".into(),script.into()],environment:BTreeMap::from([("INIT".into(),initialize().into()),("DESCRIPTOR".into(),DESCRIPTOR.into())])})]),2000).unwrap();let binding=binding(McpTransport::Stdio);let limits=Limits::default();let context=htlk_runtime::HostContext::new("test".into(),&limits).unwrap();let mut connection=adapter.connect(&binding,&context,&limits).await.unwrap();let mut request=request(4096);request.cancellation_grace_ms=500;let signal=request.cancellation.clone();
+        let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Stdio{program:"/bin/sh".into(),arguments:vec!["-c".into(),script.into()],environment:BTreeMap::from([("INIT".into(),initialize().into()),("DESCRIPTOR".into(),DESCRIPTOR.into())])})]),2000).unwrap();let binding=binding(McpTransport::Stdio);let limits=Limits::default();let context=run_context();let mut connection=adapter.connect(&binding,&context,&limits).await.unwrap();let mut request=request(4096);request.cancellation_grace_ms=500;let signal=request.cancellation.clone();
         let (outcome,_)=tokio::join!(connection.invoke(request),async{actix::clock::sleep(Duration::from_millis(20)).await;signal.cancel();});assert_eq!(outcome.delivery,McpDelivery::ResponseReceived);assert_eq!(outcome.result.unwrap_err().code(),FailureCode::McpProtocol);let _=connection.close().await;
     })
 }

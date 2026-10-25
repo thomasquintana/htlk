@@ -84,6 +84,7 @@ impl McpAdapter for ScriptedTool {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
         _: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move {
@@ -93,7 +94,12 @@ impl McpAdapter for ScriptedTool {
                 .ok_or_else(|| RuntimeFailure::new(FailureCode::McpDescriptor))
         })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, _: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(br#"{"content":[],"structuredContent":{"text":"Hello from the local scripted tool!"}}"#.to_vec())

@@ -65,10 +65,20 @@ struct Adapter {
     calls: AtomicUsize,
 }
 impl McpAdapter for Adapter {
-    fn descriptor<'a>(&'a self, b: &'a McpBinding, _: &'a Limits) -> McpFuture<'a, JsonDocument> {
+    fn descriptor<'a>(
+        &'a self,
+        b: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: &'a Limits,
+    ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move { Ok(self.descriptors[&b.descriptor()].clone()) })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, _: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(

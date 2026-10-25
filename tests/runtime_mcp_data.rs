@@ -101,6 +101,7 @@ impl McpAdapter for Adapter {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
         _: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move { Ok(self.descriptors[&binding.descriptor()].clone()) })
@@ -108,6 +109,7 @@ impl McpAdapter for Adapter {
     fn invoke<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
         request: McpRequest,
     ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {

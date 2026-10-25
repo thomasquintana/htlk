@@ -120,11 +120,17 @@ impl McpAdapter for Adapter {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
         _: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move { Ok(self.descriptors[&binding.descriptor()].clone()) })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, _: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a htlk::runtime::mcp::McpRunContext,
+        _: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             while self.hold.load(Ordering::SeqCst) && !self.release.load(Ordering::SeqCst) {

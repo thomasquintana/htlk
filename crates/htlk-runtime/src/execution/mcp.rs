@@ -423,11 +423,17 @@ async fn operate_inner(
         .attempt_timeout_ms()
         .ok_or_else(err)?
         .min((number(&record.payload, "deadline_ms")? - now) as u64);
+    let session_context = crate::mcp::McpRunContext {
+        run_id: lease.run_id().clone(),
+        host: scope.context.clone(),
+        fence: lease.fence(),
+        cancellation: runtime.mcp_control.lifetime(lease)?,
+    };
     let connected = bounded(
         &cancellation.token,
         connect_timeout,
         runtime.config.cancellation_grace_ms,
-        adapter.connect(binding, &scope.context, &runtime.config.limits),
+        adapter.connect(binding, &session_context, &runtime.config.limits),
     )
     .await;
     if cancellation.token.is_cancelled() {

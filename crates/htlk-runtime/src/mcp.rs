@@ -2,7 +2,7 @@
 //! could erase duplicate keys or unsafe mathematical numeric tokens.
 use crate::{
     failure::{FailureCode, RuntimeFailure},
-    identity::InvocationId,
+    identity::{InvocationId, RunId},
     records::SecurityLabels,
 };
 use htlk_executable::{
@@ -27,6 +27,21 @@ pub enum McpDeduplication {
     },
 }
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+mod native_sessions;
+use native_sessions::NativeSessions;
+
+/// Trusted run ownership and lifetime, supplied by the runtime rather than inputs.
+#[derive(Clone)]
+pub struct McpRunContext {
+    /// Durable run identity. Different runs never share native sessions.
+    pub run_id: RunId,
+    /// Authenticated principal owning this run.
+    pub host: crate::HostContext,
+    /// Current durable ownership generation.
+    pub fence: i64,
+    /// Stops session I/O when local ownership or execution ends.
+    pub cancellation: Arc<McpCancellation>,
+}
 /// Sendable bounded external operation future.
 pub type McpFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RuntimeFailure>> + Send + 'a>>;
 /// Observed delivery, independent of whether a graph accepts a proposed result.
@@ -143,7 +158,7 @@ pub trait McpConnection: Send {
     fn descriptor(&self) -> &JsonDocument;
     /// Sends the frozen request and reports observed delivery separately.
     fn invoke<'a>(&'a mut self, request: McpRequest) -> McpAttemptFuture<'a>;
-    /// Best-effort finite caller-bounded cleanup of process/session resources.
+    /// Releases this attempt's lease. Run-owned sessions survive between attempts.
     fn close(&mut self) -> McpFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
@@ -178,14 +193,15 @@ pub trait McpAdapter: Send + Sync {
     fn connect<'a>(
         &'a self,
         binding: &'a McpBinding,
-        _context: &'a crate::HostContext,
+        context: &'a McpRunContext,
         limits: &'a Limits,
     ) -> McpFuture<'a, Box<dyn McpConnection + 'a>> {
         Box::pin(async move {
-            let descriptor = self.descriptor(binding, limits).await?;
+            let descriptor = self.descriptor(binding, context, limits).await?;
             Ok(Box::new(AdapterConnection {
                 adapter: self,
                 binding,
+                context,
                 descriptor,
             }) as Box<dyn McpConnection + 'a>)
         })
@@ -205,15 +221,21 @@ pub trait McpAdapter: Send + Sync {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        context: &'a McpRunContext,
         limits: &'a Limits,
     ) -> McpFuture<'a, JsonDocument>;
     /// Sends one pinned request; returns raw result-object JSON before acceptance.
-    fn invoke<'a>(&'a self, binding: &'a McpBinding, request: McpRequest)
-    -> McpFuture<'a, Vec<u8>>;
+    fn invoke<'a>(
+        &'a self,
+        binding: &'a McpBinding,
+        context: &'a McpRunContext,
+        request: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>>;
 }
 struct AdapterConnection<'a, A: McpAdapter + ?Sized> {
     adapter: &'a A,
     binding: &'a McpBinding,
+    context: &'a McpRunContext,
     descriptor: JsonDocument,
 }
 impl<A: McpAdapter + ?Sized> McpConnection for AdapterConnection<'_, A> {
@@ -228,7 +250,10 @@ impl<A: McpAdapter + ?Sized> McpConnection for AdapterConnection<'_, A> {
                     result: Err(fail(FailureCode::Cancelled)),
                 };
             }
-            let result = self.adapter.invoke(self.binding, request).await;
+            let result = self
+                .adapter
+                .invoke(self.binding, self.context, request)
+                .await;
             let delivery = if result.is_ok() {
                 McpDelivery::ResponseReceived
             } else {
@@ -270,10 +295,10 @@ pub enum McpEndpoint {
         headers: BTreeMap<String, String>,
     },
 }
-/// Native bounded stdio/Streamable-HTTP implementation. Each operation negotiates
-/// a fresh finite session and rechecks the exact descriptor before invoking it.
+/// Native bounded stdio/Streamable-HTTP implementation. One run-owned session per
+/// compound server preserves remote state across operations and tool bindings.
 pub struct NativeMcpAdapter {
-    endpoints: BTreeMap<String, McpEndpoint>,
+    sessions: NativeSessions,
     timeout_ms: u64,
     idempotent_bindings: std::collections::BTreeSet<htlk_executable::digest::Digest>,
 }
@@ -295,7 +320,7 @@ impl NativeMcpAdapter {
             return Err(fail(FailureCode::Profile));
         }
         Ok(Self {
-            endpoints,
+            sessions: NativeSessions::new(endpoints, timeout_ms)?,
             timeout_ms,
             idempotent_bindings: Default::default(),
         })
@@ -310,40 +335,18 @@ impl NativeMcpAdapter {
         self.idempotent_bindings = bindings;
         self
     }
-    async fn ready(
-        &self,
-        binding: &McpBinding,
-        limits: &Limits,
-    ) -> Result<NativeConnection, RuntimeFailure> {
-        let endpoint = self
-            .endpoints
-            .get(binding.server().deployment_id())
-            .ok_or_else(|| fail(FailureCode::McpIdentity))?;
-        let mut session = Session::new(endpoint, binding.server(), limits.clone()).await?;
-        let result = session.prepare(binding).await;
-        match result {
-            Ok(descriptor) => Ok(NativeConnection {
-                session,
-                descriptor,
-                binding: binding.clone(),
-            }),
-            // Preserve the primary identity/protocol failure. Transport drop
-            // closes/kills the failed session; cleanup cannot turn it into timeout.
-            Err(error) => Err(error),
-        }
-    }
 }
 impl McpAdapter for NativeMcpAdapter {
     fn connect<'a>(
         &'a self,
         binding: &'a McpBinding,
-        _: &'a crate::HostContext,
+        context: &'a McpRunContext,
         limits: &'a Limits,
     ) -> McpFuture<'a, Box<dyn McpConnection + 'a>> {
         Box::pin(async move {
             tokio::time::timeout(
                 Duration::from_millis(self.timeout_ms),
-                self.ready(binding, limits),
+                self.sessions.connect(binding, context, limits),
             )
             .await
             .map_err(|_| fail(FailureCode::McpTimeout))?
@@ -372,12 +375,13 @@ impl McpAdapter for NativeMcpAdapter {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        context: &'a McpRunContext,
         limits: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move {
             tokio::time::timeout(Duration::from_millis(self.timeout_ms), async {
-                let mut connection = self.ready(binding, limits).await?;
-                let descriptor = connection.descriptor.clone();
+                let mut connection = self.sessions.connect(binding, context, limits).await?;
+                let descriptor = connection.descriptor().clone();
                 let _ = tokio::time::timeout(
                     Duration::from_millis(self.timeout_ms.min(1000)),
                     connection.close(),
@@ -392,6 +396,7 @@ impl McpAdapter for NativeMcpAdapter {
     fn invoke<'a>(
         &'a self,
         binding: &'a McpBinding,
+        context: &'a McpRunContext,
         request: McpRequest,
     ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async move {
@@ -416,8 +421,8 @@ impl McpAdapter for NativeMcpAdapter {
                 let mut limits = request.response_limits.clone();
                 limits.max_document_bytes =
                     limits.max_document_bytes.min(request.max_response_bytes);
-                let mut connection = self.ready(binding, &limits).await?;
-                let result = if connection.descriptor.digest() != binding.descriptor() {
+                let mut connection = self.sessions.connect(binding, context, &limits).await?;
+                let result = if connection.descriptor().digest() != binding.descriptor() {
                     Err(fail(FailureCode::McpDescriptor))
                 } else {
                     connection.invoke(request).await.result
@@ -434,7 +439,6 @@ impl McpAdapter for NativeMcpAdapter {
 struct NativeConnection {
     session: Session,
     descriptor: JsonDocument,
-    binding: McpBinding,
 }
 impl McpConnection for NativeConnection {
     fn descriptor(&self) -> &JsonDocument {
@@ -458,17 +462,12 @@ impl McpConnection for NativeConnection {
                     result: Err(fail(FailureCode::Profile)),
                 };
             }
+            self.session.limits = request.response_limits.clone();
             self.session.limits.max_document_bytes = self
                 .session
                 .limits
                 .max_document_bytes
-                .min(request.response_limits.max_document_bytes)
                 .min(request.max_response_bytes);
-            self.session.limits.max_depth = self
-                .session
-                .limits
-                .max_depth
-                .min(request.response_limits.max_depth);
             let notifier = match self.session.cancellation_notifier(self.session.next + 1) {
                 Ok(n) => n,
                 Err(e) => {
@@ -506,19 +505,6 @@ impl McpConnection for NativeConnection {
             }).await.unwrap_or_else(|_|Err(fail(FailureCode::McpTimeout)))
             };
             let delivery = self.session.delivery;
-            if self.session.expired {
-                self.session.reset_expired();
-                // Renew protocol state, never replay the operation here. The
-                // coordinator retains the original delivery evidence and alone
-                // decides whether another authored attempt is authorized.
-                let renewal =
-                    tokio::time::timeout_at(deadline, self.session.prepare(&self.binding)).await;
-                if let Ok(Ok(descriptor)) = renewal
-                    && descriptor.digest() == self.binding.descriptor()
-                {
-                    self.descriptor = descriptor;
-                }
-            }
             let result = result.and_then(|value| {
                 JsonDocument::from_value(&value, &self.session.limits)
                     .map(|d| d.as_bytes().to_vec())
@@ -610,53 +596,44 @@ struct Session {
     limits: Limits,
     delivery: McpDelivery,
     expired: bool,
+    capabilities: Option<Value>,
 }
 impl Session {
-    fn reset_expired(&mut self) {
-        if let Transport::Http { session, .. } = &mut self.transport {
-            *session = None;
-        }
-        self.expired = false;
-    }
     async fn prepare(&mut self, binding: &McpBinding) -> Result<JsonDocument, RuntimeFailure> {
-        for renewal in 0..2 {
-            let result = async {
-                let capabilities = self.initialize(binding.server()).await?;
-                let capability = match binding.kind() {
-                    McpBindingKind::Tool { .. } => "tools",
-                    McpBindingKind::Prompt { .. } => "prompts",
-                    _ => "resources",
-                };
-                if !matches!(as_map(&capabilities)?.get(capability), Some(Value::Map(_))) {
-                    return Err(fail(FailureCode::McpDescriptor));
-                }
-                let descriptor = self.descriptor(binding).await?;
-                let task_calls = as_map(&capabilities)?
-                    .get("tasks")
-                    .and_then(|v| as_map(v).ok()?.get("requests"))
-                    .and_then(|v| as_map(v).ok()?.get("tools"))
-                    .and_then(|v| as_map(v).ok()?.get("call"))
-                    .is_some();
-                let task_required = as_map(descriptor.value())?
-                    .get("execution")
-                    .and_then(|v| as_map(v).ok()?.get("taskSupport"))
-                    == Some(&Value::Text("required".into()));
-                if matches!(binding.kind(), McpBindingKind::Tool { .. })
-                    && task_calls
-                    && task_required
-                {
-                    return Err(fail(FailureCode::McpDescriptor));
-                }
-                Ok(descriptor)
-            }
-            .await;
-            if self.expired && renewal == 0 {
-                self.reset_expired();
-            } else {
-                return result;
-            }
+        if self.expired {
+            return Err(fail(FailureCode::McpTransport));
         }
-        Err(fail(FailureCode::McpTransport))
+        let capabilities = match &self.capabilities {
+            Some(capabilities) => capabilities.clone(),
+            None => {
+                let capabilities = self.initialize(binding.server()).await?;
+                self.capabilities = Some(capabilities.clone());
+                capabilities
+            }
+        };
+        let capability = match binding.kind() {
+            McpBindingKind::Tool { .. } => "tools",
+            McpBindingKind::Prompt { .. } => "prompts",
+            _ => "resources",
+        };
+        if !matches!(as_map(&capabilities)?.get(capability), Some(Value::Map(_))) {
+            return Err(fail(FailureCode::McpDescriptor));
+        }
+        let descriptor = self.descriptor(binding).await?;
+        let task_calls = as_map(&capabilities)?
+            .get("tasks")
+            .and_then(|v| as_map(v).ok()?.get("requests"))
+            .and_then(|v| as_map(v).ok()?.get("tools"))
+            .and_then(|v| as_map(v).ok()?.get("call"))
+            .is_some();
+        let task_required = as_map(descriptor.value())?
+            .get("execution")
+            .and_then(|v| as_map(v).ok()?.get("taskSupport"))
+            == Some(&Value::Text("required".into()));
+        if matches!(binding.kind(), McpBindingKind::Tool { .. }) && task_calls && task_required {
+            return Err(fail(FailureCode::McpDescriptor));
+        }
+        Ok(descriptor)
     }
     fn cancellation_notifier(&self, id: i64) -> Result<CancellationNotifier, RuntimeFailure> {
         let message = obj([
@@ -782,6 +759,7 @@ impl Session {
             limits,
             delivery: McpDelivery::NotSent,
             expired: false,
+            capabilities: None,
         })
     }
     async fn initialize(&mut self, server: &ServerIdentity) -> Result<Value, RuntimeFailure> {

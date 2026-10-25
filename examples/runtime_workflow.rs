@@ -71,11 +71,17 @@ impl McpAdapter for ScriptedTool {
     fn descriptor<'a>(
         &'a self,
         binding: &'a McpBinding,
+        _: &'a runtime::mcp::McpRunContext,
         _: &'a Limits,
     ) -> McpFuture<'a, JsonDocument> {
         Box::pin(async move { Ok(self.descriptors[&binding.descriptor()].clone()) })
     }
-    fn invoke<'a>(&'a self, _: &'a McpBinding, _: McpRequest) -> McpFuture<'a, Vec<u8>> {
+    fn invoke<'a>(
+        &'a self,
+        _: &'a McpBinding,
+        _: &'a runtime::mcp::McpRunContext,
+        _: McpRequest,
+    ) -> McpFuture<'a, Vec<u8>> {
         Box::pin(async {
             Ok(br#"{"content":[],"structuredContent":{"evidence_text":"A bounded, approved scripted result."}}"#.to_vec())
         })

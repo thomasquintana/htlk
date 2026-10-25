@@ -33,6 +33,14 @@ impl Drop for AttemptCancellation<'_> {
     }
 }
 impl McpControl {
+    pub fn lifetime(&self, lease: &RunLease) -> Result<Arc<McpCancellation>, RuntimeError> {
+        self.executions
+            .lock()
+            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))?
+            .get(&(lease.run_id().clone(), lease.owner().into()))
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| RuntimeError::failure(FailureCode::Fenced))
+    }
     pub fn execution(
         &self,
         lease: &RunLease,
