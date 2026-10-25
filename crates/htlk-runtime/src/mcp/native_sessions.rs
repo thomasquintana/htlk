@@ -18,6 +18,7 @@ struct RunSession {
 }
 
 enum Command {
+    Shutdown(oneshot::Sender<()>),
     Connect {
         binding: McpBinding,
         context: McpRunContext,
@@ -48,11 +49,12 @@ impl NativeSessions {
                     let stop = Arc::new(McpCancellation::new());
                     let endpoints = Arc::new(endpoints);
                     let mut jobs = tokio::task::JoinSet::new();
-                    loop {
+                    let finished = loop {
                         tokio::select! {
                             command = receiver.recv() => {
-                                let Some(command) = command else { break };
+                                let Some(command) = command else { break None };
                                 match command {
+                                    Command::Shutdown(reply) => break Some(reply),
                                     Command::Connect { binding, context, limits, reply } => {
                                         let registry = registry.clone();
                                         let endpoints = endpoints.clone();
@@ -84,7 +86,8 @@ impl NativeSessions {
                             }
                             _ = jobs.join_next(), if !jobs.is_empty() => {}
                         }
-                    }
+                    };
+                    receiver.close();
                     stop.cancel();
                     let slots: Vec<_> = registry.lock().map(|entries|
                         entries.values().map(|(slot, _)| slot.clone()).collect()
@@ -93,11 +96,27 @@ impl NativeSessions {
                         jobs.spawn(async move { cleanup(slot).await });
                     }
                     // Session lifetime watchers finish bounded cleanup on this reactor.
-                    while jobs.join_next().await.is_some() {}
+                    let _ = tokio::time::timeout(Duration::from_millis(1100), async {
+                        while jobs.join_next().await.is_some() {}
+                    }).await;
+                    jobs.abort_all();
+                    if let Some(finished) = finished { let _ = finished.send(()); }
                 });
             })
             .map_err(|_| fail(FailureCode::McpTransport))?;
         Ok(Self { sender })
+    }
+
+    pub async fn shutdown(&self) -> Result<(), RuntimeFailure> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let (reply, receive) = oneshot::channel();
+            if self.sender.send(Command::Shutdown(reply)).await.is_err() {
+                return Ok(());
+            }
+            receive.await.map_err(|_| fail(FailureCode::McpTransport))
+        })
+        .await
+        .map_err(|_| fail(FailureCode::McpTimeout))?
     }
 
     pub async fn connect(

@@ -53,7 +53,11 @@ impl Peer {
         let directory = TempDir::new();
         let log = directory.path().join("requests.jsonl");
         std::fs::write(&log, b"").unwrap();
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/mcp_peer.mjs");
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join(if mode.starts_with("stateful") {
+            "tests/support/stateful_mcp_peer.mjs"
+        } else {
+            "tests/support/mcp_peer.mjs"
+        });
         let arguments = vec![
             script.to_str().unwrap().into(),
             transport.into(),

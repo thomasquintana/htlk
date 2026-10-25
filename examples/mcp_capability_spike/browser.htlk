@@ -1,0 +1,21 @@
+ir_version = "0.1"
+graph spike.browser {
+    inputs = { marker = string }
+    outputs = { marker = string }
+    nodes {
+        arguments = eval(json, { marker = inputs.marker }) { inputs = { marker = string } }
+        open = call(mcp.tool("fixture", "browser_open"))
+        inspect_arguments = eval(json, { page = inputs.response.page }) { inputs = { response = json } }
+        inspect = call(mcp.tool("fixture", "browser_inspect"))
+        marker = eval(string, inputs.response.marker) { inputs = { response = json } }
+    }
+    edges {
+        edge marker { from = inputs.marker to = arguments.inputs.marker }
+        edge open_arguments { from = arguments.outputs.value to = open.inputs.arguments }
+        edge page { from = open.outputs.value to = inspect_arguments.inputs.response }
+        edge inspect_arguments { from = inspect_arguments.outputs.value to = inspect.inputs.arguments }
+        edge response { from = inspect.outputs.value to = marker.inputs.response }
+        edge result { from = marker.outputs.value to = outputs.marker }
+    }
+    postconditions = outputs.marker == inputs.marker
+}

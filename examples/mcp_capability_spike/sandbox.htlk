@@ -1,0 +1,34 @@
+ir_version = "0.1"
+graph spike.sandbox {
+    inputs = { marker = string }
+    outputs = { marker = string, destroyed = boolean }
+    nodes {
+        create_arguments = eval(json, {})
+        create = call(mcp.tool("fixture", "sandbox_create"))
+        execute_arguments = eval(json, { sandbox = inputs.response.sandbox, marker = inputs.marker }) {
+            inputs = { response = json, marker = string }
+        }
+        execute = call(mcp.tool("fixture", "sandbox_execute")) { postconditions = outputs.value.executed == true }
+        inspect_arguments = eval(json, { sandbox = inputs.response.sandbox }) { inputs = { response = json } }
+        inspect = call(mcp.tool("fixture", "sandbox_inspect"))
+        destroy_arguments = eval(json, { sandbox = inputs.response.sandbox }) { inputs = { response = json } }
+        destroy = call(mcp.tool("fixture", "sandbox_destroy"))
+        marker = eval(string, inputs.response.marker) { inputs = { response = json } }
+        destroyed = eval(boolean, inputs.response.destroyed) { inputs = { response = json } }
+    }
+    edges {
+        edge create_arguments { from = create_arguments.outputs.value to = create.inputs.arguments }
+        edge sandbox { from = create.outputs.value to = execute_arguments.inputs.response }
+        edge marker { from = inputs.marker to = execute_arguments.inputs.marker }
+        edge execute_arguments { from = execute_arguments.outputs.value to = execute.inputs.arguments }
+        edge executed { from = execute.outputs.value to = inspect_arguments.inputs.response }
+        edge inspect_arguments { from = inspect_arguments.outputs.value to = inspect.inputs.arguments }
+        edge inspected { from = inspect.outputs.value to = destroy_arguments.inputs.response }
+        edge destroy_arguments { from = destroy_arguments.outputs.value to = destroy.inputs.arguments }
+        edge response { from = inspect.outputs.value to = marker.inputs.response }
+        edge receipt { from = destroy.outputs.value to = destroyed.inputs.response }
+        edge result { from = marker.outputs.value to = outputs.marker }
+        edge destroyed { from = destroyed.outputs.value to = outputs.destroyed }
+    }
+    postconditions = outputs.marker == inputs.marker and outputs.destroyed == true
+}

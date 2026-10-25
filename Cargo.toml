@@ -92,6 +92,11 @@ name = "interactive_guide"
 path = "examples/interactive_guide/main.rs"
 test = true
 
+[[example]]
+name = "mcp_capability_spike"
+path = "examples/mcp_capability_spike/main.rs"
+test = true
+
 [lints]
 workspace = true
 

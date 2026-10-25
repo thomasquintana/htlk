@@ -303,6 +303,14 @@ pub struct NativeMcpAdapter {
     idempotent_bindings: std::collections::BTreeSet<htlk_executable::digest::Digest>,
 }
 impl NativeMcpAdapter {
+    /// Stops this adapter's I/O owner and waits for bounded session cleanup.
+    /// Further connections fail; use after stopping the execution engine.
+    ///
+    /// # Errors
+    /// Returns transport-owner failure or a two-second shutdown timeout.
+    pub async fn shutdown(&self) -> Result<(), RuntimeFailure> {
+        self.sessions.shutdown().await
+    }
     /// Constructs trusted deployment routing with a finite discovery deadline.
     ///
     /// # Errors
