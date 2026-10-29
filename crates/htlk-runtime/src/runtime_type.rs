@@ -159,6 +159,30 @@ fn matches_builtin(
         P::Null => Ok(matches!(value, Value::Null)),
         P::Bytes => Ok(matches!(value, Value::Bytes(_))),
         P::Json => Ok(json_value(value, meter)?.is_some()),
+        P::McpToolResult => {
+            let Some(json) = json_value(value, meter)? else {
+                return Ok(false);
+            };
+            meter.charge((json.as_bytes().len() as u64).saturating_mul(5))?;
+            match htlk_executable::McpToolResult::from_value(json.value(), meter.program_limits()) {
+                Ok(_) => Ok(true),
+                Err(htlk_executable::McpResultError::Shape(_)) => Ok(false),
+                Err(htlk_executable::McpResultError::Codec(error)) => Err(error.into()),
+                Err(htlk_executable::McpResultError::Limit(resource)) => {
+                    Err(Error::Limit(resource))
+                }
+                Err(htlk_executable::McpResultError::Json(JsonError::Codec(error))) => {
+                    Err(error.into())
+                }
+                Err(htlk_executable::McpResultError::Json(JsonError::AllocationFailed)) => {
+                    Err(Error::AllocationFailed)
+                }
+                Err(htlk_executable::McpResultError::Json(JsonError::LimitExceeded { .. })) => {
+                    Err(Error::Limit("MCP tool result"))
+                }
+                Err(_) => Ok(false),
+            }
+        }
         P::Regex => {
             let Value::Map(m) = value else {
                 return Ok(false);

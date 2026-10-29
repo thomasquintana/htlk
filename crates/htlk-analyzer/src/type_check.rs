@@ -1744,7 +1744,11 @@ impl Checker<'_> {
                 }
                 (
                     K::Builtin(
-                        p @ (P::Error | P::Regex | P::McpResourceResult | P::McpPromptResult),
+                        p @ (P::Error
+                        | P::Regex
+                        | P::McpResourceResult
+                        | P::McpPromptResult
+                        | P::McpToolResult),
                     ),
                     PathStep::Field(key),
                 ) => {
@@ -1914,7 +1918,14 @@ impl Checker<'_> {
             }
             (K::Enum(_), K::Builtin(P::String)) => Ok(Match::Yes),
             (_, K::Builtin(P::Json)) => Ok(match actual.kind() {
-                K::Builtin(P::String | P::Boolean | P::Null | P::Regex | P::McpPromptResult)
+                K::Builtin(
+                    P::String
+                    | P::Boolean
+                    | P::Null
+                    | P::Regex
+                    | P::McpPromptResult
+                    | P::McpToolResult,
+                )
                 | K::Schema(_) => Match::Yes,
                 _ => Match::Runtime,
             }),
@@ -2086,7 +2097,13 @@ fn comparison(op: B, a: u16, b: u16) -> Match {
 fn length_match(ty: &T) -> Match {
     match ty.kind() {
         K::Builtin(
-            P::String | P::Bytes | P::Regex | P::Error | P::McpResourceResult | P::McpPromptResult,
+            P::String
+            | P::Bytes
+            | P::Regex
+            | P::Error
+            | P::McpResourceResult
+            | P::McpPromptResult
+            | P::McpToolResult,
         )
         | K::Enum(_)
         | K::List(_)

@@ -68,6 +68,7 @@ fn builtin(s: &str) -> Option<BuiltinType> {
         "regex" => BuiltinType::Regex,
         "McpResourceResult" => BuiltinType::McpResourceResult,
         "McpPromptResult" => BuiltinType::McpPromptResult,
+        "McpToolResult" => BuiltinType::McpToolResult,
         "Error" => BuiltinType::Error,
         _ => return None,
     })

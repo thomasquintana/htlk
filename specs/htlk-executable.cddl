@@ -95,7 +95,7 @@ value_type = primitive
            / ["function", [* port], port]
 primitive = "string" / "integer" / "float" / "boolean" / "null"
           / "bytes" / "json" / "regex"
-          / "McpResourceResult" / "McpPromptResult" / "Error"
+          / "McpResourceResult" / "McpPromptResult" / "McpToolResult" / "Error"
 ; var/function are restricted to library signatures by semantic validation.
 
 scope = {
@@ -197,6 +197,34 @@ server_identity = {
   implementation_name: tstr,
   implementation_version: tstr
 }
+
+; Complete host-selected result policy; canonical fields never default on ingress.
+tool_result_policy = {
+  extraction: extraction_policy,
+  declared_contract: "enforce" / "report",
+  inferred_schema: null / {
+    schema: digest,
+    evidence: digest,
+    mode: "observe" / "enforce"
+  },
+  application_schema: null / digest
+}
+extraction_policy = {
+  profile: "htlk.json-extraction/1",
+  limits: {
+    inspected_bytes: positive,
+    candidates: positive,
+    depth: 1..128,
+    work: positive,
+    parsed_bytes: positive,
+    allocation_bytes: positive,
+    output_bytes: positive,
+    diagnostic_bytes: positive
+  },
+  selection: ["unique"] / ["candidate", tstr] / ["block", 0..4294967295]
+           / ["schema", digest]
+}
+
 mcp_binding = {
   kind: "tool",
   server: server_identity,

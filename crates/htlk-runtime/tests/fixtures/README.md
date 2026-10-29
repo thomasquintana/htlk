@@ -1,5 +1,11 @@
 # Complete native executable fixture
 
+The unified tool-result foundation adds `mcp_policy.rs` and `mcp_result.rs` to the
+explicit model identity manifests in Rust and the independent Node checker.
+Adding the built-in's projections and checked native validation also refreshes
+analyzer/runtime source identities. The reviewed generator refreshes the native
+profile and envelope fingerprint; the empty root scope and policy are unchanged.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

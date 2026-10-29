@@ -701,3 +701,47 @@ fn json_preparation_counts_collection_work_and_keeps_native_value_size_distinct(
         Err(Error::Limit(_))
     ));
 }
+
+#[test]
+fn tool_result_type_checks_selection_integrity_and_preserves_metered_absence() {
+    let limits = Limits::default();
+    let document = htlk_executable::JsonDocument::new(
+        br#"{
+      "protocol_result":{"content":[]},
+      "extraction":{"status":"none","candidates":[]},
+      "validation":{
+        "declared_schema":{"status":"not_configured"},
+        "inferred_schema":{"status":"not_configured"},
+        "application_schema":{"status":"not_configured"}
+      }
+    }"#,
+        &limits,
+    )
+    .unwrap();
+    let value = document.value();
+    let declared = T::builtin(P::McpToolResult);
+    validate_typed_value(value, &declared, None, &limits, &policy()).unwrap();
+    assert_eq!(
+        project(value, &declared, &["data"]).unwrap(),
+        EvaluationValue::Absent
+    );
+    let Value::Map(record) = value else {
+        panic!("record")
+    };
+    let mut fields: Vec<_> = record
+        .iter()
+        .map(|(key, value)| (key.to_owned(), value.clone()))
+        .collect();
+    fields.push(("data".into(), Value::Null));
+    let forged = Value::Map(Map::try_from_entries(fields).unwrap());
+    assert_eq!(
+        validate_typed_value(&forged, &declared, None, &limits, &policy()),
+        Err(Error::OperandType)
+    );
+    let mut exhausted = policy();
+    exhausted.max_steps = 1;
+    assert!(matches!(
+        validate_typed_value(value, &declared, None, &limits, &exhausted),
+        Err(Error::Limit(_))
+    ));
+}

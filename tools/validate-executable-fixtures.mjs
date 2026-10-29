@@ -115,7 +115,7 @@ const rawDigest = value => Buffer.from(value.slice(7), 'hex');
 const model = implementation('htlk.model-implementation/0.1\n', [
   ...sources('htlk-executable', [
     'implementation.rs', 'lib.rs', 'document.rs', 'envelope.rs', 'digest.rs',
-    'identifier.rs', 'json.rs', 'json_pointer.rs', 'metadata.rs', 'options.rs', 'policy.rs',
+    'identifier.rs', 'json.rs', 'json_pointer.rs', 'metadata.rs', 'mcp_policy.rs', 'mcp_result.rs', 'options.rs', 'policy.rs',
     'record_accounting.rs', 'uri_template.rs',
     'expression/mod.rs', 'expression/wire.rs', 'expression/template.rs',
     'graph/mod.rs', 'graph/wire.rs', 'types/mod.rs', 'types/wire.rs',

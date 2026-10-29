@@ -47,6 +47,8 @@ pub enum BuiltinType {
     McpResourceResult,
     /// Returned MCP prompt messages and metadata.
     McpPromptResult,
+    /// Uniform MCP tool envelope, extraction evidence, and validation assessments.
+    McpToolResult,
     /// The runtime's structured error value.
     Error,
 }
@@ -65,6 +67,7 @@ impl BuiltinType {
             Self::Regex => "regex",
             Self::McpResourceResult => "McpResourceResult",
             Self::McpPromptResult => "McpPromptResult",
+            Self::McpToolResult => "McpToolResult",
             Self::Error => "Error",
         }
     }
@@ -82,6 +85,7 @@ impl BuiltinType {
             "regex" => Ok(Self::Regex),
             "McpResourceResult" => Ok(Self::McpResourceResult),
             "McpPromptResult" => Ok(Self::McpPromptResult),
+            "McpToolResult" => Ok(Self::McpToolResult),
             "Error" => Ok(Self::Error),
             _ => Err(TypeError::UnknownBuiltin),
         }
@@ -238,6 +242,7 @@ pub fn builtin_record_type(
     let make = |kind| ValueType::new(kind, TypeContext::Value, limits);
     let string = || Port::new(ValueType::builtin(P::String), true);
     let fields = match builtin {
+        P::McpToolResult => return Ok(Some(tool_result_type(limits)?)),
         P::Error => vec![("code".into(), string()), ("message".into(), string())],
         P::Regex => vec![("pattern".into(), string()), ("flags".into(), string())],
         P::McpResourceResult => {
@@ -285,6 +290,93 @@ pub fn builtin_record_type(
         _ => return Ok(None),
     };
     Ok(Some(make(K::Record(fields))?))
+}
+
+fn tool_result_type(limits: &Limits) -> Result<ValueType, TypeError> {
+    use ValueTypeKind as K;
+    let make = |kind| ValueType::new(kind, TypeContext::Value, limits);
+    let string = |required| Port::new(ValueType::builtin(BuiltinType::String), required);
+    let integer = || Port::new(ValueType::builtin(BuiltinType::Integer), false);
+    let json = |required| Port::new(ValueType::builtin(BuiltinType::Json), required);
+    let enumeration = |values: &[&str]| {
+        make(K::Enum(
+            values.iter().map(|value| (*value).into()).collect(),
+        ))
+    };
+    let source = make(K::Record(vec![
+        (
+            "origin".into(),
+            Port::new(enumeration(&["structured_content", "text"])?, true),
+        ),
+        (
+            "method".into(),
+            Port::new(
+                enumeration(&["structured_content", "whole_block", "fence", "embedded"])?,
+                true,
+            ),
+        ),
+        ("content_block_index".into(), integer()),
+        ("byte_start".into(), integer()),
+        ("byte_end".into(), integer()),
+    ]))?;
+    let candidate = make(K::Record(vec![
+        ("id".into(), string(true)),
+        ("value".into(), json(true)),
+        (
+            "sources".into(),
+            Port::new(make(K::List(Box::new(source)))?, true),
+        ),
+        (
+            "validation".into(),
+            Port::new(enumeration(&["parsed"])?, true),
+        ),
+    ]))?;
+    let extraction = make(K::Record(vec![
+        (
+            "status".into(),
+            Port::new(
+                enumeration(&["selected", "none", "ambiguous", "exhausted"])?,
+                true,
+            ),
+        ),
+        (
+            "candidates".into(),
+            Port::new(make(K::List(Box::new(candidate)))?, true),
+        ),
+        ("selected_candidate_id".into(), string(false)),
+        ("exhausted_limit".into(), string(false)),
+    ]))?;
+    let assessment = make(K::Record(vec![
+        (
+            "status".into(),
+            Port::new(
+                enumeration(&["not_configured", "valid", "missing", "invalid"])?,
+                true,
+            ),
+        ),
+        ("schema".into(), string(false)),
+        (
+            "mode".into(),
+            Port::new(enumeration(&["enforce", "report", "observe"])?, false),
+        ),
+    ]))?;
+    let validation = make(K::Record(vec![
+        (
+            "declared_schema".into(),
+            Port::new(assessment.clone(), true),
+        ),
+        (
+            "inferred_schema".into(),
+            Port::new(assessment.clone(), true),
+        ),
+        ("application_schema".into(), Port::new(assessment, true)),
+    ]))?;
+    make(K::Record(vec![
+        ("protocol_result".into(), json(true)),
+        ("extraction".into(), Port::new(extraction, true)),
+        ("data".into(), json(false)),
+        ("validation".into(), Port::new(validation, true)),
+    ]))
 }
 
 impl Port {

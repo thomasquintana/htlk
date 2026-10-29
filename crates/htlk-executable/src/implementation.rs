@@ -15,6 +15,8 @@ pub fn implementation_digest() -> Digest {
         include_bytes!("json.rs"),
         include_bytes!("json_pointer.rs"),
         include_bytes!("metadata.rs"),
+        include_bytes!("mcp_policy.rs"),
+        include_bytes!("mcp_result.rs"),
         include_bytes!("options.rs"),
         include_bytes!("policy.rs"),
         include_bytes!("record_accounting.rs"),

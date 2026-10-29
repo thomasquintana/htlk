@@ -12,6 +12,8 @@ mod identifier;
 mod implementation;
 mod json;
 mod json_pointer;
+mod mcp_policy;
+mod mcp_result;
 mod metadata;
 mod options;
 mod policy;
@@ -33,6 +35,12 @@ pub use identifier::{Identifier, ParseIdentifierError};
 pub use implementation::implementation_digest;
 pub use json::{JsonDocument, JsonError};
 pub use json_pointer::{JsonPointer, JsonPointerError};
+pub use mcp_policy::{
+    AdoptedInference, CandidateSelection, DeclaredContractPolicy, ExtractionLimits,
+    ExtractionPolicy, InferredSchemaPolicy, JSON_EXTRACTION_PROFILE, McpResultError,
+    ToolResultPolicy,
+};
+pub use mcp_result::McpToolResult;
 pub use metadata::{
     CORE_VERSION, EngineIdentity, ExecutionProfile, FunctionSignature, Library,
     MCP_PROTOCOL_VERSION, McpBinding, McpBindingKind, McpTransport, MetadataError, ServerIdentity,
