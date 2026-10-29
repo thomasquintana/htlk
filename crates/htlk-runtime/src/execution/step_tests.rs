@@ -51,10 +51,10 @@ impl RuntimePolicy for Policy {
         Ok(SecurityLabels::default())
     }
 }
-struct Clock;
+struct Clock(i64);
 impl CoordinatorClock for Clock {
     fn now_ms(&self) -> Result<i64, RuntimeFailure> {
-        Ok(1000)
+        Ok(self.0)
     }
 }
 fn ports(name: &str, ty: BuiltinType) -> PortTable {
@@ -105,6 +105,7 @@ async fn waiting_run() -> (Arc<Runtime>, HostContext, RunLease, WaitId) {
     );
     review.inputs = ports("request", BuiltinType::Json);
     review.outputs = ports("value", BuiltinType::Boolean);
+    review.limits = ExecutionLimits::new().with_timeout_ms(500).unwrap();
     let mut consume = NodeFields::new(
         "consume".parse().unwrap(),
         Operation::Eval(
@@ -189,7 +190,7 @@ async fn waiting_run() -> (Arc<Runtime>, HostContext, RunLease, WaitId) {
             RuntimeConfig::default(),
         )
         .unwrap()
-        .with_clock(Arc::new(Clock)),
+        .with_clock(Arc::new(Clock(1000))),
     );
     let context = HostContext::new("alice".into(), &limits).unwrap();
     let graph = runtime.register_graph(&context, &bytes, &[]).await.unwrap();
@@ -476,5 +477,78 @@ fn stable_open_wait_blocks_but_stable_impossible_wait_state_still_fails_invarian
             FailureCode::Invariant
         );
         assert_replay(&runtime, &lease).await;
+    });
+}
+
+#[test]
+fn due_node_and_run_deadlines_are_progress_not_quiescence_or_invariant_failures() {
+    actix::System::new().block_on(async {
+        for now in [1500, 2000] {
+            let (runtime, _, lease, wait) = waiting_run().await;
+            let runtime = Arc::new(
+                Arc::try_unwrap(runtime)
+                    .ok()
+                    .unwrap()
+                    .with_clock(Arc::new(Clock(now))),
+            );
+            if now == 1500 {
+                // The node deadline is due before its enclosing scope deadline.
+                assert!(matches!(
+                    tick(runtime.clone(), lease.clone()).await.unwrap(),
+                    Progress::Changed
+                ));
+                let invocation =
+                    super::super::control::all(&runtime, &lease, RecordFamily::Invocation)
+                        .await
+                        .unwrap()
+                        .into_iter()
+                        .find(|r| string(&r.payload, "local_id").unwrap() == "review")
+                        .unwrap();
+                assert!(invocation.final_record);
+                assert_eq!(string(&invocation.payload, "status").unwrap(), "failed");
+                assert_eq!(
+                    failure(&invocation.payload, &runtime.config.limits)
+                        .unwrap()
+                        .code(),
+                    FailureCode::Timeout
+                );
+                assert_eq!(
+                    runtime
+                        .store
+                        .run_header(lease.run_id())
+                        .await
+                        .unwrap()
+                        .status,
+                    RunStatus::Running
+                );
+            } else {
+                // Whole-run deadline enforcement must remain responsive even when
+                // the last execution observation reported an open external wait.
+                super::super::control::enforce(runtime.clone(), lease.clone())
+                    .await
+                    .unwrap();
+                let header = runtime.store.run_header(lease.run_id()).await.unwrap();
+                assert_eq!(header.status, RunStatus::Failed);
+                let root = runtime
+                    .store
+                    .record(lease.run_id(), &key(RecordFamily::Scope, header.root_scope))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    failure(&root.payload, &runtime.config.limits)
+                        .unwrap()
+                        .code(),
+                    FailureCode::Timeout
+                );
+            }
+            let wait = runtime
+                .store
+                .record(lease.run_id(), &key(RecordFamily::Wait, wait))
+                .await
+                .unwrap();
+            assert!(wait.final_record);
+            assert_eq!(string(&wait.payload, "state").unwrap(), "cancelled");
+            assert_replay(&runtime, &lease).await;
+        }
     });
 }
