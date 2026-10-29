@@ -8,7 +8,7 @@ const [transport, mode, log] = process.argv.slice(2);
 const tool = {
   name: 'echo',
   inputSchema: { type: 'object', properties: { value: { type: ['string', 'null'] } }, required: ['value'], additionalProperties: false },
-  outputSchema: { type: 'object', properties: { value: { type: ['string', 'null'] } }, required: ['value'], additionalProperties: false },
+  ...(mode === 'interop' ? {} : { outputSchema: { type: 'object', properties: { value: { type: ['string', 'null'] } }, required: ['value'], additionalProperties: false } }),
 };
 const resource = { name: 'fixed', uri: 'context://fixed' };
 const template = { name: 'topic', uriTemplate: 'context://topics/{topic}' };
@@ -36,6 +36,28 @@ function reply(request, server = 'research') {
     else result = { [key]: brief ? brief.tools.tools.filter(t => t.server === server).map(t => t.descriptor)
       : mode === 'missing' ? [] : [{ ...descriptor, ...(mode === 'drift' ? { description: 'changed live descriptor' } : {}) }] };
   } else if (method === 'tools/call') {
+    if (mode === 'interop') {
+      const text = value => ({ type: 'text', text: value });
+      const cases = {
+        prose: { content: [text('café: {"value":"braces } and escaped \\\"quote\\\""} finished')] },
+        array: { content: [text('```json\n[1,null,true]\n```')] },
+        scalar: { content: [text('false')] },
+        null: { content: [text('null')] },
+        ordinary: { content: [text('There are 42 ordinary words, no JSON document.')] },
+        ambiguous: { content: [text('{"value":1} then {"value":2}')] },
+        duplicate: { content: [text('{"value":1}'), text('again {"value":1}')] },
+        malformed: { content: [text('{"value":0,"value":1} then {"value":2}')] },
+        preferred: { content: [text('{"value":2}')], structuredContent: { value: 1 }, _meta: { fixture: true } },
+        mixed: { content: [text('plain display'), { type: 'image', data: 'AP8=', mimeType: 'image/png' },
+          { type: 'audio', data: 'AA==', mimeType: 'audio/wav' },
+          { type: 'resource_link', uri: 'context://fixed', name: 'fixed' },
+          { type: 'resource', resource: { uri: 'context://fixed', text: 'uninterpreted embedded resource' } }] },
+        error: { content: [text('Failure details: {"reason":"denied"}')], isError: true },
+        invalid: { content: [text('{"value":1}'), { type: 'image', data: '!', mimeType: 'image/png' }] },
+      };
+      if (!(params.arguments.value in cases)) throw new Error('Unknown interoperability case');
+      return JSON.stringify({ jsonrpc: '2.0', id, result: cases[params.arguments.value] });
+    }
     if (brief) {
       const calls = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
       const reviews = calls.filter(r => r.method === 'tools/call' && r.params.name === 'review_brief').length;

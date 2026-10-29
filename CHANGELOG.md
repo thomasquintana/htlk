@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add opt-in actual Chrome interoperability/extraction/inference acceptance tooling
+  and reproducible evidence, plus independent schema-less stdio/HTTP/SSE wire tests.
 - Specify the unified MCP tool-result, bounded JSON extraction, and explicit
   inferred-schema adoption contract for the interoperability redesign.
 - Add canonical MCP result-policy records and the checked `McpToolResult` native

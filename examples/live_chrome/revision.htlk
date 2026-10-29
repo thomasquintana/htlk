@@ -1,0 +1,37 @@
+ir_version="0.1"
+predicate_library content=predicates.library("htlk.mcp-content"){version="1" digest="__CONTENT_DIGEST__"}
+graph live.revision {
+ inputs={url=string,marker=string}
+ outputs={cleanup=boolean,result=optional(McpToolResult),failure=optional(string)}
+ nodes{
+  open_args=eval(json,{url=inputs.url}){inputs={url=string}}
+  open=call(mcp.tool("chrome","new_page"))
+  page_id=eval(integer,content.checked(content.parse_json(content.regex_capture(content.join_text(content.text_blocks(inputs.response),"\n"),/^([0-9]+):.*\[selected\]$/m,1)))){inputs={response=McpToolResult}}
+  drift_args=eval(json,{"function"=__DRIFT_SCRIPT__,"waitForStableDom"=false}){inputs={prior=McpToolResult}}
+  drift=call(mcp.tool("chrome","evaluate_script"))
+  failure=eval(string,"MCP_INFERRED_SCHEMA"){when=status(@drift)=="failed" and error(@drift).code=="MCP_INFERRED_SCHEMA"}
+  close_args=eval(json,{"pageId"=inputs.page}){inputs={page=integer}when=status(@drift)=="failed" or status(@drift)=="succeeded"}
+  close=call(mcp.tool("chrome","close_page"))
+  list_args=eval(json,{}){inputs={prior=McpToolResult}}
+  remaining=call(mcp.tool("chrome","list_pages"))
+  cleanup=eval(boolean,not content.text_contains(content.join_text(content.text_blocks(inputs.response),"\n"),inputs.marker)){inputs={response=McpToolResult,marker=string}}
+ }
+ edges{
+  edge url{from=inputs.url to=open_args.inputs.url}
+  edge open_args{from=open_args.outputs.value to=open.inputs.arguments}
+  edge page_id{from=open.outputs.value to=page_id.inputs.response}
+  edge drift_args{from=open.outputs.value to=drift_args.inputs.prior}
+  edge drift_call{from=drift_args.outputs.value to=drift.inputs.arguments}
+  edge close_id{from=page_id.outputs.value to=close_args.inputs.page}
+  edge close_call{from=close_args.outputs.value to=close.inputs.arguments}
+  edge list_args{from=close.outputs.value to=list_args.inputs.prior}
+  edge list_call{from=list_args.outputs.value to=remaining.inputs.arguments}
+  edge cleanup_response{from=remaining.outputs.value to=cleanup.inputs.response}
+  edge cleanup_marker{from=inputs.marker to=cleanup.inputs.marker}
+  edge cleanup{from=cleanup.outputs.value to=outputs.cleanup}
+  edge result{from=drift.outputs.value to=outputs.result when=status(@drift)=="succeeded"}
+  edge failure{from=failure.outputs.value to=outputs.failure when=status(@failure)=="succeeded"}
+ }
+ postconditions=outputs.cleanup
+ limits{max_mcp_calls=4}
+}

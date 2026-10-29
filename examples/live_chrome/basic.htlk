@@ -1,0 +1,68 @@
+ir_version="0.1"
+predicate_library content=predicates.library("htlk.mcp-content"){version="1" digest="__CONTENT_DIGEST__"}
+graph live.chrome {
+ inputs={url=string,marker=string}
+ outputs={verified=boolean,cleanup=boolean,screenshot=McpToolResult,sample_one=McpToolResult,sample_two=McpToolResult,sample_three=McpToolResult,error_code=string}
+ nodes{
+  open_args=eval(json,{url=inputs.url}){inputs={url=string}}
+  open=call(mcp.tool("chrome","new_page"))
+  page_id=eval(integer,content.checked(content.parse_json(content.regex_capture(content.join_text(content.text_blocks(inputs.response),"\n"),/^([0-9]+):.*\[selected\]$/m,1)))){inputs={response=McpToolResult}}
+  one_args=eval(json,{"function"=__ONE_SCRIPT__,"waitForStableDom"=false}){inputs={prior=McpToolResult}}
+  one=call(mcp.tool("chrome","evaluate_script"))
+  two_args=eval(json,{"function"=__TWO_SCRIPT__,"waitForStableDom"=false}){inputs={prior=McpToolResult}}
+  two=call(mcp.tool("chrome","evaluate_script"))
+  three_args=eval(json,{"function"=__THREE_SCRIPT__,"waitForStableDom"=false}){inputs={prior=McpToolResult}}
+  three=call(mcp.tool("chrome","evaluate_script"))
+  snapshot_args=eval(json,{}){inputs={prior=McpToolResult}}
+  snapshot=call(mcp.tool("chrome","take_snapshot"))
+  screenshot_args=eval(json,{format="jpeg",quality=40,"fullPage"=false}){inputs={prior=McpToolResult}}
+  screenshot=call(mcp.tool("chrome","take_screenshot"))
+  bad_args=eval(json,{"pageId"=99999999}){inputs={prior=McpToolResult}}
+  expected_error=call(mcp.tool("chrome","close_page"))
+  error_code=eval(string,"MCP_TOOL_ERROR"){when=status(@expected_error)=="failed" and error(@expected_error).code=="MCP_TOOL_ERROR"}
+  close_args=eval(json,{"pageId"=inputs.page}){inputs={page=integer}when=status(@expected_error)=="failed" or status(@expected_error)=="succeeded"}
+  close=call(mcp.tool("chrome","close_page"))
+  list_args=eval(json,{}){inputs={prior=McpToolResult}}
+  remaining=call(mcp.tool("chrome","list_pages"))
+  cleanup=eval(boolean,not content.text_contains(content.join_text(content.text_blocks(inputs.response),"\n"),inputs.marker)){inputs={response=McpToolResult,marker=string}}
+  verified=eval(boolean,inputs.one.data.marker==inputs.marker and inputs.two.data.marker==inputs.marker and inputs.three.data.marker==inputs.marker and content.text_contains(content.join_text(content.text_blocks(inputs.snapshot),"\n"),inputs.marker) and content.text_contains(content.join_text(content.content_kinds(inputs.screenshot),","),"image")){inputs={one=McpToolResult,two=McpToolResult,three=McpToolResult,snapshot=McpToolResult,screenshot=McpToolResult,marker=string}}
+ }
+ edges{
+  edge url{from=inputs.url to=open_args.inputs.url}
+  edge open_args{from=open_args.outputs.value to=open.inputs.arguments}
+  edge page_id{from=open.outputs.value to=page_id.inputs.response}
+  edge one_args{from=open.outputs.value to=one_args.inputs.prior}
+  edge one_call{from=one_args.outputs.value to=one.inputs.arguments}
+  edge two_args{from=one.outputs.value to=two_args.inputs.prior}
+  edge two_call{from=two_args.outputs.value to=two.inputs.arguments}
+  edge three_args{from=two.outputs.value to=three_args.inputs.prior}
+  edge three_call{from=three_args.outputs.value to=three.inputs.arguments}
+  edge snapshot_args{from=three.outputs.value to=snapshot_args.inputs.prior}
+  edge snapshot_call{from=snapshot_args.outputs.value to=snapshot.inputs.arguments}
+  edge screenshot_args{from=snapshot.outputs.value to=screenshot_args.inputs.prior}
+  edge screenshot_call{from=screenshot_args.outputs.value to=screenshot.inputs.arguments}
+  edge error_args{from=screenshot.outputs.value to=bad_args.inputs.prior}
+  edge error_call{from=bad_args.outputs.value to=expected_error.inputs.arguments}
+  edge page_close{from=page_id.outputs.value to=close_args.inputs.page}
+  edge close_call{from=close_args.outputs.value to=close.inputs.arguments}
+  edge list_args{from=close.outputs.value to=list_args.inputs.prior}
+  edge list_call{from=list_args.outputs.value to=remaining.inputs.arguments}
+  edge cleanup_response{from=remaining.outputs.value to=cleanup.inputs.response}
+  edge cleanup_marker{from=inputs.marker to=cleanup.inputs.marker}
+  edge verify_one{from=one.outputs.value to=verified.inputs.one}
+  edge verify_two{from=two.outputs.value to=verified.inputs.two}
+  edge verify_three{from=three.outputs.value to=verified.inputs.three}
+  edge verify_snapshot{from=snapshot.outputs.value to=verified.inputs.snapshot}
+  edge verify_screenshot{from=screenshot.outputs.value to=verified.inputs.screenshot}
+  edge verify_marker{from=inputs.marker to=verified.inputs.marker}
+  edge verified{from=verified.outputs.value to=outputs.verified}
+  edge cleanup{from=cleanup.outputs.value to=outputs.cleanup}
+  edge screenshot{from=screenshot.outputs.value to=outputs.screenshot}
+  edge sample_one{from=one.outputs.value to=outputs.sample_one}
+  edge sample_two{from=two.outputs.value to=outputs.sample_two}
+  edge sample_three{from=three.outputs.value to=outputs.sample_three}
+  edge error_code{from=error_code.outputs.value to=outputs.error_code}
+ }
+ postconditions=outputs.verified and outputs.cleanup and outputs.error_code=="MCP_TOOL_ERROR"
+ limits{max_mcp_calls=9}
+}

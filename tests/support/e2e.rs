@@ -150,11 +150,25 @@ impl Drop for Peer {
 }
 
 pub fn catalogs(transport: &str) -> MCPCatalogInputs {
+    fixture_catalogs(transport, true)
+}
+
+#[allow(dead_code)] // Only the schema-less wire suite uses this shared fixture.
+pub fn schema_less_catalogs(transport: &str) -> MCPCatalogInputs {
+    fixture_catalogs(transport, false)
+}
+
+fn fixture_catalogs(transport: &str, declared: bool) -> MCPCatalogInputs {
     let server = format!(
         r#""catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{{"fixture":{{"deployment_id":"test","transport":"{transport}","implementation_name":"fixture","implementation_version":"1"}}}},"schema_documents":{{}}"#
     );
+    let output = if declared {
+        r#", "outputSchema":{"type":"object","properties":{"value":{"type":["string","null"]}},"required":["value"],"additionalProperties":false}"#
+    } else {
+        ""
+    };
     MCPCatalogInputs::from_json(format!(r#"{{
-      "tools":{{{server},"tools":[{{"server":"fixture","descriptor":{{"name":"echo","inputSchema":{{"type":"object","properties":{{"value":{{"type":["string","null"]}}}},"required":["value"],"additionalProperties":false}},"outputSchema":{{"type":"object","properties":{{"value":{{"type":["string","null"]}}}},"required":["value"],"additionalProperties":false}}}}}}]}},
+      "tools":{{{server},"tools":[{{"server":"fixture","descriptor":{{"name":"echo","inputSchema":{{"type":"object","properties":{{"value":{{"type":["string","null"]}}}},"required":["value"],"additionalProperties":false}}{output}}}}}]}},
       "resources":{{{server},"resources":[{{"server":"fixture","descriptor":{{"name":"fixed","uri":"context://fixed"}}}}],"templates":[{{"server":"fixture","descriptor":{{"name":"topic","uriTemplate":"context://topics/{{topic}}"}}}}]}},
       "prompts":{{{server},"prompts":[{{"server":"fixture","descriptor":{{"name":"review","arguments":[{{"name":"subject","required":true}}]}}}}]}}
     }}"#).as_bytes(), &Limits::default()).unwrap()

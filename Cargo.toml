@@ -97,6 +97,10 @@ name = "mcp_capability_spike"
 path = "examples/mcp_capability_spike/main.rs"
 test = true
 
+[[example]]
+name = "mcp_live_acceptance"
+path = "examples/live_chrome/main.rs"
+
 [lints]
 workspace = true
 
