@@ -38,24 +38,17 @@ impl DocumentAnalysis for CanonicalDocument {
         let f = self.fields();
         let mut roots = BTreeMap::new();
         for binding in f.bindings.values() {
-            if let McpBindingKind::Tool {
-                input_schema,
-                output_schema,
-                ..
-            } = binding.kind()
-            {
-                for id in [input_schema, output_schema] {
-                    if let std::collections::btree_map::Entry::Vacant(entry) = roots.entry(*id) {
-                        let document = f
-                            .documents
-                            .get(id)
-                            .ok_or(Error::MissingRecord("tool schema document"))?;
-                        let base = crate::embedded_schema_base(document, limits)?;
-                        if f.schema_uris.get(&base) != Some(id) {
-                            return Err(Error::SchemaRootMismatch);
-                        }
-                        entry.insert(base);
+            for id in binding.schema_roots() {
+                if let std::collections::btree_map::Entry::Vacant(entry) = roots.entry(id) {
+                    let document = f
+                        .documents
+                        .get(&id)
+                        .ok_or(Error::MissingRecord("tool schema document"))?;
+                    let base = crate::embedded_schema_base(document, limits)?;
+                    if f.schema_uris.get(&base) != Some(&id) {
+                        return Err(Error::SchemaRootMismatch);
                     }
+                    entry.insert(base);
                 }
             }
         }
@@ -92,6 +85,11 @@ impl DocumentAnalysis for CanonicalDocument {
         let mut used_documents: BTreeSet<_> = f.schema_uris.values().copied().collect();
         used_documents.insert(f.profile.policy_document());
         used_documents.extend(f.bindings.values().map(McpBinding::descriptor));
+        used_documents.extend(
+            f.bindings
+                .values()
+                .filter_map(McpBinding::inference_evidence),
+        );
         if f.documents.keys().any(|id| !used_documents.contains(id)) {
             return Err(Error::UnreachableRecord("JSON document"));
         }
@@ -112,11 +110,11 @@ impl DocumentAnalysis for CanonicalDocument {
                 ..
             } = binding.kind()
             {
-                for id in [input_schema, output_schema] {
+                for id in [Some(*input_schema), *output_schema].into_iter().flatten() {
                     let document = self
                         .fields()
                         .documents
-                        .get(id)
+                        .get(&id)
                         .ok_or(Error::MissingRecord("tool schema document"))?;
                     schemas
                         .require_object_root(&crate::embedded_schema_base(document, limits)?)
@@ -148,6 +146,7 @@ fn validate_mcp(
     document.to_value(limits)?;
     let mut selections = BTreeMap::new();
     let mut checked = BTreeSet::new();
+    let mut inferred = BTreeMap::new();
     for (id, binding) in &document.fields().bindings {
         *path = Some(format!("/bindings/{id}"));
         related.clear();
@@ -177,6 +176,10 @@ fn validate_mcp(
             related.push(format!("/bindings/{previous_binding}"));
             return Err(Error::ConflictingMcpSelection);
         }
+        if let Some(evidence) = binding.inference_evidence() {
+            related.push(format!("/documents/{evidence}"));
+        }
+        crate::binding_validation::inference(binding, document.fields(), limits, &mut inferred)?;
     }
     Ok(())
 }
@@ -294,14 +297,7 @@ fn verify_inner(
         if let McpBindingKind::Template { uri_template } = binding.kind() {
             template_variables.insert(*id, uri_template_variables(uri_template, l)?);
         }
-        if let McpBindingKind::Tool {
-            input_schema,
-            output_schema,
-            ..
-        } = binding.kind()
-        {
-            schema_roots.extend([*input_schema, *output_schema]);
-        }
+        schema_roots.extend(binding.schema_roots());
     }
     for (scope_id, scope) in &f.scopes {
         let base = format!("/scopes/{scope_id}");

@@ -35,3 +35,9 @@ The documentation checker parses all five files, checks imports/exports in this 
 The bundle is a captured copy of the source, not a live filesystem view. After editing a file, rebuild its source package snapshot and digest. If a dependency changed, update its exact pin in the app manifest and rebuild the app snapshot too. A changed comment can change source digests without changing the executable's meaning.
 
 Keep the checked-in files, manifests, and bundle synchronized. The document checker intentionally fails if they diverge. The [module specification](../../htlk-modules-spec.md) defines the precise collection, digest, visibility, and version rules. No edit automatically changes an existing runtime execution.
+
+Regenerate this fixture explicitly with
+`node specs/regenerate-module-example.mjs --write`, then run
+`node specs/validate-specs.mjs`. Without `--write`, the generator prints the
+proposed bundle. It updates this example's dependency pins and captured sources;
+it does not discover compiler inputs or change running executables.

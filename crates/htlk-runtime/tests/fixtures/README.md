@@ -23,6 +23,14 @@ core, and regex identities. The model and URI-template contributions and the
 empty scope/policy are unchanged; schema proposals/evidence are not present in
 this empty graph. Dedicated inference tests exercise those records independently.
 
+The atomic uniform-envelope cutover replaces the tool binding wire shape with an
+explicit optional output schema and complete result policy. Compiler/analyzer
+ports, adopted schema/evidence closure, trusted dispatch-policy selection and pure
+normalization use the same model. `mcp_normalize.rs` is in both core manifests.
+All four source-derived profile identities change; this empty scope and its
+policy bytes remain unchanged. Old binding records are rejected rather than
+decoded through a compatibility branch.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

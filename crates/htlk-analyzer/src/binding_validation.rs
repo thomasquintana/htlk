@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::digest::Digest;
 use crate::{
-    BuiltinType, DocumentError as Error, DocumentFields, JsonDocument, McpBinding,
-    McpBindingKind as Kind, NodeFields, PortTable, ValueTypeKind,
+    BuiltinType, DocumentError as Error, DocumentFields, InferenceContext, InferenceRevision,
+    JsonDocument, McpBinding, McpBindingKind as Kind, NodeFields, PortTable, ValueTypeKind,
 };
 
 pub(crate) fn descriptor(
@@ -41,12 +41,18 @@ pub(crate) fn descriptor(
     } = binding.kind()
     {
         for (key, id) in [
-            ("inputSchema", input_schema),
-            ("outputSchema", output_schema),
+            ("inputSchema", Some(*input_schema)),
+            ("outputSchema", *output_schema),
         ] {
+            let id = match (id, m.get(key)) {
+                (None, None) => continue,
+                (Some(id), Some(_)) => id,
+                (Some(_), None) => return Err(Error::InvalidDescriptor(key)),
+                (None, Some(_)) => return Err(Error::ToolSchemaMismatch(key)),
+            };
             let stored = f
                 .documents
-                .get(id)
+                .get(&id)
                 .ok_or(Error::MissingRecord("tool schema document"))?;
             let schema = m.get(key).ok_or(Error::InvalidDescriptor(key))?;
             // A callable schema must establish an object-root constraint. Full
@@ -55,7 +61,7 @@ pub(crate) fn descriptor(
                 return Err(Error::InvalidDescriptor(key));
             }
             let extracted = JsonDocument::from_value(schema, l)?;
-            if extracted.digest() != *id || extracted.as_bytes() != stored.as_bytes() {
+            if extracted.digest() != id || extracted.as_bytes() != stored.as_bytes() {
                 return Err(Error::ToolSchemaMismatch(key));
             }
         }
@@ -64,14 +70,9 @@ pub(crate) fn descriptor(
 }
 
 pub(crate) fn ports(n: &NodeFields, binding: &McpBinding, f: &DocumentFields) -> Result<(), Error> {
-    if let Kind::Tool {
-        input_schema,
-        output_schema,
-        ..
-    } = binding.kind()
-    {
+    if let Kind::Tool { input_schema, .. } = binding.kind() {
         schema_port(&n.inputs, "arguments", *input_schema)?;
-        schema_port(&n.outputs, "value", *output_schema)?;
+        builtin_output(&n.outputs, BuiltinType::McpToolResult)?;
     }
     match binding.kind() {
         Kind::Resource { .. } => {
@@ -119,6 +120,48 @@ pub(crate) fn ports(n: &NodeFields, binding: &McpBinding, f: &DocumentFields) ->
             }
         }
         _ => (),
+    }
+    Ok(())
+}
+pub(crate) fn inference(
+    binding: &McpBinding,
+    f: &DocumentFields,
+    l: &Limits,
+    cache: &mut BTreeMap<(Digest, Digest), InferenceContext>,
+) -> Result<(), Error> {
+    let Some(policy) = binding.result_policy() else {
+        return Ok(());
+    };
+    let Some(adopted) = &policy.inferred_schema else {
+        return Ok(());
+    };
+    let key = (adopted.schema, adopted.evidence);
+    let context = if let Some(context) = cache.get(&key) {
+        *context
+    } else {
+        let schema = f
+            .documents
+            .get(&adopted.schema)
+            .ok_or(Error::MissingRecord("inferred schema"))?;
+        let evidence = f
+            .documents
+            .get(&adopted.evidence)
+            .ok_or(Error::MissingRecord("inference evidence"))?;
+        let revision = InferenceRevision::from_documents(schema.clone(), evidence.clone(), l)?;
+        let context = revision.context();
+        cache.insert(key, context);
+        context
+    };
+    let expected = InferenceContext {
+        server: binding.server().digest(l)?,
+        descriptor: binding.descriptor(),
+        extraction_policy: policy
+            .extraction
+            .digest(l)
+            .map_err(htlk_executable::MetadataError::from)?,
+    };
+    if context != expected {
+        return Err(crate::InferenceError::Context.into());
     }
     Ok(())
 }

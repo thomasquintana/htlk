@@ -49,6 +49,8 @@ fn compiler() -> (Compiler, CanonicalDocument) {
             profile,
             policy,
             libraries: BTreeMap::new(),
+            mcp_result_policies: BTreeMap::new(),
+            mcp_result_documents: BTreeMap::new(),
             limits: l,
             frontend: FrontendLimits::default(),
             capabilities: CompilerCapabilities::default(),
@@ -662,7 +664,7 @@ fn all_mcp_categories_waits_and_retry_options_lower_to_exact_interfaces() {
 }
 
 #[test]
-fn unselected_text_only_tools_are_valid_but_selection_requires_output_schema() {
+fn schema_less_tools_compile_with_exact_descriptors_and_the_uniform_envelope() {
     let (compiler, _) = compiler();
     let catalogs = operation_catalogs(
         r#"[{"server":"service","descriptor":{"name":"text_only","inputSchema":{"type":"object"}}}]"#,
@@ -677,14 +679,173 @@ fn unselected_text_only_tools_are_valid_but_selection_requires_output_schema() {
             &catalogs,
         )
         .unwrap();
-    let source = r#"ir_version="0.1" graph test.bad{inputs={} outputs={value=json} nodes{args=eval(json,{}) work=call(mcp.tool("service","text_only"))} edges{edge args{from=args.outputs.value to=work.inputs.arguments} edge result{from=work.outputs.value to=outputs.value}}}"#;
+    let source = r#"ir_version="0.1" graph test.text{inputs={} outputs={value=McpToolResult} nodes{args=eval(json,{}) work=call(mcp.tool("service","text_only"))} edges{edge args{from=args.outputs.value to=work.inputs.arguments} edge result{from=work.outputs.value to=outputs.value}}}"#;
+    let output = compiler.compile_source(source, &catalogs).unwrap();
+    let binding = output
+        .canonical_document
+        .fields()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert!(matches!(
+        binding.kind(),
+        McpBindingKind::Tool {
+            output_schema: None,
+            ..
+        }
+    ));
+    let cbor::Value::Map(descriptor) =
+        output.canonical_document.fields().documents[&binding.descriptor()].value()
+    else {
+        panic!()
+    };
+    assert!(descriptor.get("outputSchema").is_none());
+    assert_eq!(binding.result_policy(), Some(&ToolResultPolicy::default()));
+    let canonical = compiler
+        .compile_document(output.canonical_document.clone(), &catalogs)
+        .unwrap();
+    assert_eq!(canonical.executable_bytes, output.executable_bytes);
+}
+
+#[test]
+fn adopted_result_policies_keep_inference_origins_and_source_canonical_admission_exact() {
+    use analyzer::{
+        InferenceContext, InferencePolicy, InferenceSample, SampleObservation, infer_schema,
+    };
+    use cbor::{Map, Value};
+    let (base, _) = compiler();
+    let limits = Limits::default();
+    let catalogs = operation_catalogs(
+        r#"[{"server":"service","descriptor":{"name":"flex","inputSchema":{"type":"object"}}}]"#,
+        "[]",
+        "[]",
+        "[]",
+        "{}",
+    );
+    let source = r#"ir_version="0.1" graph test.policy{inputs={}outputs={value=McpToolResult}nodes{args=eval(json,{})work=call(mcp.tool("service","flex"))}edges{edge args{from=args.outputs.value to=work.inputs.arguments}edge result{from=work.outputs.value to=outputs.value}}}"#;
+    let initial = base.compile_source(source, &catalogs).unwrap();
+    let binding = initial
+        .canonical_document
+        .fields()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    let application =
+        JsonDocument::new(br#"{"type":"array","items":{"type":"number"}}"#, &limits).unwrap();
+    let mut policy = ToolResultPolicy {
+        declared_contract: DeclaredContractPolicy::Report,
+        application_schema: Some(application.digest()),
+        ..ToolResultPolicy::default()
+    };
+    policy.extraction.selection = CandidateSelection::Schema(application.digest());
+    let context = InferenceContext {
+        server: binding.server().digest(&limits).unwrap(),
+        descriptor: binding.descriptor(),
+        extraction_policy: policy.extraction.digest(&limits).unwrap(),
+    };
+    let samples: Vec<_> = [
+        ("sample:a", r#"{"price":1}"#),
+        ("sample:b", r#"{"price":2,"currency":"USD"}"#),
+    ]
+    .into_iter()
+    .map(|(reference, value)| InferenceSample {
+        reference: reference.into(),
+        value: JsonDocument::new(value.as_bytes(), &limits).unwrap(),
+        context,
+        observation: SampleObservation {
+            successful: true,
+            complete: true,
+            truncated: false,
+            uncertain: false,
+        },
+        sanitized: false,
+        excluded_fields: vec![],
+    })
+    .collect();
+    let revision = infer_schema(&samples, context, &InferencePolicy::default(), &limits).unwrap();
+    policy.inferred_schema = Some(revision.adoption(InferredSchemaPolicy::Observe));
+    let key = (context.server, context.descriptor);
+    let mut config = base.config().clone();
+    config.mcp_result_policies.insert(key, policy.clone());
+    for document in [
+        application,
+        revision.schema().clone(),
+        revision.evidence().clone(),
+    ] {
+        config
+            .mcp_result_documents
+            .insert(document.digest(), document);
+    }
+    let selected = Compiler::new(config.clone()).unwrap();
+    let output = selected.compile_source(source, &catalogs).unwrap();
     assert_eq!(
-        compiler
+        selected
+            .compile_document(output.canonical_document.clone(), &catalogs)
+            .unwrap()
+            .executable_bytes,
+        output.executable_bytes
+    );
+    assert_eq!(
+        base.compile_document(output.canonical_document.clone(), &catalogs)
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_POLICY"
+    );
+    let binding = output
+        .canonical_document
+        .fields()
+        .bindings
+        .values()
+        .next()
+        .unwrap();
+    assert!(matches!(
+        binding.kind(),
+        McpBindingKind::Tool {
+            output_schema: None,
+            ..
+        }
+    ));
+    assert_eq!(
+        binding.inference_evidence(),
+        Some(revision.evidence().digest())
+    );
+    assert!(
+        !output
+            .canonical_document
+            .fields()
+            .schema_uris
+            .values()
+            .any(|id| *id == revision.evidence().digest())
+    );
+    let Value::Map(evidence) = revision.evidence().value() else {
+        panic!()
+    };
+    let mut fields: Vec<_> = evidence
+        .iter()
+        .filter(|(name, _)| *name != "descriptor")
+        .map(|(name, value)| (name.into(), value.clone()))
+        .collect();
+    fields.push((
+        "descriptor".into(),
+        Value::Text(Digest::from_bytes([9; 32]).to_string()),
+    ));
+    let forged =
+        JsonDocument::from_value(&Value::Map(Map::try_from_entries(fields).unwrap()), &limits)
+            .unwrap();
+    policy.inferred_schema.as_mut().unwrap().evidence = forged.digest();
+    config.mcp_result_documents.insert(forged.digest(), forged);
+    config.mcp_result_policies.insert(key, policy);
+    assert_eq!(
+        Compiler::new(config)
+            .unwrap()
             .compile_source(source, &catalogs)
             .unwrap_err()
             .diagnostics[0]
             .code,
-        "C_MCP"
+        "C_SCHEMA"
     );
 }
 

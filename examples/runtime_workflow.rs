@@ -116,6 +116,8 @@ fn compiler() -> Result<(Compiler, Arc<NativeRegistry>)> {
         profile,
         policy,
         libraries: BTreeMap::new(),
+        mcp_result_policies: BTreeMap::new(),
+        mcp_result_documents: BTreeMap::new(),
         limits,
         frontend: FrontendLimits::default(),
         schema_options: analyzer::NativeSchemaOptions::default(),

@@ -2,7 +2,7 @@ ir_version = "0.1"
 
 graph guide.tool {
     inputs = { query = string }
-    outputs = { result = json }
+    outputs = { result = McpToolResult }
     nodes {
         arguments = eval(json, { query = inputs.query }) {
             inputs = { query = string }

@@ -980,7 +980,7 @@ read-only `McpBindingKind`:
 
 | Kind | Additional canonical fields |
 |---|---|
-| Tool | `name`, `input_schema`, `output_schema` |
+| Tool | `name`, `input_schema`, explicitly nullable `output_schema`, complete `result_policy` |
 | Resource | `uri` |
 | Template | `uri_template` |
 | Prompt | `name` |
@@ -991,6 +991,15 @@ A server-side prompt binding selects an MCP prompt, distinct from a local
 `PromptTemplate` used by render expressions. Descriptor/schema bytes, protocol
 schema conformance, URI-template interpretation, authorization, and live drift
 checks require later catalog/profile/runtime integration.
+
+Tools expose the native `McpToolResult` envelope uniformly. `output_schema` is
+`Option<Digest>` in Rust and a required digest-or-null canonical field; it refers
+only to an actually advertised output schema. `result_policy` is a boxed
+`ToolResultPolicy` committing to extraction/selection, declared Enforce/Report,
+optional inferred-schema/evidence adoption and mode, and application constraints.
+`schema_roots()` traverses genuine declared/adopted/selection/application schema
+roots; `inference_evidence()` remains a separate provenance-document reference.
+Canonical readers do not decode the old mandatory-schema binding format.
 
 All six record types have bounded constructors, read-only accessors, and
 `to_value`/`from_value`/`encode`/`decode`. Canonical readers require every declared
@@ -1477,7 +1486,8 @@ types, and requiredness must match. All expression branches contribute static
 references, including function references; library function names/arity and
 render argument names are checked. Descriptor, tool-schema, schema-URI, and
 type-schema references must identify stored documents. Schema types must name
-reached tool input/output roots, including types nested inside library signatures.
+reached input, declared output, adopted inferred/application, or explicit
+candidate-selection schema roots, including types nested inside library signatures.
 Complete library manifests
 are retained even when only one public function is used.
 
@@ -1489,20 +1499,20 @@ These are protocol-owned strings; trimming, case folding, and URI rewriting
 are not applied. Descriptor descriptions, extensions, and other contents remain
 part of the exact stored JCS identity.
 
-Tools require both `inputSchema` and HTLK-required `outputSchema` objects in the
-descriptor. Analyzer linkage canonicalizes each extracted object under the JSON limits
-and verifies its digest and bytes against the binding's stored schema document.
-Supplying individually valid documents under correct hashes does not permit a
-binding to substitute a different schema. Missing, null, scalar, or Boolean
-schema roots fail this callable-schema boundary. Full object-root admission,
-including reference chains, is performed by `NativeSchemas`; an object-shaped
-schema alone does not establish that constraint.
+Tools require their actual `inputSchema`; declared `outputSchema` is optional.
+Analyzer linkage canonicalizes each advertised schema under the JSON limits and
+checks its exact bytes/digest against the binding. Presence must agree in both
+directions: inferred schemas cannot masquerade as advertised schemas. Full
+object-root admission applies to actual MCP input/declared output schemas,
+including references. Adopted inferred/application and selection schemas may
+constrain other JSON roots. Separate inference evidence has independently checked
+schema/policy identities and server/descriptor/extraction context.
 
 Tool nodes require one required `arguments` input with the exact input schema
-type and one required `value` output with the exact output schema type. Primitive
-or projected substitutes fail. Serialized schema types anywhere in the document
-must identify a reached tool input/output root; merely storing an arbitrary
-schema or extracting a nested subschema does not make it an admissible type root.
+type and one required `value` output of native type `McpToolResult`. Direct
+application-schema output ports and projected substitutes fail. Serialized schema
+types must identify a reached declared/adopted/selection root; merely storing an
+arbitrary schema or extracting a subschema does not make it an admissible root.
 The library manifest remains complete, so this rule also applies to unused public
 function signatures in a reached library.
 

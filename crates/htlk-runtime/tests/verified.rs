@@ -532,13 +532,14 @@ fn all_mcp_binding_kinds_pass_the_complete_offline_admission_boundary() {
             K::Tool {
                 name: "tool".into(),
                 input_schema: schema.digest(),
-                output_schema: schema.digest(),
+                output_schema: Some(schema.digest()),
+                result_policy: Box::default(),
             },
             format!(
                 r#"{{"name":"tool","inputSchema":{schema_text},"outputSchema":{schema_text}}}"#
             ),
             Some(schema_type.clone()),
-            schema_type,
+            ValueType::builtin(P::McpToolResult),
         ),
         (
             K::Resource {

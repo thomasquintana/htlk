@@ -327,7 +327,7 @@ The three protocol operations share one runtime request/validation mechanism:
 
 One full argument object prevents protocol-owned property names from colliding with HTLK ports. Even a tool with no arguments receives an explicit empty object, normally from `eval(json, {})`. Catalog schemas validate required and forbidden properties. Whole results preserve undeclared-but-permitted properties.
 
-HTLK requires every callable tool to supply `outputSchema` and every successful tool response to supply object-valued `structuredContent`. `isError: true` is an attempt failure. The protocol envelope is diagnostic material; `outputs.value` contains the validated structured object. These constraints follow HTLK's typed execution contract and the selected [MCP tools protocol](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+Every tool has an `arguments` input using its actual input schema and a `value` output of native type `McpToolResult`. `outputSchema` is optional and is never fabricated. The envelope preserves the protocol result, extracted literal JSON candidates, optional selected `data`, and independent validation assessments. Graphs explicitly project/narrow data with actual-value checks. Declared contracts default to Enforce; trusted hosts may select Report without bypassing application constraints. `isError: true` remains an attempt failure. See the [result/extraction contract](../docs/mcp-result-design.md) and selected [MCP tools protocol](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
 
 ### 5.1 Copying a resource between servers
 

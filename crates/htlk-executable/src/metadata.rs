@@ -7,7 +7,10 @@ use htlk_cbor::{LimitKind, Limits, Map, Value};
 
 use crate::digest::{Digest, ParseDigestError, RecordKind, record_digest};
 use crate::record_accounting::{EncodingLimitError, RecordAccounting};
-use crate::{Identifier, ParseIdentifierError, Port, TypeContext, TypeError};
+use crate::{
+    CandidateSelection, Identifier, McpResultError, ParseIdentifierError, Port, ToolResultPolicy,
+    TypeContext, TypeError,
+};
 
 /// Supported HTLK evaluator-core format version.
 pub const CORE_VERSION: &str = "0.1";
@@ -27,6 +30,8 @@ pub enum MetadataError {
     Digest(ParseDigestError),
     /// Invalid signature type/port record.
     Type(TypeError),
+    /// Invalid complete tool-result interpretation policy.
+    ToolResultPolicy(McpResultError),
     /// Incorrect shape or native field type at a fixed schema site.
     InvalidShape(&'static str),
     /// Required metadata field absent.
@@ -68,6 +73,7 @@ error_from!(htlk_cbor::Error, Codec);
 error_from!(ParseIdentifierError, Identifier);
 error_from!(ParseDigestError, Digest);
 error_from!(TypeError, Type);
+error_from!(McpResultError, ToolResultPolicy);
 impl From<EncodingLimitError> for MetadataError {
     fn from(e: EncodingLimitError) -> Self {
         Self::LimitExceeded {
@@ -83,6 +89,7 @@ impl fmt::Display for MetadataError {
             Self::Identifier(e) => write!(f, "metadata identifier: {e}"),
             Self::Digest(e) => write!(f, "metadata digest: {e}"),
             Self::Type(e) => write!(f, "signature metadata: {e}"),
+            Self::ToolResultPolicy(e) => write!(f, "tool result policy: {e}"),
             Self::InvalidShape(site) => write!(f, "invalid metadata shape: {site}"),
             Self::MissingField(field) => write!(f, "missing metadata field: {field}"),
             Self::UnknownField(record) => write!(f, "unknown field in metadata record: {record}"),
@@ -106,6 +113,7 @@ impl std::error::Error for MetadataError {
             Self::Identifier(e) => Some(e),
             Self::Digest(e) => Some(e),
             Self::Type(e) => Some(e),
+            Self::ToolResultPolicy(e) => Some(e),
             _ => None,
         }
     }
@@ -453,14 +461,16 @@ codec_methods!(ServerIdentity);
 /// External names/URIs are exact strings; there is no universal URI normalizer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpBindingKind {
-    /// Callable tool with exact input/output schema document digests.
+    /// Callable tool with exact upstream schemas and one frozen result policy.
     Tool {
         /// Exact tool name.
         name: String,
         /// Input schema root digest.
         input_schema: Digest,
-        /// Output schema root digest.
-        output_schema: Digest,
+        /// Actual advertised output schema, absent exactly when upstream omits it.
+        output_schema: Option<Digest>,
+        /// Host-selected extraction/validation semantics, bound into executable identity.
+        result_policy: Box<ToolResultPolicy>,
     },
     /// A fixed resource selection.
     Resource {
@@ -517,6 +527,48 @@ impl McpBinding {
     /// Borrowed kind-specific selection fields.
     pub fn kind(&self) -> &McpBindingKind {
         &self.kind
+    }
+    /// Every genuine input/declared/adopted/selection/application schema root.
+    /// Origins remain separate in the binding; identical documents can share bytes.
+    pub fn schema_roots(&self) -> impl Iterator<Item = Digest> + '_ {
+        let roots = match &self.kind {
+            McpBindingKind::Tool {
+                input_schema,
+                output_schema,
+                result_policy,
+                ..
+            } => [
+                Some(*input_schema),
+                *output_schema,
+                match &result_policy.extraction.selection {
+                    CandidateSelection::Schema(id) => Some(*id),
+                    _ => None,
+                },
+                result_policy
+                    .inferred_schema
+                    .as_ref()
+                    .map(|adopted| adopted.schema),
+                result_policy.application_schema,
+            ],
+            _ => [None; 5],
+        };
+        roots.into_iter().flatten()
+    }
+    /// Frozen tool-result interpretation, distinct from current execution authority.
+    pub fn result_policy(&self) -> Option<&ToolResultPolicy> {
+        match &self.kind {
+            McpBindingKind::Tool { result_policy, .. } => Some(result_policy.as_ref()),
+            _ => None,
+        }
+    }
+    /// Separate immutable adopted-inference evidence document, never a schema root.
+    pub fn inference_evidence(&self) -> Option<Digest> {
+        self.result_policy().and_then(|policy| {
+            policy
+                .inferred_schema
+                .as_ref()
+                .map(|adopted| adopted.evidence)
+        })
     }
     /// Computes record_digest("binding", record).
     ///
@@ -840,7 +892,7 @@ impl Record for McpBinding {
     fn build(&self, l: &Limits) -> Result<Value, MetadataError> {
         let mut b = Builder::new(
             if matches!(self.kind, McpBindingKind::Tool { .. }) {
-                6
+                7
             } else {
                 4
             },
@@ -853,11 +905,19 @@ impl Record for McpBinding {
                 name,
                 input_schema,
                 output_schema,
+                result_policy,
             } => {
                 b.text("kind", "tool")?;
                 b.text("name", name)?;
                 b.digest("input_schema", *input_schema)?;
-                b.digest("output_schema", *output_schema)?;
+                b.child(
+                    "output_schema",
+                    match output_schema {
+                        Some(id) => Value::Text(digest_text(*id)?),
+                        None => Value::Null,
+                    },
+                )?;
+                b.child("result_policy", result_policy.to_value(l)?)?;
             }
             McpBindingKind::Resource { uri } => {
                 b.text("kind", "resource")?;
@@ -887,6 +947,7 @@ impl Record for McpBinding {
                 "kind",
                 "name",
                 "output_schema",
+                "result_policy",
                 "server",
             ],
             "resource" => &["descriptor", "kind", "server", "uri"],
@@ -901,7 +962,14 @@ impl Record for McpBinding {
             "tool" => McpBindingKind::Tool {
                 name: string(m, "name")?,
                 input_schema: digest(m, "input_schema")?,
-                output_schema: digest(m, "output_schema")?,
+                output_schema: match field(m, "output_schema") {
+                    Value::Null => None,
+                    _ => Some(digest(m, "output_schema")?),
+                },
+                result_policy: Box::new(ToolResultPolicy::from_value(
+                    field(m, "result_policy"),
+                    l,
+                )?),
             },
             "resource" => McpBindingKind::Resource {
                 uri: string(m, "uri")?,

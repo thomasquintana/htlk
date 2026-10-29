@@ -419,7 +419,8 @@ fn binding_and_schema_references_require_document_identities() {
         McpBindingKind::Tool {
             name: "tool".into(),
             input_schema: jd,
-            output_schema: jd,
+            output_schema: Some(jd),
+            result_policy: Box::default(),
         },
         &l,
     )
@@ -436,7 +437,7 @@ fn binding_and_schema_references_require_document_identities() {
         Operation::Mcp { binding: id, retry },
     );
     n.inputs = schema_ports("arguments", jd, &l);
-    n.outputs = schema_ports("value", jd, &l);
+    n.outputs = builtin_ports("value", BuiltinType::McpToolResult, &l);
     let n = Node::new(n, &l).unwrap();
     root(
         &mut f,
@@ -735,14 +736,9 @@ fn select_binding(f: &mut DocumentFields, binding: McpBinding, l: &Limits) {
             retry: RetryPolicy::no_retry(),
         },
     );
-    if let McpBindingKind::Tool {
-        input_schema,
-        output_schema,
-        ..
-    } = binding.kind()
-    {
+    if let McpBindingKind::Tool { input_schema, .. } = binding.kind() {
         n.inputs = schema_ports("arguments", *input_schema, l);
-        n.outputs = schema_ports("value", *output_schema, l);
+        n.outputs = builtin_ports("value", BuiltinType::McpToolResult, l);
     } else if matches!(binding.kind(), McpBindingKind::Resource { .. }) {
         n.outputs = builtin_ports("value", BuiltinType::McpResourceResult, l);
     } else if matches!(binding.kind(), McpBindingKind::Prompt { .. }) {
@@ -784,7 +780,8 @@ fn tool_fixture(l: &Limits) -> DocumentFields {
         McpBindingKind::Tool {
             name: "Tool/Exact".into(),
             input_schema: input.digest(),
-            output_schema: output.digest(),
+            output_schema: Some(output.digest()),
+            result_policy: Box::default(),
         },
         l,
     )
@@ -937,7 +934,8 @@ fn every_binding_selection_matches_its_exact_descriptor_field() {
             McpBindingKind::Tool {
                 name: "Tool/Exact".into(),
                 input_schema: d(0),
-                output_schema: d(0),
+                output_schema: Some(d(0)),
+                result_policy: Box::default(),
             },
             "name",
             "Tool/Exact",
@@ -1395,16 +1393,9 @@ fn repeated_template_variables_fit_when_the_document_fits() {
 
 fn schema_root_uris(f: &mut DocumentFields, l: &Limits) {
     for binding in f.bindings.values() {
-        if let McpBindingKind::Tool {
-            input_schema,
-            output_schema,
-            ..
-        } = binding.kind()
-        {
-            for id in [input_schema, output_schema] {
-                let uri = htlk_analyzer::embedded_schema_base(&f.documents[id], l).unwrap();
-                f.schema_uris.insert(uri, *id);
-            }
+        for id in binding.schema_roots() {
+            let uri = htlk_analyzer::embedded_schema_base(&f.documents[&id], l).unwrap();
+            f.schema_uris.insert(uri, id);
         }
     }
 }
@@ -1428,7 +1419,9 @@ fn tool_schemas(input: JsonDocument, output: JsonDocument, l: &Limits) -> Docume
     } = old.kind()
     {
         f.documents.remove(input_schema);
-        f.documents.remove(output_schema);
+        if let Some(output_schema) = output_schema {
+            f.documents.remove(output_schema);
+        }
     }
     f.documents.remove(&old.descriptor());
     let binding = McpBinding::new(
@@ -1437,7 +1430,8 @@ fn tool_schemas(input: JsonDocument, output: JsonDocument, l: &Limits) -> Docume
         McpBindingKind::Tool {
             name: "Tool/Exact".into(),
             input_schema: input.digest(),
-            output_schema: output.digest(),
+            output_schema: Some(output.digest()),
+            result_policy: Box::default(),
         },
         l,
     )

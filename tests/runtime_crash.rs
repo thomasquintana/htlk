@@ -240,7 +240,7 @@ fn killed_workers_resume_real_response_intent_wait_and_loop_checkpoints_without_
             }
             let view=e2e::terminal(&runtime,&run).await;assert!(view.header.fence>before.fence);
             if mode=="intent"{assert_eq!(view.header.status,RunStatus::Failed);let node=runtime.inspect_node(&e2e::caller(),&run,identity::InvocationId::new(before.root_scope,&"echo".parse().unwrap(),&Limits::default()).unwrap()).await.unwrap();assert_eq!(node.failure.unwrap().code(),FailureCode::EffectUncertain);}
-            else{assert_eq!(view.header.status,RunStatus::Succeeded,"{mode}: {:?}",view.failure);if mode=="wait"||mode=="loop"{assert_eq!(e2e::output(&runtime,&view,"value").await,Value::Bool(true));}else{assert!(matches!(e2e::output(&runtime,&view,"value").await,Value::Map(m)if m.get("value")==Some(&Value::Null)));}}
+            else{assert_eq!(view.header.status,RunStatus::Succeeded,"{mode}: {:?}",view.failure);if mode=="wait"||mode=="loop"{assert_eq!(e2e::output(&runtime,&view,"value").await,Value::Bool(true));}else{assert!(matches!(e2e::output(&runtime,&view,"value").await,Value::Map(m)if matches!(m.get("data"),Some(Value::Map(data))if data.get("value")==Some(&Value::Null))));}}
             for original in invocations{let restored=store.record(&run,&original.key).await.unwrap();let(Value::Map(a),Value::Map(b))=(&original.payload,&restored.payload)else{panic!()};for key in ["definition_digest","origin_executable","input_hash"]{if matches!(a.get(key),Some(Value::Text(_))){assert_eq!(a.get(key),b.get(key),"{mode}/{key}");}}}
             assert_eq!(peer.calls().len(),usize::from(matches!(mode,"intent"|"response")));e2e::assert_replay(&store,&run).await;
             engine.shutdown().await.unwrap();store.close().await.unwrap();

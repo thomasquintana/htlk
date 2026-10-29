@@ -113,6 +113,13 @@ rewritten. Policies are frozen before dispatch and cannot be selected by tool
 output. Source/canonical compilation and module inspection report adopted policies
 and schema origins accurately. Conflicting exact selections are rejected.
 
+At execution, trusted `McpPolicy.result_policy` must independently equal the
+compiled tool policy before prepare/send and after connection authorization.
+The default host selection is the full default policy, so merely submitting an
+executable requesting Report does not enable it. Prepared attempts persist the
+canonical result policy; response recovery verifies it against the immutable
+binding and processes that frozen interpretation without provider recall.
+
 Schema closure includes input schemas, actual declared output schemas, adopted
 inferred schemas, required application schemas, and genuine transitive references.
 The inference evidence document is a separate reached JSON document, not a schema
@@ -217,6 +224,12 @@ missing/invalid and grants no refined application type. Enforce requires a prese
 matching value. Application schemas are always required constraints and use
 enforce. Required constraint failure prevents success publication; raw response
 and protected normalization evidence remain available for recovery.
+
+If required normalized data is unavailable because extraction exhausted a limit,
+the invocation fails with a processing-budget classification rather than an
+ordinary inferred/application mismatch. An authored schema-retry rule cannot turn
+that local processing failure into another external call. All permitted semantic
+retries still require both the explicit authored code and trusted replay authority.
 
 Actual typed narrowing is already supported by checked expression/port boundaries:
 project the optional `data` JSON into an explicitly required application result

@@ -285,7 +285,8 @@ fn all_mcp_binding_variants_preserve_kind_specific_fields() {
         Kind::Tool {
             name: "SearchWeb".into(),
             input_schema: d(1),
-            output_schema: d(2),
+            output_schema: Some(d(2)),
+            result_policy: Box::default(),
         },
         Kind::Resource {
             uri: "Docs://Host/Path%2fA".into(),
@@ -405,7 +406,8 @@ fn metadata_records_are_closed_and_never_default_missing_fields() {
         Kind::Tool {
             name: "x".into(),
             input_schema: d(1),
-            output_schema: d(2),
+            output_schema: Some(d(2)),
+            result_policy: Box::default(),
         },
         &l,
     )
@@ -419,6 +421,7 @@ fn metadata_records_are_closed_and_never_default_missing_fields() {
         "name",
         "input_schema",
         "output_schema",
+        "result_policy",
     ] {
         assert_eq!(
             Binding::from_value(&replace(&b, key, None), &l).unwrap_err(),

@@ -299,6 +299,7 @@ impl LinkageError {
             Self::Type(_) | Self::UnreachedSchemaType => "C_TYPE",
             Self::Policy(_) | Self::StructuralLimitExceeded { .. } => "C_POLICY",
             Self::SchemaDiagnostic(_)
+            | Self::Inference(_)
             | Self::NativeSchema(_)
             | Self::Schema(_)
             | Self::SchemaRootMismatch => "C_SCHEMA",

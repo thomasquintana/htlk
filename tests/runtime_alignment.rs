@@ -249,7 +249,7 @@ impl Harness {
         panic!("run did not reach expected observation")
     }
 }
-const TOOL: &str = r#"ir_version="0.1" graph test.tool { inputs={} outputs={value=json} nodes{args=eval(json,{query="q"}) work=call(mcp.tool("research","lookup")){retry{max_attempts=2 on=["E_OUTPUT_SCHEMA"] backoff_ms=[0]}}} edges{edge args{from=args.outputs.value to=work.inputs.arguments}edge value{from=work.outputs.value to=outputs.value}}}"#;
+const TOOL: &str = r#"ir_version="0.1" graph test.tool { inputs={} outputs={value=json} nodes{args=eval(json,{query="q"}) work=call(mcp.tool("research","lookup")){retry{max_attempts=2 on=["MCP_DECLARED_CONTRACT"] backoff_ms=[0]}}} edges{edge args{from=args.outputs.value to=work.inputs.arguments}edge value{from=work.outputs.value to=outputs.value}}}"#;
 
 #[test]
 fn denial_is_terminal_in_the_disposition_transaction_despite_policy_replacement() {

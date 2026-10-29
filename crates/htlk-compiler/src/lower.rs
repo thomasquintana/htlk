@@ -1043,28 +1043,34 @@ impl<'a> Session<'a> {
                 let d = map(descriptor.value())?;
                 let input = JsonDocument::from_value(field(d, "inputSchema")?, self.l())
                     .map_err(|e| fail("C_SCHEMA", e))?;
-                let output = JsonDocument::from_value(
-                    field(d, "outputSchema")
-                        .map_err(|_| fail("C_MCP", "selected tool requires outputSchema"))?,
-                    self.l(),
-                )
-                .map_err(|e| fail("C_SCHEMA", e))?;
+                let output = d
+                    .get("outputSchema")
+                    .map(|value| JsonDocument::from_value(value, self.l()))
+                    .transpose()
+                    .map_err(|e| fail("C_SCHEMA", e))?;
                 let input_id = input.digest();
-                let output_id = output.digest();
+                let output_id = output.as_ref().map(JsonDocument::digest);
                 self.pool.documents.insert(input_id, input);
-                self.pool.documents.insert(output_id, output);
+                if let Some(output) = output {
+                    self.pool.documents.insert(output.digest(), output);
+                }
+                let result_policy = Box::new(
+                    self.compiler
+                        .tool_result_policy(&server, descriptor.digest())?,
+                );
                 (
                     McpBindingKind::Tool {
                         name: selection.into(),
                         input_schema: input_id,
                         output_schema: output_id,
+                        result_policy,
                     },
                     one_port(
                         "arguments",
                         self.make_type(ValueTypeKind::Schema(input_id))?,
                         self.l(),
                     )?,
-                    self.make_type(ValueTypeKind::Schema(output_id))?,
+                    ValueType::builtin(BuiltinType::McpToolResult),
                 )
             }
             "resources" => (
@@ -1127,6 +1133,17 @@ impl<'a> Session<'a> {
         };
         let binding = McpBinding::new(server, descriptor.digest(), kind, self.l())
             .map_err(|e| fail("C_MCP", e))?;
+        for id in binding.schema_roots().chain(binding.inference_evidence()) {
+            if !self.pool.documents.contains_key(&id) {
+                let document = self
+                    .compiler
+                    .config
+                    .mcp_result_documents
+                    .get(&id)
+                    .ok_or_else(|| fail("C_SCHEMA", "missing adopted result schema or evidence"))?;
+                self.pool.documents.insert(id, document.clone());
+            }
+        }
         let id = binding.digest(self.l()).map_err(|e| fail("C_MCP", e))?;
         self.pool.documents.insert(descriptor.digest(), descriptor);
         self.pool.bindings.insert(id, binding);
@@ -1159,6 +1176,10 @@ impl<'a> Session<'a> {
                     binding.descriptor(),
                     self.pool.documents[&binding.descriptor()].clone(),
                 );
+                if let Some(evidence) = binding.inference_evidence() {
+                    out.documents
+                        .insert(evidence, self.pool.documents[&evidence].clone());
+                }
             } else if let Some(library) = self.pool.libraries.get(&id) {
                 out.libraries.insert(id, library.clone());
             }
@@ -1166,25 +1187,18 @@ impl<'a> Session<'a> {
         let mut schemas = self.catalogs.schemas.clone();
         let mut roots = BTreeSet::new();
         for binding in out.bindings.values() {
-            if let McpBindingKind::Tool {
-                input_schema,
-                output_schema,
-                ..
-            } = binding.kind()
-            {
-                for id in [input_schema, output_schema] {
-                    let doc = &self.pool.documents[id];
-                    let base = crate::analyzer::embedded_schema_base(doc, l)
-                        .map_err(|e| fail("C_SCHEMA", e))?;
-                    if schemas.get(&base).is_some_and(|old| old != doc) {
-                        return Err(fail(
-                            "C_SCHEMA",
-                            "conflicting embedded schema retrieval root",
-                        ));
-                    }
-                    roots.insert(base.clone());
-                    schemas.insert(base, doc.clone());
+            for id in binding.schema_roots() {
+                let doc = &self.pool.documents[&id];
+                let base = crate::analyzer::embedded_schema_base(doc, l)
+                    .map_err(|e| fail("C_SCHEMA", e))?;
+                if schemas.get(&base).is_some_and(|old| old != doc) {
+                    return Err(fail(
+                        "C_SCHEMA",
+                        "conflicting embedded schema retrieval root",
+                    ));
                 }
+                roots.insert(base.clone());
+                schemas.insert(base, doc.clone());
             }
         }
         if !roots.is_empty() {

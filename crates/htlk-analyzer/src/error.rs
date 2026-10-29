@@ -11,6 +11,8 @@ pub enum LinkageError {
     SchemaDiagnostic(Box<crate::NativeSchemaDiagnostic>),
     /// Full MCP protocol conformance failure.
     Mcp(crate::McpValidationError),
+    /// Adopted inferred-schema evidence failed independent admission.
+    Inference(crate::InferenceError),
     /// Conflicting descriptors for the same compound MCP selection.
     ConflictingMcpSelection,
     /// Offline native schema preparation failed.
@@ -97,6 +99,7 @@ convert!(model::PolicyError, Policy);
 convert!(crate::SchemaResourceError, Schema);
 convert!(crate::NativeSchemaError, NativeSchema);
 convert!(crate::McpValidationError, Mcp);
+convert!(crate::InferenceError, Inference);
 impl From<model::DocumentError> for LinkageError {
     fn from(e: model::DocumentError) -> Self {
         match e {
@@ -129,6 +132,7 @@ impl std::error::Error for LinkageError {
             Self::Representation(e) => Some(e.as_ref()),
             Self::SchemaDiagnostic(e) => Some(e.as_ref()),
             Self::Mcp(e) => Some(e),
+            Self::Inference(e) => Some(e),
             Self::NativeSchema(e) => Some(e),
             Self::Schema(e) => Some(e),
             Self::Codec(e) => Some(e),

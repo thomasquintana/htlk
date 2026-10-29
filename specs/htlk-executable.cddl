@@ -231,7 +231,8 @@ mcp_binding = {
   descriptor: digest,
   name: tstr,
   input_schema: digest,
-  output_schema: digest
+  output_schema: digest / null,
+  result_policy: tool_result_policy
 } / {
   kind: "resource",
   server: server_identity,

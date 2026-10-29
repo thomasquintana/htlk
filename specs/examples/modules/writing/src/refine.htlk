@@ -41,8 +41,8 @@ export task refine {
 
                     revise = call(mcp.tool("models", "revise_brief"))
 
-                    draft = eval(string, inputs.response.draft) {
-                        inputs = { response = json }
+                    draft = eval(string, inputs.response.data.draft) {
+                        inputs = { response = McpToolResult }
                         postconditions = length(outputs.value) > 0
                     }
 
@@ -60,8 +60,8 @@ export task refine {
 
                     review = call(mcp.tool("models", "review_brief"))
 
-                    feedback = eval(string, inputs.response.feedback) {
-                        inputs = { response = json }
+                    feedback = eval(string, inputs.response.data.feedback) {
+                        inputs = { response = McpToolResult }
                     }
                 }
 
@@ -85,7 +85,7 @@ export task refine {
                 }
             }
 
-            until = review.outputs.value.accepted
+            until = review.outputs.value.data.accepted
             max_iterations = 3
             limits { max_mcp_calls = 6 }
         }

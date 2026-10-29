@@ -5,16 +5,16 @@ graph spike.sandbox {
     nodes {
         create_arguments = eval(json, {})
         create = call(mcp.tool("fixture", "sandbox_create"))
-        execute_arguments = eval(json, { sandbox = inputs.response.sandbox, marker = inputs.marker }) {
-            inputs = { response = json, marker = string }
+        execute_arguments = eval(json, { sandbox = inputs.response.data.sandbox, marker = inputs.marker }) {
+            inputs = { response = McpToolResult, marker = string }
         }
-        execute = call(mcp.tool("fixture", "sandbox_execute")) { postconditions = outputs.value.executed == true }
-        inspect_arguments = eval(json, { sandbox = inputs.response.sandbox }) { inputs = { response = json } }
+        execute = call(mcp.tool("fixture", "sandbox_execute")) { postconditions = outputs.value.data.executed == true }
+        inspect_arguments = eval(json, { sandbox = inputs.response.data.sandbox }) { inputs = { response = McpToolResult } }
         inspect = call(mcp.tool("fixture", "sandbox_inspect"))
-        destroy_arguments = eval(json, { sandbox = inputs.response.sandbox }) { inputs = { response = json } }
+        destroy_arguments = eval(json, { sandbox = inputs.response.data.sandbox }) { inputs = { response = McpToolResult } }
         destroy = call(mcp.tool("fixture", "sandbox_destroy"))
-        marker = eval(string, inputs.response.marker) { inputs = { response = json } }
-        destroyed = eval(boolean, inputs.response.destroyed) { inputs = { response = json } }
+        marker = eval(string, inputs.response.data.marker) { inputs = { response = McpToolResult } }
+        destroyed = eval(boolean, inputs.response.data.destroyed) { inputs = { response = McpToolResult } }
     }
     edges {
         edge create_arguments { from = create_arguments.outputs.value to = create.inputs.arguments }

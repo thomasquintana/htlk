@@ -8,7 +8,7 @@
     "types": "src/types.htlk"
   },
   "dependencies": {
-    "research": "sha256:e8beee71886cee613648efbf09082846d9cbf9254c88e8c0068ab61a47f80168",
-    "writing": "sha256:f8b0d2b44541cbad5f05089c5d5a5e5a27a70c45199184fbe8cbca5daadfe370"
+    "research": "sha256:198a3dced9965cfc317060085740245d3836c617ed6fcb796a011f9ae876e9c7",
+    "writing": "sha256:012036c8e7353475460b2aa6f30517f509521f0aedd96705d33c5ff9174b4a42"
   }
 }

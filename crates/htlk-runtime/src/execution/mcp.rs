@@ -175,6 +175,11 @@ async fn operate_inner(
                 {
                     return Err(RuntimeError::failure(FailureCode::Digest));
                 }
+                if field(&attempt.payload, "result_policy")?
+                    != &result_policy_value(binding, &runtime.config.limits)?
+                {
+                    return Err(RuntimeError::failure(FailureCode::Digest));
+                }
                 let result = match normalize(runtime, scope, binding, raw, &attempt.payload).await {
                     Ok(result) => result,
                     Err(error) => {
@@ -253,6 +258,7 @@ async fn operate_inner(
             _ => return Err(err()),
         }
     } else {
+        require_result_policy(binding, &policy)?;
         let number = match map(&record.payload)?.get("attempt_number") {
             None | Some(Value::Null) => 1,
             Some(Value::Integer(n)) if *n > 0 => u64::try_from(*n)
@@ -295,6 +301,10 @@ async fn operate_inner(
             ("protocol_key", protocol_key.clone()),
             ("encoded_request", Value::Bytes(encoded.as_bytes().to_vec())),
             ("requested_uri", uri.map_or(Value::Null, Value::Text)),
+            (
+                "result_policy",
+                result_policy_value(binding, &runtime.config.limits)?,
+            ),
             ("owner_fence", Value::Integer(lease.fence())),
             (
                 "timeout_ms",
@@ -328,6 +338,7 @@ async fn operate_inner(
         return Ok(true);
     }
     let attempt_id = string(&record.payload, "attempt_id")?;
+    require_result_policy(binding, &policy)?;
     let attempt = runtime
         .store
         .record(lease.run_id(), &key(RecordFamily::Attempt, &attempt_id))
@@ -499,6 +510,7 @@ async fn operate_inner(
             runtime
                 .policy
                 .mcp_policy_for_request(&scope.context, binding, &parameters)?;
+        require_result_policy(binding, &policy)?;
         let (verified, protocol_key) = deduplication(
             runtime,
             binding,
@@ -844,38 +856,21 @@ async fn normalize(
     let document = JsonDocument::new(raw, &runtime.config.limits)
         .map_err(|_| RuntimeError::failure(FailureCode::McpProtocol))?;
     match binding.kind() {
-        McpBindingKind::Tool { output_schema, .. } => {
-            crate::validate_mcp_tool_result(&document, &runtime.config.limits)
-                .map_err(|_| RuntimeError::failure(FailureCode::McpProtocol))?;
-            if map(document.value())?.get("isError") == Some(&Value::Bool(true)) {
-                return Err(RuntimeError::failure(FailureCode::McpToolError));
-            }
-            let value = map(document.value())?
-                .get("structuredContent")
-                .ok_or_else(|| RuntimeError::failure(FailureCode::McpProtocol))?;
-            if !matches!(value, Value::Map(_)) {
-                return Err(RuntimeError::failure(FailureCode::McpProtocol));
-            }
-            let ty = htlk_executable::ValueType::new(
-                htlk_executable::ValueTypeKind::Schema(*output_schema),
-                htlk_executable::TypeContext::Value,
-                &runtime.config.limits,
-            )
-            .map_err(|_| err())?;
-            crate::validate_typed_value(
-                value,
-                &ty,
-                Some(scope.executable.schemas()),
+        McpBindingKind::Tool { .. } => {
+            let result = crate::normalize_mcp_tool_result(
+                &document,
+                binding,
+                scope.executable.schemas(),
                 &runtime.config.limits,
                 &scope.executable.policy().fields().evaluator_limits,
-            )
-            .map_err(|error| {
-                RuntimeError::failure(FailureCode::for_evaluation(
-                    &error,
-                    crate::failure::FailureBoundary::Output,
-                ))
-            })?;
-            Ok(value.clone())
+            )?;
+            if let Some(failure) = result.failure() {
+                return Err(RuntimeError::failure(failure.code()));
+            }
+            result
+                .envelope()
+                .to_value(&runtime.config.limits)
+                .map_err(|error| crate::ToolNormalizationError::Model(error).into())
         }
         McpBindingKind::Prompt { .. } => {
             crate::validate_mcp_prompt_result(&document, &runtime.config.limits)
@@ -959,6 +954,29 @@ async fn normalize(
         }
     }
 }
+fn require_result_policy(binding: &McpBinding, policy: &McpPolicy) -> Result<(), RuntimeError> {
+    if binding
+        .result_policy()
+        .is_some_and(|expected| expected != &policy.result_policy)
+    {
+        return Err(RuntimeError::failure(FailureCode::Policy));
+    }
+    Ok(())
+}
+fn result_policy_value(
+    binding: &McpBinding,
+    limits: &htlk_executable::cbor::Limits,
+) -> Result<Value, RuntimeError> {
+    binding
+        .result_policy()
+        .map(|policy| {
+            policy
+                .to_value(limits)
+                .map_err(|error| RuntimeError::from(crate::ToolNormalizationError::Model(error)))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(Value::Null))
+}
 async fn fail_attempt(
     runtime: &Arc<Runtime>,
     lease: &RunLease,
@@ -1001,6 +1019,9 @@ async fn fail_attempt(
             | FailureCode::McpProtocol
             | FailureCode::McpToolError
             | FailureCode::OutputSchema
+            | FailureCode::DeclaredContract
+            | FailureCode::InferredSchema
+            | FailureCode::ApplicationSchema
             | FailureCode::Postconditions
     ) && policy.replay_safe
         && number < retry.max_attempts()

@@ -53,6 +53,12 @@ pub struct CompilerConfig {
     pub policy: PolicyDocument,
     /// Complete linked library manifests keyed by implementation digest.
     pub libraries: BTreeMap<Digest, Library>,
+    /// Trusted result interpretations keyed by (compound server, original descriptor).
+    /// Unlisted selections use the complete default ToolResultPolicy.
+    pub mcp_result_policies: BTreeMap<(Digest, Digest), ToolResultPolicy>,
+    /// Explicit adopted schema/evidence documents by exact content identity.
+    /// Only reached documents enter an executable; no provider discovery occurs.
+    pub mcp_result_documents: BTreeMap<Digest, JsonDocument>,
     /// Executable and derived analysis limits.
     pub limits: Limits,
     /// Native schema backend controls.
@@ -207,7 +213,44 @@ impl Compiler {
                     .map_err(|e| fail("C_LIBRARY", e))?;
             }
         }
+        for policy in config.mcp_result_policies.values() {
+            policy
+                .to_value(&config.limits)
+                .map_err(|e| fail("C_POLICY", e))?;
+        }
+        let mut document_bytes = 0usize;
+        for (id, document) in &config.mcp_result_documents {
+            if id != &document.digest() {
+                return Err(fail("C_SCHEMA", "incorrect result document identity"));
+            }
+            JsonDocument::decode(document.as_bytes(), &config.limits)
+                .map_err(|e| fail("C_SCHEMA", e))?;
+            document_bytes = document_bytes
+                .checked_add(document.as_bytes().len())
+                .ok_or_else(|| fail("C_SOURCE_LIMIT", "result document allowance"))?;
+            if document_bytes > config.frontend.max_intermediate_bytes {
+                return Err(fail("C_SOURCE_LIMIT", "result document allowance"));
+            }
+        }
         Ok(Self { config })
+    }
+    pub(crate) fn tool_result_policy(
+        &self,
+        server: &ServerIdentity,
+        descriptor: Digest,
+    ) -> Result<ToolResultPolicy> {
+        let key = (
+            server
+                .digest(&self.config.limits)
+                .map_err(|e| fail("C_MCP", e))?,
+            descriptor,
+        );
+        Ok(self
+            .config
+            .mcp_result_policies
+            .get(&key)
+            .cloned()
+            .unwrap_or_default())
     }
     /// Revalidates canonical input against this compiler and current catalogs.
     ///
@@ -248,6 +291,14 @@ impl Compiler {
                     "selected descriptor bytes differ from supplied catalogs",
                 ));
             }
+            if let Some(policy) = binding.result_policy()
+                && policy != &self.tool_result_policy(binding.server(), binding.descriptor())?
+            {
+                return Err(fail(
+                    "C_POLICY",
+                    "tool result policy differs from trusted host selection",
+                ));
+            }
         }
         for scope in f.scopes.values() {
             check_capabilities(&scope.fields().limits, self.config.capabilities)?;
@@ -257,25 +308,18 @@ impl Compiler {
         }
         let mut embedded = BTreeMap::new();
         for binding in f.bindings.values() {
-            if let McpBindingKind::Tool {
-                input_schema,
-                output_schema,
-                ..
-            } = binding.kind()
-            {
-                for id in [input_schema, output_schema] {
-                    let document = f
-                        .documents
-                        .get(id)
-                        .ok_or_else(|| fail("C_SCHEMA", "missing embedded schema"))?;
-                    let base = crate::analyzer::embedded_schema_base(document, l)
-                        .map_err(|e| fail("C_SCHEMA", e))?;
-                    if embedded.insert(base, *id).is_some_and(|old| old != *id) {
-                        return Err(fail(
-                            "C_SCHEMA",
-                            "conflicting embedded schema retrieval root",
-                        ));
-                    }
+            for id in binding.schema_roots() {
+                let document = f
+                    .documents
+                    .get(&id)
+                    .ok_or_else(|| fail("C_SCHEMA", "missing embedded schema"))?;
+                let base = crate::analyzer::embedded_schema_base(document, l)
+                    .map_err(|e| fail("C_SCHEMA", e))?;
+                if embedded.insert(base, id).is_some_and(|old| old != id) {
+                    return Err(fail(
+                        "C_SCHEMA",
+                        "conflicting embedded schema retrieval root",
+                    ));
                 }
             }
         }

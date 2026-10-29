@@ -478,7 +478,8 @@ fn tool_document(input: &str) -> CanonicalDocument {
         McpBindingKind::Tool {
             name: "tool".into(),
             input_schema: input.digest(),
-            output_schema: output.digest(),
+            output_schema: Some(output.digest()),
+            result_policy: Box::default(),
         },
         &l,
     )
@@ -504,7 +505,7 @@ fn tool_document(input: &str) -> CanonicalDocument {
     node.outputs = PortTable::new(
         vec![(
             "value".parse().unwrap(),
-            Port::new(ty(output.digest()), true),
+            Port::new(ValueType::builtin(BuiltinType::McpToolResult), true),
         )],
         &l,
     )

@@ -241,7 +241,7 @@ Our complete example uses three tools:
 
 The [catalog fixture](examples/decision_brief.catalogs.json) provides the complete example descriptors and their input/output schemas. The research tool represents an evidence-retrieval service. The other two represent LLM-backed services with different responsibilities. The fixture identifies their contracts; it does not implement those services or configure credentials.
 
-The two model tools may share an underlying LLM. Separate tool contracts give drafting and reviewing different, statically known output schemas; they do not by themselves make the reviewer an independent source of truth.
+The two model tools may share an underlying LLM. Separate tool contracts give drafting and reviewing different upstream schema promises that HTLK checks at runtime; they do not by themselves make the reviewer an independent source of truth.
 
 In this example, model selection and model-specific settings belong to the deployed MCP tools. HTLK has no special `model` or `temperature` node option. If your real tool exposes such arguments, construct them inside the tool's argument object according to its actual schema.
 
@@ -259,13 +259,14 @@ The node receives exactly one `arguments` input and produces exactly one `value`
 flowchart LR
     Args["arguments object: query"] --> Call["lookup: MCP tool call"]
     SchemaIn["Pinned inputSchema"] -.->|validate before dispatch| Call
-    Call --> Result["value object: evidence_text"]
-    SchemaOut["Pinned outputSchema"] -.->|validate before acceptance| Result
+    Call --> Result["value: McpToolResult envelope"]
+    SchemaOut["Optional pinned outputSchema"] -.->|assess original structuredContent| Result
+    Result --> Data["checked data.evidence_text"]
 ```
 
-**Guide diagram 4 — The MCP boundary validates whole objects.** An argument is not accepted merely because an LLM proposed it. The runtime validates the exact request object and, on success, the returned structured object against the pinned schemas.
+**Guide diagram 4 — Protocol results and application data are separate.** An argument is not accepted merely because an LLM proposed it. The runtime checks the exact request and protocol response, assesses any advertised output contract, extracts literal JSON, and independently checks required application data.
 
-A successful text-only tool response is insufficient for this example. HTLK requires `outputSchema` and object-valued `structuredContent` for a called tool. A tool result containing `isError: true` is a failed attempt, not a successful object to pass downstream.
+These fixture tools advertise output schemas, so the default Enforce policy requires matching original `structuredContent`. Schema-less tools may return text, images, or empty content and still produce a successful generic envelope. Literal JSON recovered from text is candidate data, not proof of compliance with an advertised structured-content contract. Trusted hosts may explicitly choose Report for declared violations. `isError: true` remains a failed attempt even if its text contains JSON.
 
 ### Do not mistake a schema for a quality guarantee
 
@@ -291,8 +292,8 @@ task research.find_evidence {
             inputs = { query = string }
         }
         lookup = call(mcp.tool("research", "lookup"))
-        extract = eval(string, inputs.response.evidence_text) {
-            inputs = { response = json }
+        extract = eval(string, inputs.response.data.evidence_text) {
+            inputs = { response = McpToolResult }
             postconditions = length(outputs.value) > 0
         }
     }
@@ -453,8 +454,8 @@ task brief.refine {
 
                     revise = call(mcp.tool("models", "revise_brief"))
 
-                    draft = eval(string, inputs.response.draft) {
-                        inputs = { response = json }
+                    draft = eval(string, inputs.response.data.draft) {
+                        inputs = { response = McpToolResult }
                         postconditions = length(outputs.value) > 0
                     }
 
@@ -472,8 +473,8 @@ task brief.refine {
 
                     review = call(mcp.tool("models", "review_brief"))
 
-                    feedback = eval(string, inputs.response.feedback) {
-                        inputs = { response = json }
+                    feedback = eval(string, inputs.response.data.feedback) {
+                        inputs = { response = McpToolResult }
                     }
                 }
 
@@ -497,7 +498,7 @@ task brief.refine {
                 }
             }
 
-            until = review.outputs.value.accepted
+            until = review.outputs.value.data.accepted
             max_iterations = 3
             limits { max_mcp_calls = 6 }
         }

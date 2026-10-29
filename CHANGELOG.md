@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replace direct tool application-object outputs with one native `McpToolResult`
+  envelope for every tool, including schema-less/text/multimodal calls. Graphs
+  explicitly read and check `data`; upstream descriptors are never rewritten.
+- Replace tool binding records with explicit optional declared schemas and pinned
+  result policies. Add trusted compiler policy/document inputs and independent
+  runtime host-policy selection before dispatch. Regenerate development executables
+  and source-package examples; old binding records have no compatibility decoder.
+- Distinguish declared, inferred, and application-result contract failures while
+  preserving explicit authored retry and trusted replay requirements. Required
+  extraction exhaustion remains a budget failure rather than a schema retry.
+
 ### Fixed
 
 - Preserve native MCP sessions across operations within each run/server, including

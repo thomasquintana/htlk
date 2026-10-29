@@ -34,7 +34,7 @@ The revision tool receives question, evidence, prior draft, and feedback. An emp
 
 The review tool receives question, evidence, and draft. It should assess the rubric described in the user guide. A valid response with `accepted: false` is a successful tool response and permits another iteration. A response with `isError: true`, missing structured content, or invalid output data is an operational failure instead.
 
-Every successful tool response supplies object-valued `structuredContent` matching its `outputSchema`. Protocol text blocks, if provided, do not replace that structured result.
+These fixture tools advertise output schemas, so default Enforce requires their successful original `structuredContent` to match. HTLK also accepts schema-less tools and preserves text/multimodal results in the same `McpToolResult` envelope. The examples explicitly read/narrow `data`; recovered text JSON never substitutes for declared compliance.
 
 ## Bounds and assumptions
 

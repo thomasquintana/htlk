@@ -304,3 +304,74 @@ fn unknown_profiles_invalid_limits_and_noncanonical_ids_do_not_default() {
         ty
     );
 }
+
+#[test]
+fn unified_binding_requires_explicit_policy_and_distinguishes_schema_roots_from_evidence() {
+    use htlk_executable::{
+        McpBinding, McpBindingKind, McpTransport, MetadataError, ServerIdentity,
+    };
+    use std::collections::BTreeSet;
+    let limits = Limits::default();
+    let id = |byte| Digest::from_bytes([byte; 32]);
+    let mut policy = ToolResultPolicy {
+        application_schema: Some(id(5)),
+        inferred_schema: Some(AdoptedInference {
+            schema: id(3),
+            evidence: id(4),
+            mode: InferredSchemaPolicy::Observe,
+        }),
+        ..ToolResultPolicy::default()
+    };
+    policy.extraction.selection = CandidateSelection::Schema(id(2));
+    let binding = McpBinding::new(
+        ServerIdentity::new(
+            "test".into(),
+            McpTransport::Stdio,
+            "upstream".into(),
+            "1".into(),
+            &limits,
+        )
+        .unwrap(),
+        id(0),
+        McpBindingKind::Tool {
+            name: "tool".into(),
+            input_schema: id(1),
+            output_schema: None,
+            result_policy: Box::new(policy),
+        },
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        binding.schema_roots().collect::<BTreeSet<_>>(),
+        BTreeSet::from([id(1), id(2), id(3), id(5)])
+    );
+    assert_eq!(binding.inference_evidence(), Some(id(4)));
+    let value = binding.to_value(&limits).unwrap();
+    assert_eq!(member(&value, "output_schema"), &Value::Null);
+    assert_eq!(
+        McpBinding::decode(&binding.encode(&limits).unwrap(), &limits).unwrap(),
+        binding
+    );
+    for field in ["output_schema", "result_policy"] {
+        assert!(
+            matches!(McpBinding::from_value(&change(&value, field, None), &limits), Err(MetadataError::MissingField(name)) if name == field)
+        );
+    }
+    let mut kind = binding.kind().clone();
+    let McpBindingKind::Tool { result_policy, .. } = &mut kind else {
+        panic!()
+    };
+    result_policy.extraction.limits.work += 1;
+    let changed = McpBinding::new(
+        binding.server().clone(),
+        binding.descriptor(),
+        kind,
+        &limits,
+    )
+    .unwrap();
+    assert_ne!(
+        binding.digest(&limits).unwrap(),
+        changed.digest(&limits).unwrap()
+    );
+}

@@ -639,6 +639,8 @@ pub enum RuntimeError {
     Record(RuntimeRecordError),
     /// Proposed or stored artifact failed value/metadata integrity checks.
     Artifact(Box<ArtifactError>),
+    /// Protected tool normalization processing failed independently of contract mismatch.
+    ToolNormalization(Box<crate::ToolNormalizationError>),
 }
 impl RuntimeError {
     pub(crate) fn failure(code: FailureCode) -> Self {
@@ -652,6 +654,7 @@ impl RuntimeError {
             Self::Record(RuntimeRecordError::Integrity) => FailureCode::Digest,
             Self::Record(_) => FailureCode::Input,
             Self::Artifact(error) => error.code(FailureBoundary::Input),
+            Self::ToolNormalization(error) => error.code(),
             Self::Verification(error) => match error.as_ref() {
                 ExecutableVerificationError::Envelope(
                     htlk_executable::EnvelopeError::FingerprintMismatch,
@@ -684,6 +687,7 @@ impl std::error::Error for RuntimeError {
             Self::Failure(e) => Some(e),
             Self::Record(e) => Some(e),
             Self::Artifact(e) => Some(e.as_ref()),
+            Self::ToolNormalization(e) => Some(e.as_ref()),
         }
     }
 }
@@ -715,5 +719,10 @@ impl From<cbor::Error> for RuntimeError {
 impl From<ArtifactError> for RuntimeError {
     fn from(error: ArtifactError) -> Self {
         Self::Artifact(Box::new(error))
+    }
+}
+impl From<crate::ToolNormalizationError> for RuntimeError {
+    fn from(error: crate::ToolNormalizationError) -> Self {
+        Self::ToolNormalization(Box::new(error))
     }
 }

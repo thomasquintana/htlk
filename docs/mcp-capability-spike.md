@@ -107,17 +107,21 @@ that page's returned handle or same-session active-page state. For a sandbox
 server, execute a deterministic file/state mutation and inspect it before destroy.
 Keep all sequence steps explicit graph nodes.
 
-HTLK requires protocol `2025-11-25`, an `outputSchema` for every selected tool and
-object-valued `structuredContent` for successful results. A live server's missing
-schema, text-only result or protocol mismatch is a compatibility finding; the
-runner does not synthesize typed output from display text.
+HTLK pins protocol `2025-11-25`. Selected tools may omit `outputSchema` and return
+text, images, or empty content. Every accepted tool returns `McpToolResult`;
+examples explicitly check/project its optional `data`. Strict bounded extraction
+finds literal JSON in display text without interpreting prose or inventing fields.
+Advertised schemas still assess original `structuredContent` and default to
+Enforce; recovered text does not establish declared compliance. Protocol/version
+mismatches remain compatibility findings, not grounds to rewrite descriptors.
 
 The runner uses an in-memory runtime store, a 30-second graph deadline,
 10-second attempt/discovery ceilings and a 60-second outer observation bound.
 It prints the run ID, executable fingerprint, terminal status and accepted output
 values, exits unsuccessfully on failure, then stops execution and awaits native
-adapter shutdown. Its host policy allows the explicitly configured spike operations
-and grants no replay-safety override. Configuration is literal JSON; credentials
+adapter shutdown. Its demonstration host policy is permissive, without an
+operation allowlist, and grants no replay-safety override. Product acceptance
+campaigns must supply their intended operation scope. Configuration is literal JSON; credentials
 belong in the host's local endpoint headers/environment.
 
 For each live result, record the server product/version, launch command or deployment

@@ -42,9 +42,12 @@ fn binding(transport: McpTransport) -> McpBinding {
             input_schema: JsonDocument::new(br#"{"type":"object"}"#, &l)
                 .unwrap()
                 .digest(),
-            output_schema: JsonDocument::new(br#"{"type":"object"}"#, &l)
-                .unwrap()
-                .digest(),
+            output_schema: Some(
+                JsonDocument::new(br#"{"type":"object"}"#, &l)
+                    .unwrap()
+                    .digest(),
+            ),
+            result_policy: Box::default(),
         },
         &l,
     )

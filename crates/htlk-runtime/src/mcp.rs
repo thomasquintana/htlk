@@ -266,6 +266,10 @@ impl<A: McpAdapter + ?Sized> McpConnection for AdapterConnection<'_, A> {
 /// Trusted replay/approval/result-protection facts, separate from executable pins.
 #[derive(Clone, Debug, Default)]
 pub struct McpPolicy {
+    /// Trusted selected result interpretation. Must come from host configuration,
+    /// not reflect an untrusted binding/output's requested policy without checking.
+    /// Runtime requires exact equality before sending a tool invocation.
+    pub result_policy: htlk_executable::ToolResultPolicy,
     /// Host vouches replay safe for this compound operation.
     pub replay_safe: bool,
     /// Trusted external-result protection.

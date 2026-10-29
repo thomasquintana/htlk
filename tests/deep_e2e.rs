@@ -16,7 +16,7 @@ ir_version="0.1"
 task echo { inputs={value=union(string,null)} outputs={value=union(string,null)}
   nodes { arguments=eval(json,{value=inputs.value}){inputs={value=union(string,null)}}
     echo=call(mcp.tool("fixture","echo"))
-    project=eval(union(string,null),inputs.result.value){inputs={result=json}} }
+    project=eval(union(string,null),inputs.result.data.value){inputs={result=McpToolResult}} }
   edges { edge input{from=inputs.value to=arguments.inputs.value}
     edge args{from=arguments.outputs.value to=echo.inputs.arguments}
     edge response{from=echo.outputs.value to=project.inputs.result}
@@ -83,7 +83,7 @@ fn native_protocol_failures_have_durable_classifications_and_never_publish_outpu
                 ("wrong-id", FailureCode::EffectUncertain, 1),
                 ("rpc-error", FailureCode::McpProtocol, 1),
                 ("tool-error", FailureCode::McpToolError, 1),
-                ("schema", FailureCode::OutputSchema, 1),
+                ("schema", FailureCode::DeclaredContract, 1),
             ] {
                 let peer = Peer::new(transport, mode);
                 let h = Harness::new(Some(&peer), 2).await;

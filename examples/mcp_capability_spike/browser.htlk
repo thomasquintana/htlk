@@ -5,9 +5,9 @@ graph spike.browser {
     nodes {
         arguments = eval(json, { marker = inputs.marker }) { inputs = { marker = string } }
         open = call(mcp.tool("fixture", "browser_open"))
-        inspect_arguments = eval(json, { page = inputs.response.page }) { inputs = { response = json } }
+        inspect_arguments = eval(json, { page = inputs.response.data.page }) { inputs = { response = McpToolResult } }
         inspect = call(mcp.tool("fixture", "browser_inspect"))
-        marker = eval(string, inputs.response.marker) { inputs = { response = json } }
+        marker = eval(string, inputs.response.data.marker) { inputs = { response = McpToolResult } }
     }
     edges {
         edge marker { from = inputs.marker to = arguments.inputs.marker }

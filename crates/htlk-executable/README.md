@@ -16,11 +16,16 @@ The model depends on neither crate.
   built-in types, used through `ValueType::builtin` and `ValueTypeKind::Builtin`.
   `McpResourceResult` holds returned resource contents plus provenance/request
   information; `McpPromptResult` holds returned prompt messages and metadata.
-  Their canonical wire names are `McpResourceResult` and `McpPromptResult`.
+  `McpToolResult` uniformly holds original tool protocol content, extracted JSON
+  candidates, optional selected data, and independent validation assessments.
+  These names are also their exact canonical wire spellings.
 - `Scope`, `Node`, `Edge`, `PortTable` and `Operation` preserve canonical graph
   records, including closed shapes, positive bounds, unique IDs and array order.
 - `ExecutionProfile`, `Library`, `FunctionSignature`, `ServerIdentity` and
   `McpBinding` describe pinned declarations rather than loading implementations.
+- Tool bindings preserve optional actual output schemas and complete frozen
+  `ToolResultPolicy` records. `ExtractionPolicy` and inferred/application adoption
+  references have bounded closed codecs; missing canonical defaults are rejected.
 - `CanonicalDocument` checks complete bounded representation, asserted record
   identities and retrieval-URI spelling. It does not resolve references, infer
   types, enforce use roles or compute a structural summary.

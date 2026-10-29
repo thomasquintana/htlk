@@ -101,7 +101,8 @@ fn binding(peer: &Peer, name: &str) -> McpBinding {
         McpBindingKind::Tool {
             name: name.into(),
             input_schema: digest(field(&tool, "inputSchema")),
-            output_schema: digest(field(&tool, "outputSchema")),
+            output_schema: Some(digest(field(&tool, "outputSchema"))),
+            result_policy: Box::default(),
         },
         &limits,
     )

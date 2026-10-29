@@ -252,7 +252,8 @@ fn every_accepted_mutation_preserves_exact_canonical_native_representation() {
         McpBindingKind::Tool {
             name: "echo".into(),
             input_schema: id,
-            output_schema: id,
+            output_schema: Some(id),
+            result_policy: Box::default(),
         },
         McpBindingKind::Resource {
             uri: "context://fixed".into(),
