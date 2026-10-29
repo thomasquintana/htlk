@@ -18,6 +18,7 @@ Before opening a pull request, run:
 node specs/validate-specs.mjs
 node tools/validate-executable-fixtures.mjs
 node --test tools/coverage.test.mjs
+python3 -B -m unittest discover -s tools -p live_tools_test.py -v
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features

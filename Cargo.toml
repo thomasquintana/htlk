@@ -101,6 +101,11 @@ test = true
 name = "mcp_live_acceptance"
 path = "examples/live_chrome/main.rs"
 
+[[example]]
+name = "mcp_live_session"
+path = "examples/live_session/main.rs"
+test = true
+
 [lints]
 workspace = true
 

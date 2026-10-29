@@ -66,6 +66,9 @@ jobs:
       - name: Test coverage enforcement
         run: node --test tools/coverage.test.mjs
 
+      - name: Test offline live-controller helpers
+        run: python3 -B -m unittest discover -s tools -p live_tools_test.py -v
+
       - name: Check formatting
         run: cargo fmt --all --check
 
