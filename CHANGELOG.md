@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add a durable opt-in live-session example, bounded five-server acceptance
+  controllers, offline evidence/accounting audits and a 75-tool results matrix.
 - Expand MCP admission, inference, evidence/recovery and independent transport
   boundary coverage; retain all existing line/branch coverage ratchets.
 - Add opt-in actual Chrome interoperability/extraction/inference acceptance tooling

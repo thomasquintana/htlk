@@ -75,6 +75,7 @@ cargo run --example interactive_guide --locked -- --check
 - [Runtime API, execution and supported native boundary](crates/htlk-runtime/README.md)
 - [Runtime conformance evidence](docs/runtime-conformance.md)
 - [MCP interoperability and actual Chrome acceptance](docs/mcp-live-acceptance.md)
+- [Five-server live acceptance: all 75 tools and measured findings](docs/mcp-sibling-acceptance.md)
 - [Specification alignment findings and resolutions](docs/spec-alignment.md)
 - [Inspection, source metadata and host example](docs/runtime-inspection.md)
 - [Detailed cross-crate API reference](docs/executable-api.md)
