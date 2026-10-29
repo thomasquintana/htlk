@@ -14,7 +14,7 @@ use htlk_executable::{
 use std::{fmt, path::Path, time::Duration};
 use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
@@ -75,8 +75,9 @@ pub struct SqliteStore {
     config: StoreConfig,
 }
 impl SqliteStore {
-    /// Opens and migrates a durable store using WAL, FULL synchronization and
-    /// foreign keys. An unrelated/nonempty or newer database is rejected.
+    /// Opens a current durable store or initializes an empty one using WAL, FULL
+    /// synchronization and foreign keys. Incompatible state is never migrated,
+    /// reinterpreted or deleted; disposable development stores need explicit reset.
     ///
     /// # Errors
     /// Returns invalid configuration, database identity/version or SQLite failures.
@@ -124,28 +125,6 @@ impl SqliteStore {
                     tx.execute_batch(RUN_SCHEMA)?;
                     tx.execute_batch(LATE_SCHEMA)?;
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                } else if application == APPLICATION_ID && version == 1 {
-                    tx.execute_batch(REGISTRATION_SCHEMA)?;
-                    tx.execute_batch(ARTIFACT_SCHEMA)?;
-                    tx.execute_batch(RUN_SCHEMA)?;
-                    tx.execute_batch(LATE_SCHEMA)?;
-                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                } else if application == APPLICATION_ID && version == 2 {
-                    tx.execute_batch(ARTIFACT_SCHEMA)?;
-                    tx.execute_batch(RUN_SCHEMA)?;
-                    tx.execute_batch(LATE_SCHEMA)?;
-                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                } else if application == APPLICATION_ID && version == 3 {
-                    tx.execute_batch(RUN_SCHEMA)?;
-                    tx.execute_batch(LATE_SCHEMA)?;
-                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                } else if application == APPLICATION_ID && version == 4 {
-                    tx.execute_batch(LATE_SCHEMA)?;
-                    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                } else if application == APPLICATION_ID && version == 5 {
-                    // Compatibility marker: terminal receipts/tombstones and
-                    // checked recovery must not be ignored by older readers.
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
                     return Err(StoreError::Schema);
@@ -525,7 +504,7 @@ impl fmt::Display for StoreError {
             Self::Expired => "runtime artifact retention expired",
             Self::Database => "runtime database operation failed",
             Self::Closed => "runtime database connection is closed",
-            Self::Schema => "runtime database schema is incompatible",
+            Self::Schema => "runtime database schema is incompatible; explicitly rebuild disposable development state",
             Self::Missing => "runtime record was not found",
             Self::Conflict => "runtime record conflicts with committed state",
             Self::IdempotencyConflict => "runtime command identifies different semantic arguments",
@@ -1273,8 +1252,9 @@ mod tests {
     }
 
     #[test]
-    fn registration_migration_preserves_existing_version_one_run_authority() {
+    fn incompatible_development_versions_are_rejected_without_migrating_run_authority() {
         actix::System::new().block_on(async {
+            for version in 1..SCHEMA_VERSION {
             let temporary=TempDb::new();
             let raw=Connection::open(temporary.path()).await.unwrap();
             let run=seed("legacy");let legacy=run.clone();
@@ -1282,23 +1262,24 @@ mod tests {
                 db.pragma_update(None,"foreign_keys",true)?;
                 db.execute_batch(SCHEMA)?;
                 db.pragma_update(None,"application_id",APPLICATION_ID)?;
-                db.pragma_update(None,"user_version",1)?;
+                db.pragma_update(None,"user_version",version)?;
                 let tx=db.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 tx.execute("INSERT INTO runs(run_id,fingerprint,root_scope,status,sequence,fence,last_time_ms) VALUES(?1,?2,?3,'running',1,0,0)",params![legacy.run_id.as_str(),legacy.fingerprint.to_string(),legacy.root_scope.to_string()])?;
                 let payload=cbor::encode(&Value::Array(vec![Value::Text(legacy.fingerprint.to_string()),Value::Text(legacy.root_scope.to_string())]),&Limits::default())?;
                 append_event(&tx,legacy.run_id.as_str(),1,EventMeta{kind:"run_created",actor:"principal",timestamp:0,causation:"start-request",command:None},&payload,&Limits::default())?;
                 tx.commit()?;Ok(())
             }).await.unwrap();
+            assert!(matches!(SqliteStore::open(temporary.path(),StoreConfig::default()).await, Err(StoreError::Schema)));
+            let retained=raw.call(|db|->Result<_,StoreError>{
+                let version=db.pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0))?;
+                let header=db.query_row("SELECT root_scope,status,sequence,fence FROM runs WHERE run_id='legacy'",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?)))?;
+                let migrated=db.query_row("SELECT count(*) FROM sqlite_schema WHERE name='graphs'",[],|r|r.get::<_,i64>(0))?;
+                let events=db.query_row("SELECT count(*) FROM journal",[],|r|r.get::<_,i64>(0))?;
+                Ok((version,header,migrated,events))
+            }).await.unwrap();
+            assert_eq!(retained,(version,(run.root_scope.to_string(),"running".into(),1,0),0,1));
             raw.close().await.unwrap();
-            let store=SqliteStore::open(temporary.path(),StoreConfig::default()).await.unwrap();
-            let header=store.run_header(&run.run_id).await.unwrap();
-            assert_eq!(header.root_scope,run.root_scope);
-            assert_eq!(counts(&store).await,(1,1,1));
-            let version=store.connection.call(|db|db.pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0))).await.unwrap();
-            assert_eq!(version,SCHEMA_VERSION);
-            let rows=store.connection.call(|db|db.query_row("SELECT count(*) FROM graphs",[],|r|r.get::<_,i64>(0))).await.unwrap();
-            assert_eq!(rows,0);
-            store.close().await.unwrap();
+            }
         });
     }
 }

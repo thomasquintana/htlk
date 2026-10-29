@@ -7,26 +7,27 @@ Storage methods do not perform those application-level checks.
 
 ## Database identity and durability
 
-The private SQLite database uses application ID `0x48544c4b` and schema version 6.
+The private SQLite database uses application ID `0x48544c4b` and schema version 7.
 An empty database is initialized in an immediate transaction. Existing unrelated,
 nonempty or incompatible-version databases are rejected without relabeling them.
 File stores use WAL, synchronous FULL, foreign keys and a bounded busy timeout.
 `in_memory` is ephemeral and is only suitable for tests or disposable execution.
-Version 1 is upgraded transactionally by adding immutable graph and detached
-provenance tables; existing authority/journal/outbox records are preserved.
-Migration 3 adds immutable value bytes and producer uniqueness indexes; version 2
-is upgraded without changing existing registered envelopes or execution records.
-Migration 4 adds durable host identity/time and authenticated receipt tables, plus
-a committed-time lookup index. Existing versions are upgraded transactionally.
-Migration 5 adds a non-authoritative, protected late-response inbox.
-Migration 6 marks the terminal receipt/tombstone and checked-recovery contracts;
-its table layout is unchanged, but older readers must not ignore expiry semantics.
+Version 7 records the unified tool-result interpretation and frozen result-policy
+contract. Versions 1–6, future versions, and foreign databases are rejected. There
+are no automatic migration, relabeling, deletion, or old-format decoding paths.
+Old effectful runs cannot resume under revised interpretation rules.
 
-The initial layout has run authority headers, a version-0.1 journal, a transactional
-outbox, revisioned runtime-record families and internal command receipts. Graph
-definitions remain canonical executable records; runtime lookup indexes are derived.
-Further storage operations and registration/artifact tables are delivered with
-their runtime consumers rather than exposed as unrestricted SQL APIs.
+Disposable development state can be explicitly rebuilt after stopping its owners
+and identifying its exact paths. Remove only that identified store and its SQLite
+`-wal`/`-shm` companions, then start a fresh store and regenerate/register executables
+under the current implementations. Credentials, external resources, and unrelated
+databases are not reset targets. An incompatible open never performs this cleanup.
+
+The fresh layout includes run authority headers, a version-0.1 journal, transactional
+outbox, revisioned runtime records, immutable graph/provenance/artifact tables,
+authenticated host receipts, and the protected non-authoritative late-response
+inbox. Graph definitions remain canonical executable records; runtime lookup
+indexes are derived. No unrestricted SQL interface is exposed.
 
 ## Run creation and ownership
 

@@ -31,6 +31,12 @@ All four source-derived profile identities change; this empty scope and its
 policy bytes remain unchanged. Old binding records are rejected rather than
 decoded through a compatibility branch.
 
+The explicit development reset advances storage to version 7 and removes prior
+automatic migration branches. The store implementation change refreshes only the
+core contribution and envelope fingerprint; schema/regex/URI identities and the
+empty graph/policy are unchanged. Tests verify that versions 1–6 reject without
+adding tables or changing original run/journal authority.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

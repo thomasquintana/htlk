@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Distinguish declared, inferred, and application-result contract failures while
   preserving explicit authored retry and trusted replay requirements. Required
   extraction exhaustion remains a budget failure rather than a schema retry.
+- Advance private development storage to version 7 and remove automatic old-store
+  migrations. Incompatible databases are rejected without modification or deletion;
+  disposable state requires an explicit operator reset.
 
 ### Fixed
 
