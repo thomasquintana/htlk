@@ -217,4 +217,64 @@ fn normalized_snapshots_bind_content_to_frozen_identity() {
         validate_resource_snapshot(&value, &binding, "file:///other", &l),
         Err(E::SnapshotIdentity)
     );
+    let replace = |value: &Value, key: &str, replacement: Value| {
+        let Value::Map(fields) = value else { panic!() };
+        let mut entries: Vec<_> = fields
+            .iter()
+            .filter(|(name, _)| *name != key)
+            .map(|(name, value)| (name.to_owned(), value.clone()))
+            .collect();
+        entries.push((key.to_owned(), replacement));
+        Value::Map(Map::try_from_entries(entries).unwrap())
+    };
+    let Value::Map(snapshot) = &value else {
+        panic!()
+    };
+    let Some(Value::Array(contents)) = snapshot.get("contents") else {
+        panic!()
+    };
+    for malformed in [
+        Value::Null,
+        replace(&value, "contents", Value::Null),
+        replace(&value, "contents", Value::Array(vec![Value::Null])),
+        replace(
+            &value,
+            "contents",
+            Value::Array(vec![replace(
+                &contents[0],
+                "kind",
+                Value::Text("blob".into()),
+            )]),
+        ),
+        replace(
+            &value,
+            "contents",
+            Value::Array(vec![replace(
+                &contents[0],
+                "data",
+                Value::Text("AA==".into()),
+            )]),
+        ),
+        replace(
+            &value,
+            "contents",
+            Value::Array(vec![replace(&contents[0], "mime_type", Value::Bool(false))]),
+        ),
+    ] {
+        assert_eq!(
+            validate_resource_snapshot(&malformed, &binding, "file:///resource", &l),
+            Err(E::SnapshotShape)
+        );
+    }
+    for key in ["server_identity", "descriptor_digest"] {
+        let changed = replace(
+            &value,
+            key,
+            Value::Text(htlk_executable::digest::Digest::from_bytes([9; 32]).to_string()),
+        );
+        assert_eq!(
+            validate_resource_snapshot(&changed, &binding, "file:///resource", &l),
+            Err(E::SnapshotIdentity)
+        );
+    }
 }

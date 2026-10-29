@@ -879,6 +879,167 @@ fn external_schema_closure_is_offline_exact_and_omits_unused_retrievals() {
 }
 
 #[test]
+fn host_result_configuration_rechecks_identity_policy_and_aggregate_allowances() {
+    let (compiler, empty) = compiler();
+    let limits = Limits::default();
+    let document = JsonDocument::new(br#"{"type":"string"}"#, &limits).unwrap();
+    let mut config = compiler.config().clone();
+    config
+        .mcp_result_documents
+        .insert(Digest::from_bytes([9; 32]), document.clone());
+    assert_eq!(
+        Compiler::new(config).err().unwrap().diagnostics[0].code,
+        "C_SCHEMA"
+    );
+    let mut config = compiler.config().clone();
+    let mut policy = ToolResultPolicy::default();
+    policy.extraction.limits.work = 0;
+    config
+        .mcp_result_policies
+        .insert((document.digest(), document.digest()), policy);
+    assert_eq!(
+        Compiler::new(config).err().unwrap().diagnostics[0].code,
+        "C_POLICY"
+    );
+    let mut config = compiler.config().clone();
+    config.frontend.max_intermediate_bytes = 1;
+    config
+        .mcp_result_documents
+        .insert(document.digest(), document);
+    assert_eq!(
+        Compiler::new(config).err().unwrap().diagnostics[0].code,
+        "C_SOURCE_LIMIT"
+    );
+    let mut config = compiler.config().clone();
+    let large =
+        JsonDocument::from_value(&cbor::Value::Text("private-marker".repeat(1000)), &limits)
+            .unwrap();
+    config.limits.max_document_bytes = 1024;
+    config.mcp_result_documents.insert(large.digest(), large);
+    let error = Compiler::new(config).err().unwrap();
+    assert_eq!(error.diagnostics[0].code, "C_SCHEMA");
+    assert!(!error.to_string().contains("private-marker"));
+    // Already-admitted individual records cannot bypass a later host's tighter
+    // complete-document allowance, even when their tables are not reachable.
+    let tight = Limits {
+        max_document_bytes: 4096,
+        ..limits.clone()
+    };
+    let text = "private-marker".repeat(1000);
+    let mut embedded = empty.fields().clone();
+    let large_json = JsonDocument::from_value(&cbor::Value::Text(text.clone()), &limits).unwrap();
+    embedded.documents.insert(large_json.digest(), large_json);
+    assert!(matches!(
+        CanonicalDocument::new(embedded, &tight),
+        Err(DocumentError::LimitExceeded { .. })
+    ));
+    let mut templates = empty.fields().clone();
+    let template =
+        PromptTemplate::new(vec![], vec![TemplatePart::Text(text.clone())], &limits).unwrap();
+    templates
+        .templates
+        .insert(template.digest(&limits).unwrap(), template);
+    assert!(CanonicalDocument::new(templates, &tight).is_err());
+    let mut libraries = empty.fields().clone();
+    let library = Library::new(
+        text,
+        "1".into(),
+        Digest::from_bytes([8; 32]),
+        vec![],
+        &limits,
+    )
+    .unwrap();
+    libraries
+        .libraries
+        .insert(library.implementation_digest(), library);
+    assert!(CanonicalDocument::new(libraries, &tight).is_err());
+    let catalogs = operation_catalogs(
+        r#"[{"server":"service","descriptor":{"name":"tool","inputSchema":{"type":"object"}}}]"#,
+        "[]",
+        "[]",
+        "[]",
+        "{}",
+    );
+    let graph = compiler.compile_source(r#"ir_version="0.1" graph test.descriptor{inputs={}outputs={result=McpToolResult}nodes{args=eval(json,{})work=call(mcp.tool("service","tool"))}edges{edge args{from=args.outputs.value to=work.inputs.arguments}edge out{from=work.outputs.value to=outputs.result}}}"#,&catalogs).unwrap();
+    let mut fields = graph.canonical_document.fields().clone();
+    let (binding_id, binding) = fields.bindings.first_key_value().unwrap();
+    let binding_id = *binding_id;
+    let binding = binding.clone();
+    let wrong = Digest::from_bytes([9; 32]);
+    let mut wrong_key = fields.clone();
+    wrong_key.bindings.remove(&binding_id);
+    wrong_key.bindings.insert(wrong, binding);
+    assert!(matches!(
+        CanonicalDocument::new(wrong_key, &limits),
+        Err(DocumentError::DigestMismatch("binding"))
+    ));
+    let mut wrong_library = fields.clone();
+    let library = Library::new(
+        "fixture".into(),
+        "1".into(),
+        Digest::from_bytes([8; 32]),
+        vec![],
+        &limits,
+    )
+    .unwrap();
+    wrong_library.libraries.insert(wrong, library.clone());
+    assert!(matches!(
+        CanonicalDocument::new(wrong_library, &limits),
+        Err(DocumentError::DigestMismatch("library key"))
+    ));
+    let wire = graph.canonical_document.to_value(&limits).unwrap();
+    let cbor::Value::Map(root) = &wire else {
+        panic!()
+    };
+    let cbor::Value::Map(bindings) = root.get("bindings").unwrap() else {
+        panic!()
+    };
+    for (table, entry, expected) in [
+        (
+            "bindings",
+            bindings.iter().next().unwrap().1.clone(),
+            "binding",
+        ),
+        (
+            "libraries",
+            library.to_value(&limits).unwrap(),
+            "library key",
+        ),
+    ] {
+        let malformed = cbor::Value::Map(
+            cbor::Map::try_from_entries(root.iter().map(|(key, value)| {
+                (
+                    key.to_owned(),
+                    if key == table {
+                        cbor::Value::Map(
+                            cbor::Map::try_from_entries([(wrong.to_string(), entry.clone())])
+                                .unwrap(),
+                        )
+                    } else {
+                        value.clone()
+                    },
+                )
+            }))
+            .unwrap(),
+        );
+        assert!(
+            matches!(CanonicalDocument::from_value(&malformed,&limits),Err(DocumentError::DigestMismatch(actual)) if actual==expected)
+        );
+    }
+    let descriptor = fields.bindings.values().next().unwrap().descriptor();
+    fields.documents.remove(&descriptor);
+    let incomplete = CanonicalDocument::new(fields, &limits).unwrap();
+    assert_eq!(
+        compiler
+            .compile_document(incomplete, &catalogs)
+            .unwrap_err()
+            .diagnostics[0]
+            .code,
+        "C_MCP"
+    );
+}
+
+#[test]
 fn pure_loop_carried_presence_and_until_are_verified_in_body_context() {
     let (compiler, _) = compiler();
     let source = r#"ir_version="0.1"

@@ -416,3 +416,38 @@ fn variable_work_exhaustion_is_not_a_cached_false_or_success() {
     assert_eq!(failure.code(), "E_EXPRESSION");
     assert!(std::error::Error::source(&failure).is_some());
 }
+
+#[test]
+fn explicit_join_amplification_and_dynamic_pointer_indices_fail_before_success() {
+    let mut policy = budget();
+    policy.max_value_bytes = 128;
+    let result = evaluate(
+        "join_text",
+        vec![json(r#"["a","b","c"]"#), Value::Text("x".repeat(100))],
+        None,
+        &policy,
+    );
+    assert!(matches!(result, Err(E::Limit("joined text"))));
+    assert!(matches!(
+        evaluate(
+            "json_at",
+            vec![json("[1]"), Value::Text("/01".into())],
+            None,
+            &budget()
+        ),
+        Err(E::JsonPointer(_))
+    ));
+    assert!(matches!(
+        evaluate(
+            "regex_capture",
+            vec![
+                Value::Text("x".into()),
+                json(r#"{"pattern":"(x)","flags":""}"#),
+                Value::Integer(-1)
+            ],
+            None,
+            &budget()
+        ),
+        Err(E::InvalidProjection)
+    ));
+}

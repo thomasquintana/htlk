@@ -24,24 +24,24 @@ Existing crate-local unit tests share their production source files and appear
 in LLVM's file totals. All tests still execute. No production coverage-skipping
 attributes or coverage-specific behavior are used.
 
-The latest verified Rust 1.98.0 snapshot, including run-scoped MCP integration,
+The latest verified Rust 1.98.0 snapshot, including the MCP result redesign,
 is compared with the pre-expansion baseline below:
 
 | Crate | Baseline lines | Current lines | Uncovered lines |
 | --- | --- | --- | --- |
-| `htlk-analyzer` | 89.33% | 91.61% | 506 |
-| `htlk-compiler` | 86.89% | 94.82% | 193 |
-| `htlk-executable` | 95.46% | 98.14% | 100 |
-| `htlk-runtime` | 87.86% | 90.55% | 1,619 |
-| Workspace | 89.30% | 92.51% | 2,418 |
+| `htlk-analyzer` | 89.33% | 92.73% | 505 |
+| `htlk-compiler` | 86.89% | 94.92% | 192 |
+| `htlk-executable` | 95.46% | 98.33% | 99 |
+| `htlk-runtime` | 87.86% | 91.46% | 1,633 |
+| Workspace | 89.30% | 93.21% | 2,429 |
 
 The initial deep-test expansion exercised 1,017 previously uncovered lines. The
-runtime ratchet allows 1,638 uncovered lines, a 19-line margin above the latest
-measurement for alternate legal race outcomes across local and clean Linux runs.
-Pure-crate uncovered-line budgets match the measured counts. The latest nightly
-branch measurement is 80.72% for the analyzer, 87.32% for the compiler, 95.85% for
-executable records and 70.61% for the runtime. Its runtime floor likewise allows
-a small race margin.
+runtime ratchet remains at 1,638 uncovered lines, five above this measurement.
+All previous per-crate floors and uncovered-line budgets remain unchanged. The
+latest complete nightly branch measurement is 82.29% for the analyzer, 87.78% for
+the compiler, 96.30% for executable records and 73.94% for the runtime; every
+unchanged branch ratchet passes. See the [MCP validation handoff](mcp-validation.md)
+for the actual campaign and quality-gate record.
 
 Download the `coverage-line-<SHA>` and `coverage-branch-<SHA>` CI artifacts for
 current exact counts, machine-readable JSON, LCOV and annotated HTML. Open
@@ -92,7 +92,7 @@ it does not instrument doctests.
 
 ## Deep scenarios
 
-[`tests/deep_e2e.rs`](../tests/deep_e2e.rs) runs **110 compiled-graph scenarios**:
+[`tests/deep_e2e.rs`](../tests/deep_e2e.rs) runs **113 compiled-graph scenarios**:
 
 | Campaign | Evidence |
 | --- | --- |
@@ -103,6 +103,7 @@ it does not instrument doctests.
 | Repeated joins | Executes one through four preserved operand implementations, checking nested output transformations, scope counts and replay. |
 | Exact-action approvals | Authenticated allow/deny, wrong request/kind, duplicate and conflicting disposition keys, terminal history, zero dispatch before approval and immutable disposition labels over every transport. |
 | Native cancellation | Observes the actual in-flight request and protocol cancellation notification, preserves spent/ambiguous accounting and replays the terminal result. |
+| Non-tool protocol failures | Invalid binary resources and prompt roles fail over all three transports, cannot publish graph outputs, and cannot impersonate tool inference sources. |
 
 The independent wire peer is
 [`tests/support/mcp_peer.mjs`](../tests/support/mcp_peer.mjs). It uses Node's
@@ -136,7 +137,8 @@ campaign checks one run per idempotency key, exact output values, immutable
 terminal outcomes, conflicting-key rejection and replay from the other connection.
 
 [`tests/runtime_recovery.rs`](../tests/runtime_recovery.rs) additionally rejects
-43 scope/invocation/wait/accounting and recorded MCP request/response corruptions.
+scope/invocation/wait/accounting and recorded MCP request/response corruptions,
+including independently rehashed normalization records and protected inspection.
 Corrupt checkpoints cannot publish output artifacts or authorize redispatch.
 
 ## Coverage-directed boundary suites

@@ -83,6 +83,250 @@ fn validates(revision: &InferenceRevision, value: &str) -> bool {
         .unwrap()
 }
 
+fn replace_path(value: &Value, path: &[&str], replacement: Value) -> Value {
+    let Some((head, tail)) = path.split_first() else {
+        return replacement;
+    };
+    match value {
+        Value::Array(values) => {
+            let mut values = values.clone();
+            let index: usize = head.parse().unwrap();
+            values[index] = replace_path(&values[index], tail, replacement);
+            Value::Array(values)
+        }
+        Value::Map(_) => change(
+            value,
+            head,
+            replace_path(field(value, head), tail, replacement),
+        )
+        .value()
+        .clone(),
+        _ => panic!("invalid fixture path"),
+    }
+}
+
+#[test]
+fn independent_revision_ingress_rejects_forged_sample_eligibility_and_metadata() {
+    let limits = Limits::default();
+    let revision = infer(&[
+        sample("a", r#"{"private":"secret-value"}"#),
+        sample("b", "null"),
+    ]);
+    let evidence = revision.evidence().value();
+    for (path, replacement) in [
+        (vec!["samples"], Value::Null),
+        (vec!["samples", "0"], Value::Null),
+        (
+            vec!["samples", "0", "reference"],
+            Value::Text(String::new()),
+        ),
+        (vec!["samples", "1", "reference"], Value::Text("a".into())),
+        (
+            vec!["samples", "0", "value_digest"],
+            Value::Text("forged".into()),
+        ),
+        (vec!["samples", "0", "value_bytes"], Value::Integer(0)),
+        (vec!["samples", "0", "value_bytes"], Value::Integer(-1)),
+        (vec!["samples", "0", "value_bytes"], Value::Null),
+        (
+            vec!["samples", "0", "observation", "successful"],
+            Value::Bool(false),
+        ),
+        (vec!["samples", "0", "observation", "complete"], Value::Null),
+        (
+            vec!["samples", "0", "excluded_reason"],
+            Value::Text("incomplete".into()),
+        ),
+        (
+            vec!["samples", "0", "excluded_fields"],
+            json(r#"["/private"]"#).value().clone(),
+        ),
+        (vec!["source_flags", "uncertain"], Value::Bool(true)),
+        (vec!["observations"], Value::Null),
+        (vec!["observations"], json("{}").value().clone()),
+        (vec!["observations", "", "types"], Value::Null),
+        (
+            vec!["observations", "", "types"],
+            json(r#"{"invented":2}"#).value().clone(),
+        ),
+        (
+            vec!["observations", "", "types"],
+            json(r#"{"object":0}"#).value().clone(),
+        ),
+        (
+            vec!["observations", "", "types"],
+            json(r#"{"object":1}"#).value().clone(),
+        ),
+        (vec!["server"], Value::Null),
+    ] {
+        let malformed =
+            JsonDocument::from_value(&replace_path(evidence, &path, replacement), &limits).unwrap();
+        let error =
+            InferenceRevision::from_documents(revision.schema().clone(), malformed, &limits)
+                .unwrap_err();
+        assert!(!error.to_string().contains("secret-value"), "{path:?}");
+    }
+    let mut sanitized = sample("a", "null");
+    sanitized.sanitized = true;
+    sanitized
+        .excluded_fields
+        .push(JsonPointer::new("/private", &limits).unwrap());
+    let sanitized = infer(&[sanitized]);
+    let malformed = replace_path(
+        sanitized.evidence().value(),
+        &["samples", "0", "excluded_fields"],
+        json(r#"["invalid-pointer"]"#).value().clone(),
+    );
+    assert!(
+        InferenceRevision::from_documents(
+            sanitized.schema().clone(),
+            JsonDocument::from_value(&malformed, &limits).unwrap(),
+            &limits
+        )
+        .is_err()
+    );
+    for tight in [
+        Limits {
+            max_document_bytes: 1,
+            ..limits.clone()
+        },
+        Limits {
+            max_depth: 1,
+            ..limits.clone()
+        },
+    ] {
+        assert!(matches!(
+            InferenceRevision::from_documents(
+                revision.schema().clone(),
+                revision.evidence().clone(),
+                &tight
+            ),
+            Err(E::Limit { .. })
+        ));
+    }
+}
+
+#[test]
+fn policy_ingress_and_difference_fail_closed_under_host_limits() {
+    let limits = Limits::default();
+    let original = InferencePolicy::default().document(&limits).unwrap();
+    for (path, replacement) in [
+        (vec!["profile"], Value::Text("future".into())),
+        (vec!["sample_kind"], Value::Text("mixed".into())),
+        (vec!["limits", "samples"], Value::Integer(0)),
+        (vec!["limits", "depth"], Value::Integer(129)),
+    ] {
+        let document =
+            JsonDocument::from_value(&replace_path(original.value(), &path, replacement), &limits)
+                .unwrap();
+        assert!(InferencePolicy::from_document(&document, &limits).is_err());
+    }
+    let errors = InferencePolicy {
+        sample_kind: InferenceSampleKind::ToolError,
+        ..Default::default()
+    };
+    assert_eq!(
+        InferencePolicy::from_document(&errors.document(&limits).unwrap(), &limits).unwrap(),
+        errors
+    );
+    let old = infer(&[sample("a", r#"{"x":1,"removed":true}"#)]);
+    let new = infer(&[sample("b", r#"{"x":"changed"}"#)]);
+    let difference = old.difference(&new, &Default::default(), &limits).unwrap();
+    assert_eq!(
+        field(difference.value(), "changed_paths"),
+        json(r#"["/properties/removed","/properties/x/type","/required"]"#).value()
+    );
+    let mut other = sample("other", "null");
+    other.context.server = Digest::from_bytes([9; 32]);
+    let other = infer_schema(
+        &[other.clone()],
+        other.context,
+        &Default::default(),
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        old.difference(&other, &Default::default(), &limits),
+        Err(E::Context)
+    );
+    for resource in ["depth", "nodes", "output_bytes"] {
+        let mut policy = InferencePolicy::default();
+        match resource {
+            "depth" => policy.limits.depth = 1,
+            "nodes" => policy.limits.nodes = 1,
+            _ => policy.limits.output_bytes = 1,
+        }
+        assert!(
+            matches!(old.difference(&new, &policy, &limits), Err(E::Limit { resource: actual, .. }) if actual == resource)
+        );
+    }
+    // An independently encoded policy can reduce limits while keeping its own
+    // digest valid. Revision admission must still recheck all selected evidence.
+    for resource in [
+        "samples",
+        "sample_bytes",
+        "nodes",
+        "allocation_bytes",
+        "output_bytes",
+    ] {
+        let mut policy = InferencePolicy::default();
+        match resource {
+            "samples" => policy.limits.samples = 1,
+            "sample_bytes" => policy.limits.sample_bytes = 1,
+            "nodes" => policy.limits.nodes = 1,
+            "allocation_bytes" => policy.limits.allocation_bytes = 1,
+            _ => policy.limits.output_bytes = 1,
+        }
+        let revision = infer(&[sample("a", "1"), sample("b", "2")]);
+        let document = policy.document(&limits).unwrap();
+        let evidence = change(
+            revision.evidence().value(),
+            "policy",
+            document.value().clone(),
+        );
+        let evidence = change(
+            evidence.value(),
+            "policy_digest",
+            Value::Text(document.digest().to_string()),
+        );
+        assert!(
+            matches!(InferenceRevision::from_documents(revision.schema().clone(),evidence,&limits),Err(E::Limit {resource:actual,..}) if actual==resource),
+            "{resource}"
+        );
+    }
+}
+
+#[test]
+fn inference_errors_keep_typed_sources_and_redacted_operational_messages() {
+    use std::error::Error;
+    let json = JsonDocument::new(
+        br#"{"private-secret":1,"private-secret":2}"#,
+        &Limits::default(),
+    )
+    .unwrap_err();
+    let codec = htlk_executable::cbor::decode(&[0xff], &Limits::default()).unwrap_err();
+    for (error, wrapped) in [
+        (E::Shape("sample metadata"), false),
+        (E::Context, false),
+        (E::ConflictingSample, false),
+        (E::NoSamples, false),
+        (
+            E::Limit {
+                resource: "samples",
+                selected_samples: 2,
+            },
+            false,
+        ),
+        (E::from(json), true),
+        (E::from(codec), true),
+        (E::AllocationFailed, false),
+    ] {
+        assert!(!error.to_string().contains("private-secret"));
+        assert_eq!(error.source().is_some(), wrapped);
+        assert!(!error.to_string().is_empty());
+    }
+}
+
 #[test]
 fn primitives_numeric_generalization_and_empty_collections_are_not_incidental_enums() {
     for (value, schema) in [
@@ -292,6 +536,21 @@ fn revisions_are_explicit_and_differences_do_not_mutate_old_contracts() {
     assert_eq!(observe.schema, enforce.schema);
     assert_eq!(observe.evidence, enforce.evidence);
     assert_ne!(observe.mode, enforce.mode);
+    let old = infer(&[
+        sample("a", r#"{"a/b~":1}"#),
+        sample("b", r#"{"a/b~":"text"}"#),
+    ]);
+    let new = infer(&[
+        sample("c", r#"{"a/b~":1}"#),
+        sample("d", r#"{"a/b~":true}"#),
+    ]);
+    let difference = old
+        .difference(&new, &Default::default(), &Limits::default())
+        .unwrap();
+    assert_eq!(
+        field(difference.value(), "changed_paths"),
+        json(r#"["/properties/a~1b~0/anyOf"]"#).value()
+    );
 }
 
 #[test]

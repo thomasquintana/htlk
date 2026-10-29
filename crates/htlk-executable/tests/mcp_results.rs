@@ -54,6 +54,217 @@ fn selected_null() -> Value {
 }
 
 #[test]
+fn canonical_envelopes_reject_unjustified_completion_and_source_shapes() {
+    let limits = Limits::default();
+    let value = selected_null();
+    let extraction = member(&value, "extraction");
+    let Value::Array(candidates) = member(extraction, "candidates") else {
+        panic!()
+    };
+    let candidate = &candidates[0];
+    let Value::Array(sources) = member(candidate, "sources") else {
+        panic!()
+    };
+    for invalid in [
+        Value::Null,
+        json("{}"),
+        change(&value, "protocol_result", Some(Value::Null)),
+        change(&value, "protocol_result", Some(json(r#"{"content":null}"#))),
+    ] {
+        assert!(McpToolResult::from_value(&invalid, &limits).is_err());
+    }
+    for invalid in [
+        Value::Null,
+        json(r#"{"status":"ambiguous","candidates":[]}"#),
+        json(r#"{"status":"exhausted","candidates":[]}"#),
+        json(r#"{"status":"exhausted","candidates":[],"exhausted_limit":"invented"}"#),
+        json(r#"{"status":"none","candidates":[],"exhausted_limit":"work"}"#),
+    ] {
+        assert!(
+            McpToolResult::from_value(
+                &change(&change(&value, "data", None), "extraction", Some(invalid)),
+                &limits
+            )
+            .is_err()
+        );
+    }
+    let replace_candidate = |candidate| {
+        change(
+            &value,
+            "extraction",
+            Some(change(
+                extraction,
+                "candidates",
+                Some(Value::Array(vec![candidate])),
+            )),
+        )
+    };
+    for (key, replacement) in [
+        ("sources", Value::Array(vec![])),
+        ("sources", Value::Null),
+        ("id", Value::Null),
+    ] {
+        assert!(
+            McpToolResult::from_value(
+                &replace_candidate(change(candidate, key, Some(replacement))),
+                &limits
+            )
+            .is_err()
+        );
+    }
+    for (key, replacement) in [
+        ("origin", Value::Text("invented".into())),
+        ("method", Value::Text("interpretation".into())),
+        ("content_block_index", Value::Integer(-1)),
+        ("content_block_index", Value::Null),
+        ("byte_start", Value::Integer(2)),
+        ("byte_start", Value::Null),
+    ] {
+        let source = change(&sources[0], key, Some(replacement));
+        assert!(
+            McpToolResult::from_value(
+                &replace_candidate(change(
+                    candidate,
+                    "sources",
+                    Some(Value::Array(vec![source]))
+                )),
+                &limits
+            )
+            .is_err()
+        );
+    }
+    let schema = Digest::from_bytes([5; 32]);
+    for (kind, mode) in [
+        ("declared_schema", "observe"),
+        ("inferred_schema", "report"),
+        ("application_schema", "observe"),
+    ] {
+        let assessment = json(&format!(
+            r#"{{"status":"valid","schema":"{schema}","mode":"{mode}"}}"#
+        ));
+        let invalid = change(
+            &value,
+            "validation",
+            Some(change(member(&value, "validation"), kind, Some(assessment))),
+        );
+        assert!(McpToolResult::from_value(&invalid, &limits).is_err());
+    }
+    let envelope = McpToolResult::from_value(&value, &limits).unwrap();
+    assert_eq!(envelope.to_value(&limits).unwrap(), value);
+    assert!(
+        envelope
+            .to_value(&Limits {
+                max_document_bytes: 1,
+                ..limits
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn policies_do_not_coerce_unknown_selectors_modes_or_numeric_ceilings() {
+    let limits = Limits::default();
+    let policy = ExtractionPolicy::default().to_value(&limits).unwrap();
+    for selection in [
+        Value::Null,
+        json("[]"),
+        json(r#"["first"]"#),
+        json(r#"["block",-1]"#),
+        json(r#"["schema","invented"]"#),
+    ] {
+        assert!(
+            ExtractionPolicy::from_value(&change(&policy, "selection", Some(selection)), &limits)
+                .is_err()
+        );
+    }
+    for number in [Value::Null, Value::Integer(-1), Value::Integer(129)] {
+        let ceilings = change(member(&policy, "limits"), "depth", Some(number));
+        assert!(
+            ExtractionPolicy::from_value(&change(&policy, "limits", Some(ceilings)), &limits)
+                .is_err()
+        );
+    }
+    let canonical = ToolResultPolicy::default().to_value(&limits).unwrap();
+    let schema = Digest::from_bytes([1; 32]);
+    for mode in ["enforce", "unknown"] {
+        let inferred = json(&format!(
+            r#"{{"schema":"{schema}","evidence":"{schema}","mode":"{mode}"}}"#
+        ));
+        let value = change(&canonical, "inferred_schema", Some(inferred));
+        assert_eq!(
+            ToolResultPolicy::from_value(&value, &limits).is_ok(),
+            mode == "enforce"
+        );
+    }
+    for value in [Value::Null, json("[]")] {
+        assert!(ToolResultPolicy::from_value(&value, &limits).is_err());
+    }
+}
+
+#[test]
+fn result_error_chains_are_redacted_and_source_validation_work_is_bounded() {
+    use std::error::Error;
+    let limits = Limits::default();
+    let json_error =
+        JsonDocument::new(br#"{"private-marker":1,"private-marker":2}"#, &limits).unwrap_err();
+    let codec = htlk_executable::cbor::decode(&[0xff], &limits).unwrap_err();
+    for (error, source) in [
+        (McpResultError::from(codec), true),
+        (McpResultError::from(json_error), true),
+        (McpResultError::Shape("candidate provenance"), false),
+        (McpResultError::Limit("source validation work"), false),
+    ] {
+        assert_eq!(error.source().is_some(), source);
+        assert!(!error.to_string().contains("private-marker"));
+        assert!(!error.to_string().is_empty());
+    }
+    // Distinct whitespace spans may all prove the same large literal value. The
+    // envelope fits its ingress budget but reparsing every span must remain bounded.
+    let payload = "x".repeat(2000);
+    let literal = format!("\"{payload}\"");
+    let original = format!("{}{literal}", " ".repeat(100));
+    let sources: Vec<_> = (0..100).map(|start| json(&format!(r#"{{"origin":"text","method":"embedded","content_block_index":0,"byte_start":{start},"byte_end":{}}}"#, original.len()))).collect();
+    let base = selected_null();
+    let candidate = json(r#"{"id":"candidate_0","validation":"parsed","value":null,"sources":[]}"#);
+    let candidate = change(
+        &change(&candidate, "value", Some(Value::Text(payload.clone()))),
+        "sources",
+        Some(Value::Array(sources)),
+    );
+    let extraction = change(
+        member(&base, "extraction"),
+        "candidates",
+        Some(Value::Array(vec![candidate])),
+    );
+    let protocol = JsonDocument::from_value(&Value::Text(original), &limits).unwrap();
+    let protocol = json(&format!(
+        r#"{{"content":[{{"type":"text","text":{}}}]}}"#,
+        std::str::from_utf8(protocol.as_bytes()).unwrap()
+    ));
+    let value = change(
+        &change(
+            &change(&base, "data", Some(Value::Text(payload))),
+            "protocol_result",
+            Some(protocol),
+        ),
+        "extraction",
+        Some(extraction),
+    );
+    let bytes = JsonDocument::from_value(&value, &limits)
+        .unwrap()
+        .as_bytes()
+        .len();
+    let tight = Limits {
+        max_document_bytes: bytes,
+        ..limits
+    };
+    assert_eq!(
+        McpToolResult::from_value(&value, &tight),
+        Err(McpResultError::Limit("source validation work"))
+    );
+}
+
+#[test]
 fn selected_null_absence_and_utf8_provenance_are_distinct() {
     let limits = Limits::default();
     let value = selected_null();
@@ -190,6 +401,109 @@ fn structured_sources_are_checked_against_original_values() {
         McpToolResult::from_value(&change(&envelope, "extraction", Some(extraction)), &limits)
             .is_err()
     );
+}
+
+#[test]
+fn protocol_source_kinds_and_assessment_claims_are_independently_checked() {
+    let limits = Limits::default();
+    let value = selected_null();
+    let invalid = change(
+        &value,
+        "protocol_result",
+        Some(json(
+            r#"{"content":[{"type":"image","data":"AA==","mimeType":"image/png"}]}"#,
+        )),
+    );
+    assert!(McpToolResult::from_value(&invalid, &limits).is_err());
+    let validation = change(
+        member(&value, "validation"),
+        "inferred_schema",
+        Some(json(r#"{"status":"guaranteed"}"#)),
+    );
+    assert!(
+        McpToolResult::from_value(&change(&value, "validation", Some(validation)), &limits)
+            .is_err()
+    );
+    let error = htlk_executable::MetadataError::from(McpResultError::Shape("policy mode"));
+    assert!(std::error::Error::source(&error).is_some());
+    let extraction = member(&value, "extraction");
+    let Value::Array(candidates) = member(extraction, "candidates") else {
+        panic!()
+    };
+    let candidate = &candidates[0];
+    for source in [
+        json(r#"{"origin":"text","method":"fence","content_block_index":0,"byte_start":11}"#),
+        json(r#"{"origin":"structured_content","method":"structured_content","byte_start":0}"#),
+    ] {
+        let candidate = change(candidate, "sources", Some(Value::Array(vec![source])));
+        let extraction = change(
+            extraction,
+            "candidates",
+            Some(Value::Array(vec![candidate])),
+        );
+        assert!(
+            McpToolResult::from_value(&change(&value, "extraction", Some(extraction)), &limits)
+                .is_err()
+        );
+    }
+    for status in ["valid", "not_configured"] {
+        let incomplete = json(&format!(
+            r#"{{"status":"{status}","schema":"{}"}}"#,
+            Digest::from_bytes([1; 32])
+        ));
+        let validation = change(
+            member(&value, "validation"),
+            "inferred_schema",
+            Some(incomplete),
+        );
+        assert!(
+            McpToolResult::from_value(&change(&value, "validation", Some(validation)), &limits)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn bounded_diagnostic_sinks_propagate_formatting_failure_without_panicking() {
+    use std::fmt::{self, Write};
+    struct Sink(usize);
+    impl Write for Sink {
+        fn write_str(&mut self, value: &str) -> fmt::Result {
+            self.0 = self.0.checked_sub(value.len()).ok_or(fmt::Error)?;
+            Ok(())
+        }
+    }
+    let limits = Limits::default();
+    let depth = Limits {
+        max_depth: 0,
+        ..limits.clone()
+    };
+    let bytes = Limits {
+        max_document_bytes: 0,
+        ..limits.clone()
+    };
+    let unsupported = Limits {
+        max_depth: 129,
+        ..limits.clone()
+    };
+    let errors = vec![
+        htlk_executable::cbor::decode(&[0x18, 0], &limits).unwrap_err(),
+        htlk_executable::cbor::decode(&[0], &bytes).unwrap_err(),
+        htlk_executable::cbor::decode(&[0x81, 0], &depth).unwrap_err(),
+        htlk_executable::cbor::decode(&[0], &unsupported).unwrap_err(),
+    ];
+    for error in errors {
+        let rendered = error.to_string();
+        for maximum in 0..rendered.len() {
+            assert!(write!(&mut Sink(maximum), "{error}").is_err());
+        }
+        assert!(write!(&mut Sink(rendered.len()), "{error}").is_ok());
+    }
+    let nested =
+        htlk_executable::GraphRecordError::Options(htlk_executable::ExecutionOptionsError::Codec(
+            htlk_executable::cbor::decode(&[], &limits).unwrap_err(),
+        ));
+    assert!(!nested.to_string().is_empty());
 }
 
 #[test]

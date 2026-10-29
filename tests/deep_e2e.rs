@@ -71,6 +71,58 @@ nodes{args=eval(json,{value=null}) echo=call(mcp.tool("fixture","echo"))}
 edges{edge args{from=args.outputs.value to=echo.inputs.arguments}edge value{from=echo.outputs.value to=outputs.value}}}"#;
 
 #[test]
+fn non_tool_protocol_failures_cannot_publish_or_impersonate_tool_inference_sources() {
+    actix::System::new().block_on(async {
+        for transport in ["stdio", "http", "sse"] {
+            let peer = Peer::new(transport, "bad-data");
+            let h = Harness::new(Some(&peer), 3).await;
+            let graph = h
+                .compiler
+                .compile_source(ALL_OPERATIONS, &catalogs(peer.transport))
+                .unwrap();
+            let view = h
+                .execute(
+                    &graph,
+                    BTreeMap::from([("value".parse().unwrap(), InputValue::Inline(Value::Null))]),
+                    "invalid-data",
+                )
+                .await;
+            assert_eq!(view.header.status, RunStatus::Failed);
+            assert!(view.outputs.is_none());
+            for name in ["fixed", "expanded", "prompt"] {
+                let invocation = htlk::runtime::identity::InvocationId::new(
+                    view.header.root_scope,
+                    &name.parse().unwrap(),
+                    &Limits::default(),
+                )
+                .unwrap();
+                let node = h
+                    .runtime
+                    .inspect_node(&caller(), &view.header.run_id, invocation)
+                    .await
+                    .unwrap();
+                assert_eq!(node.failure.unwrap().code(), FailureCode::McpProtocol);
+                let selection = htlk::runtime::execution::McpInferenceSelection {
+                    run_id: view.header.run_id.clone(),
+                    invocation_id: invocation,
+                };
+                assert_eq!(
+                    h.runtime
+                        .infer_mcp_results(&caller(), &[selection], &Default::default())
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    FailureCode::Input
+                );
+            }
+            assert_eq!(peer.calls().len(), 4);
+            assert_replay(&h.store, &view.header.run_id).await;
+            h.close().await;
+        }
+    });
+}
+
+#[test]
 fn native_protocol_failures_have_durable_classifications_and_never_publish_outputs() {
     actix::System::new().block_on(async {
         for transport in ["stdio", "http", "sse"] {
@@ -113,6 +165,28 @@ fn native_protocol_failures_have_durable_classifications_and_never_publish_outpu
                     .await
                     .unwrap();
                 assert_eq!(node.failure.unwrap().code(), expected, "{transport}/{mode}");
+                if mode == "rpc-error" {
+                    let invocation = htlk::runtime::identity::InvocationId::new(
+                        view.header.root_scope,
+                        &"echo".parse().unwrap(),
+                        &Limits::default(),
+                    )
+                    .unwrap();
+                    let evidence = h
+                        .runtime
+                        .inspect_mcp_evidence(
+                            &caller(),
+                            &view.header.run_id,
+                            invocation,
+                            node.attempts[0].attempt_id,
+                            65536,
+                        )
+                        .await
+                        .unwrap();
+                    assert!(evidence.response_received);
+                    assert!(evidence.raw_response.is_none() && evidence.normalized.is_none());
+                    assert_eq!(evidence.failure_code, Some(FailureCode::McpProtocol));
+                }
                 assert_eq!(peer.calls().len(), sent, "{transport}/{mode}");
                 assert_replay(&h.store, &view.header.run_id).await;
                 h.close().await;

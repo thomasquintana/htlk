@@ -243,6 +243,32 @@ fn operation_shapes_and_positive_bounds_are_exact() {
         max_iterations: 1,
     };
     assert!(duplicated.encode(&l).is_err());
+    let mut malformed = O::Loop {
+        body: d,
+        initializers: vec![],
+        until: literal(),
+        max_iterations: 1,
+    }
+    .to_value(&l)
+    .unwrap();
+    let Value::Array(parts) = &mut malformed else {
+        panic!()
+    };
+    parts[2] = Value::Null;
+    assert_eq!(
+        O::from_value(&malformed, &l).unwrap_err(),
+        Error::InvalidShape("loop initializers")
+    );
+    let mut fields = node("waiter").fields().clone();
+    fields.operation = O::Wait {
+        topic: "review".into(),
+        timeout_ms: 1000,
+    };
+    fields.inputs = table(&["request"], P::String);
+    assert_eq!(
+        Node::new(fields, &l).unwrap_err(),
+        Error::InvalidPorts("wait request input")
+    );
 }
 
 #[test]

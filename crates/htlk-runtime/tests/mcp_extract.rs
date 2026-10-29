@@ -242,6 +242,16 @@ fn explicit_candidate_block_and_schema_selection_are_checked_not_guessed() {
     );
     let report = extract_mcp_json(&document, &policy, Some(&native), &limits).unwrap();
     assert_eq!(report.data(), Some(&json(r#"{"wanted":2}"#)));
+    let unlinked = ExtractionPolicy {
+        selection: CandidateSelection::Schema(htlk_executable::digest::Digest::from_bytes([9; 32])),
+        ..Default::default()
+    };
+    assert!(matches!(
+        extract_mcp_json(&document, &unlinked, Some(&native), &limits),
+        Err(ExtractionError::Schema(
+            htlk_analyzer::NativeSchemaError::UnknownRoot
+        ))
+    ));
     let document = protocol(&[r#"{"wanted":1} {"wanted":2}"#], None);
     assert_eq!(
         extract_mcp_json(&document, &policy, Some(&native), &limits)
@@ -334,4 +344,61 @@ fn protocol_failures_are_never_salvaged_and_tool_errors_remain_evidence() {
     );
     assert_eq!(error, original, "isError remains untouched");
     envelope(&error, &report);
+}
+
+#[test]
+fn late_budget_exhaustion_cannot_publish_a_preferred_or_partially_scanned_candidate() {
+    let limits = Limits::default();
+    let document = protocol(
+        &[
+            "display\n```json\n{\"value\":1}\n```\ntrailing",
+            "mismatch {] later {\"nested\":{\"value\":2}}",
+            "duplicate {\"value\":1}",
+        ],
+        Some(json(r#"{"preferred":[1,{"x":"retained"}]}"#)),
+    );
+    let complete = extract_mcp_json(&document, &Default::default(), None, &limits).unwrap();
+    assert_eq!(complete.status(), S::Selected);
+    let usage = complete.usage();
+    for (resource, maximum) in [
+        ("work", usage.work),
+        ("allocation_bytes", usage.allocation_bytes),
+        ("output_bytes", usage.output_bytes),
+    ] {
+        let mut boundaries: Vec<_> = (1..maximum).step_by((maximum / 32).max(1)).collect();
+        boundaries.extend([maximum - 1, maximum]);
+        for bound in boundaries {
+            let mut policy = ExtractionPolicy::default();
+            match resource {
+                "work" => policy.limits.work = bound,
+                "allocation_bytes" => policy.limits.allocation_bytes = bound,
+                _ => policy.limits.output_bytes = bound,
+            }
+            let report = extract_mcp_json(&document, &policy, None, &limits).unwrap();
+            if bound == maximum {
+                assert_eq!(report.data(), complete.data(), "{resource}/{bound}");
+            } else {
+                assert_eq!(
+                    report.exhausted_limit(),
+                    Some(resource),
+                    "{resource}/{bound}"
+                );
+                assert_eq!(report.status(), S::Exhausted);
+                assert!(report.data().is_none() && report.selected_index().is_none());
+            }
+        }
+    }
+    for selection in [
+        CandidateSelection::Candidate("candidate_99".into()),
+        CandidateSelection::Block(99),
+    ] {
+        let policy = ExtractionPolicy {
+            selection,
+            ..Default::default()
+        };
+        let report = extract_mcp_json(&document, &policy, None, &limits).unwrap();
+        assert_eq!(report.status(), S::None);
+        assert!(!report.candidates().is_empty());
+        assert!(report.data().is_none());
+    }
 }

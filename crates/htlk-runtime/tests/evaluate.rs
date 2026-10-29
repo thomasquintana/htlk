@@ -91,6 +91,274 @@ fn bind(frame: &mut Frame, name: &str, state: Result<V, Err>) {
 }
 
 #[test]
+fn raw_contexts_grant_no_native_dispatch_and_preserve_missing_pending_and_invalid_data() {
+    struct DataOnly(Frame);
+    impl EvaluationContext for DataOnly {
+        fn resolve(
+            &self,
+            reference: &R,
+            path: &[PathStep],
+            meter: &mut EvaluationMeter<'_>,
+        ) -> Result<V, Err> {
+            self.0.resolve(reference, path, meter)
+        }
+        fn outcome(&self, node: &Identifier) -> Option<&Outcome> {
+            self.0.outcome(node)
+        }
+        fn template(&self, id: &Digest) -> Option<&PromptTemplate> {
+            self.0.template(id)
+        }
+    }
+    let mut frame = Frame::default();
+    bind(&mut frame, "missing", Ok(V::Absent));
+    bind(&mut frame, "pending", Ok(V::Pending));
+    bind(&mut frame, "wrong", Ok(V::Present(Value::Integer(42))));
+    let context = DataOnly(frame);
+    let call = expression(K::Call {
+        function: F::Library {
+            library: Digest::from_bytes([9; 32]),
+            name: "unlinked".parse().unwrap(),
+        },
+        arguments: vec![],
+    });
+    assert_eq!(run(&call, &context), Err(Err::UnknownFunction));
+    for (name, expected) in [
+        ("missing", Err(Err::AbsentOperand)),
+        ("pending", Ok(V::Pending)),
+        ("wrong", Err(Err::OperandType)),
+    ] {
+        assert_eq!(
+            run(&expression(K::Not(Box::new(input(name)))), &context),
+            expected
+        );
+        let projection = expression(K::Get {
+            value: Box::new(input(name)),
+            path: vec![PathStep::Field("field".into())],
+        });
+        assert_eq!(
+            run(&projection, &context),
+            if name == "wrong" {
+                Err(Err::InvalidProjection)
+            } else {
+                expected.clone()
+            }
+        );
+    }
+    assert_eq!(
+        run(&expression(K::List(vec![input("pending")])), &context),
+        Ok(V::Pending)
+    );
+    assert_eq!(
+        run(
+            &expression(K::Record(vec![("field".into(), input("pending"))])),
+            &context
+        ),
+        Ok(V::Pending)
+    );
+    assert!(matches!(
+        htlk_runtime::evaluate_condition(
+            &input("missing"),
+            Context::LoopUntil,
+            &context,
+            &Limits::default(),
+            &policy()
+        ),
+        Err(Err::AbsentOperand)
+    ));
+    for (name, expected) in [
+        ("missing", Err(Err::AbsentOperand)),
+        ("pending", Ok(V::Pending)),
+    ] {
+        let reference = expression(K::Ref {
+            source: R::Input(name.parse().unwrap()),
+            path: vec![PathStep::Field("member".into())],
+        });
+        assert_eq!(run(&reference, &context), expected);
+        assert_eq!(run(&core(C::Length, input(name)), &context), expected);
+        assert_eq!(
+            run(
+                &binary(B::Eq, E::literal(S::Integer(1)), input(name)),
+                &context
+            ),
+            expected
+        );
+    }
+    assert_eq!(
+        run(
+            &binary(B::And, input("wrong"), E::literal(S::Boolean(true))),
+            &context
+        ),
+        Err(Err::OperandType)
+    );
+    let foreign = expression(K::Ref {
+        source: R::ScopeOutput("value".parse().unwrap()),
+        path: vec![],
+    });
+    assert!(matches!(
+        evaluate(
+            &foreign,
+            Context::Preconditions,
+            &context,
+            &Limits::default(),
+            &policy()
+        ),
+        Err(Err::Expression(_))
+    ));
+}
+
+#[test]
+fn collection_lengths_nonfailure_outcomes_and_boolean_templates_remain_exact() {
+    let mut frame = Frame::default();
+    for value in [
+        Value::Array(vec![Value::Null, Value::Bool(false)]),
+        Value::Map(
+            Map::try_from_entries([("a".into(), Value::Null), ("b".into(), Value::Null)]).unwrap(),
+        ),
+    ] {
+        bind(&mut frame, "collection", Ok(V::Present(value)));
+        assert_eq!(
+            run(&core(C::Length, input("collection")), &frame),
+            Ok(V::Present(Value::Integer(2)))
+        );
+    }
+    let node: Identifier = "child".parse().unwrap();
+    for (outcome, status) in [
+        (Outcome::Succeeded, "succeeded"),
+        (Outcome::Skipped, "skipped"),
+        (Outcome::Cancelled, "cancelled"),
+    ] {
+        frame
+            .set_outcome(node.clone(), outcome, &Limits::default())
+            .unwrap();
+        assert_eq!(
+            run(&expression(K::Status(node.clone())), &frame),
+            Ok(V::Present(Value::Text(status.into())))
+        );
+        assert_eq!(
+            run(&expression(K::Error(node.clone())), &frame),
+            Ok(V::Present(Value::Null))
+        );
+    }
+    let template = PromptTemplate::new(
+        vec![(
+            "flag".parse().unwrap(),
+            Port::new(ValueType::builtin(P::Boolean), true),
+        )],
+        vec![TemplatePart::Slot("flag".parse().unwrap())],
+        &Limits::default(),
+    )
+    .unwrap();
+    let id = template.digest(&Limits::default()).unwrap();
+    frame.insert_template(template, &Limits::default()).unwrap();
+    let render = expression(K::Render {
+        template: id,
+        arguments: vec![("flag".parse().unwrap(), E::literal(S::Boolean(false)))],
+    });
+    assert_eq!(
+        run(&render, &frame),
+        Ok(V::Present(Value::Text("false".into())))
+    );
+}
+
+#[test]
+fn owned_reference_roles_and_index_paths_do_not_alias_each_other() {
+    let limits = Limits::default();
+    let mut frame = Frame::default();
+    let references = [
+        R::Input("value".parse().unwrap()),
+        R::ScopeOutput("value".parse().unwrap()),
+        R::Carried("value".parse().unwrap()),
+        R::Output {
+            node: "value".parse().unwrap(),
+            port: "value".parse().unwrap(),
+        },
+    ];
+    for (index, reference) in references.iter().enumerate() {
+        frame
+            .bind(
+                reference.clone(),
+                vec![PathStep::Index(0)],
+                Ok(V::Present(Value::Integer(index as i64))),
+                &limits,
+            )
+            .unwrap();
+    }
+    for (index, reference) in references.iter().enumerate() {
+        let expression = expression(K::Ref {
+            source: reference.clone(),
+            path: vec![PathStep::Index(0)],
+        });
+        assert_eq!(
+            run(&expression, &frame),
+            Ok(V::Present(Value::Integer(index as i64)))
+        );
+    }
+}
+
+#[test]
+fn template_headers_and_argument_coverage_are_bounded_without_changing_text() {
+    let limits = Limits::default();
+    for size in [256, 65536] {
+        let text = "x".repeat(size);
+        let template =
+            PromptTemplate::new(vec![], vec![TemplatePart::Text(text.clone())], &limits).unwrap();
+        let mut frame = Frame::default();
+        let template = frame.insert_template(template, &limits).unwrap();
+        let render = expression(K::Render {
+            template,
+            arguments: vec![],
+        });
+        let mut budget = policy();
+        budget.max_value_bytes = 131072;
+        budget.max_output_bytes = 131072;
+        budget.max_steps = 1_000_000;
+        assert_eq!(
+            evaluate(&render, Context::Eval, &frame, &limits, &budget)
+                .unwrap()
+                .value,
+            V::Present(Value::Text(text))
+        );
+        let extra = expression(K::Render {
+            template,
+            arguments: vec![("extra".parse().unwrap(), E::literal(S::Null))],
+        });
+        assert!(matches!(
+            evaluate(&extra, Context::Eval, &frame, &limits, &budget),
+            Err(Err::TemplateArguments)
+        ));
+    }
+}
+
+#[test]
+fn evaluator_diagnostics_preserve_limit_categories_and_pointer_causes() {
+    use std::error::Error;
+    let tight = Limits {
+        max_document_bytes: 1,
+        ..Limits::default()
+    };
+    let pointer = htlk_executable::JsonPointer::new("/private-field", &tight).unwrap_err();
+    let json = htlk_executable::JsonDocument::new(br#""private-value""#, &tight).unwrap_err();
+    let codec = htlk_cbor::encode(&Value::Text("private-value".into()), &tight).unwrap_err();
+    let expression = E::literal(S::String("private-value".into()))
+        .to_value(&tight)
+        .unwrap_err();
+    for error in [
+        Err::from(pointer),
+        Err::from(json),
+        Err::from(codec),
+        Err::from(expression),
+    ] {
+        assert_eq!(error.code(), "E_EXPRESSION_LIMIT");
+        assert!(error.source().is_some());
+        assert!(!error.to_string().contains("private-value"));
+    }
+    let mut frame = Frame::default();
+    bind(&mut frame, "absent", Ok(V::Absent));
+    let error = run(&core(C::Length, input("absent")), &frame).unwrap_err();
+    assert_eq!(error.code(), "E_EXPRESSION_ABSENT");
+}
+
+#[test]
 fn scalar_comparison_cartesian_product_matches_native_representation_semantics() {
     let literals = [
         S::Null,
@@ -588,6 +856,7 @@ impl EvaluationContext for Functions {
             ("callback", [A::Function { name, .. }]) => {
                 Ok(V::Present(Value::Text(name.as_str().to_owned())))
             }
+            ("pending", []) => Ok(V::Pending),
             _ => Err(Err::UnknownFunction),
         }
     }
@@ -597,6 +866,7 @@ fn native_function_arguments_keep_optional_and_callable_metadata_separate() {
     let d = Digest::from_bytes([1; 32]);
     let mut f = Frame::default();
     bind(&mut f, "optional", Ok(V::Absent));
+    bind(&mut f, "pending", Ok(V::Pending));
     let f = Functions(f);
     let call = |name: &str, args| {
         expression(K::Call {
@@ -620,6 +890,27 @@ fn native_function_arguments_keep_optional_and_callable_metadata_separate() {
         run(&call("callback", vec![callback]), &f).unwrap(),
         V::Present(Value::Text("selected".into()))
     );
+    assert_eq!(
+        run(&call("callback", vec![input("pending")]), &f),
+        Ok(V::Pending)
+    );
+    assert_eq!(run(&call("pending", vec![]), &f), Err(Err::OperandType));
+    let callback = expression(K::FunctionRef {
+        library: d,
+        name: "selected".parse().unwrap(),
+    });
+    let mut tight = policy();
+    tight.max_expression_depth = 1;
+    assert!(matches!(
+        evaluate(
+            &call("callback", vec![callback]),
+            Context::Eval,
+            &f,
+            &Limits::default(),
+            &tight
+        ),
+        Err(Err::Limit("expression depth"))
+    ));
 }
 
 #[test]

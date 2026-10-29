@@ -213,6 +213,13 @@ fn reopened_response_recorded_checkpoint_finishes_with_no_mcp_adapter_and_matche
         store.commit(&lease,transaction(writes,1200)).await.unwrap();adapter.release.store(true,Ordering::SeqCst);actix::clock::sleep(Duration::from_millis(20)).await;store.close().await.unwrap();drop(runtime);
         clock.0.store(1400,Ordering::SeqCst);let reopened=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();
         let recovered=Arc::new(Runtime::new(reopened.clone(),registry,Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock));
+        let Value::Map(attempt_fields)=&attempt.payload else{panic!()};
+        let invocation=match attempt_fields.get("invocation_id").unwrap(){Value::Text(id)=>id.parse().unwrap(),_=>panic!()};
+        let evidence=recovered.inspect_mcp_evidence(&caller,&run.run_id,invocation,attempt.key.id.parse().unwrap(),65536).await.unwrap();
+        assert!(evidence.recorded_normalization.is_none());
+        assert!(evidence.normalized.is_some());
+        assert_eq!(evidence.raw_response.as_deref(),Some(RESPONSE));
+        assert_eq!(adapter.sent.load(Ordering::SeqCst),1);
         let engine=ExecutionEngine::launch(recovered.clone(),config).unwrap();let view=terminal(&recovered,&caller,&run.run_id).await;assert_eq!(view.header.status,RunStatus::Succeeded);assert_eq!(adapter.sent.load(Ordering::SeqCst),1);assert!(view.header.fence>lease.fence());
         let entries=reopened.journal(&run.run_id,0,100).await.unwrap();let mut replay=ReplayState::begin(&entries[0],&Limits::default()).unwrap();for entry in &entries[1..]{replay.apply(entry,&Limits::default()).unwrap();}assert_eq!(replay.header(),&view.header);
         for family in [RecordFamily::Scope,RecordFamily::Invocation,RecordFamily::Artifact,RecordFamily::Usage,RecordFamily::Reservation,RecordFamily::Attempt,RecordFamily::Response,RecordFamily::Guard,RecordFamily::Binding,RecordFamily::Observation]{for record in reopened.records(&run.run_id,family,None,100).await.unwrap(){assert_eq!(replay.record(&record.key),Some(&record));}}
@@ -295,6 +302,21 @@ fn recorded_mcp_checkpoint_corruption_cannot_change_the_frozen_request_or_publis
     actix::System::new().block_on(async {
         let(compiler,registry)=support::native_compiler_with_timeouts(30000,10000);let registry=Arc::new(registry);
         let graph=compiler.compile_source(r#"ir_version="0.1"graph test.checkpoint{inputs={}outputs={value=json}nodes{args=eval(json,{query="question"})lookup=call(mcp.tool("research","lookup"))}edges{edge args{from=args.outputs.value to=lookup.inputs.arguments}edge value{from=lookup.outputs.value to=outputs.value}}}"#,&support::catalogs()).unwrap();
+        // Obtain genuine metadata through the actor before testing independent,
+        // self-consistently rehashed corruptions at a durable restart checkpoint.
+        let normalization_template = {
+            let store=SqliteStore::in_memory(StoreConfig::default()).await.unwrap();
+            let adapter=Arc::new(Held{descriptors:graph.canonical_document.fields().bindings.values().map(|b|(b.descriptor(),graph.canonical_document.fields().documents[&b.descriptor()].clone())).collect(),sent:AtomicUsize::new(0),release:AtomicBool::new(true)});
+            let runtime=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_mcp(adapter.clone()));
+            let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();
+            runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();
+            let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{poll_interval:Duration::from_millis(1),..Default::default()}).unwrap();
+            let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::new(),"control",None).await.unwrap();
+            assert_eq!(terminal(&runtime,&caller,&run.run_id).await.header.status,RunStatus::Succeeded);
+            let saved=store.records(&run.run_id,RecordFamily::Observation,None,100).await.unwrap().into_iter().find(|record|record.key.id.ends_with(":normalization")).unwrap().payload;
+            assert_eq!(adapter.sent.load(Ordering::SeqCst),1);
+            engine.shutdown().await.unwrap();store.close().await.unwrap();saved
+        };
         let bad=Value::Text(Digest::from_bytes([0;32]).to_string());
         let cases=[
             (false,"invocation_id",bad.clone()),(false,"method",Value::Text("prompts/get".into())),
@@ -308,6 +330,19 @@ fn recorded_mcp_checkpoint_corruption_cannot_change_the_frozen_request_or_publis
             (true,"delivery",Value::Text("not_sent".into())),(true,"delivery",Value::Text("unknown".into())),
             (true,"raw_digest",bad),(true,"raw",Value::Null),
             (true,"failure_code",Value::Text("E_POLICY".into())),
+            (false,"normalization:category",Value::Text("forged".into())),
+            (false,"normalization:invocation_id",Value::Text(Digest::from_bytes([9;32]).to_string())),
+            (false,"normalization:attempt_id",Value::Text(Digest::from_bytes([9;32]).to_string())),
+            (false,"normalization:canonical_path",Value::Text("/forged".into())),
+            (false,"normalization:raw_digest",Value::Text(Digest::from_bytes([9;32]).to_string())),
+            (false,"normalization:binding_digest",Value::Text(Digest::from_bytes([9;32]).to_string())),
+            (false,"normalization:failure_code",Value::Text("E_POLICY".into())),
+            (false,"normalization:processing_failure",Value::Text("false".into())),
+            (false,"normalization:envelope_digest",Value::Text(Digest::from_bytes([9;32]).to_string())),
+            (false,"normalization:detail",Value::Array(vec![])),
+            (false,"normalization:raw_malformed",Value::Null),
+            (false,"normalization:effect_outcome_uncertain",Value::Text("false".into())),
+            (false,"normalization:failure_shape",Value::Integer(7)),
         ];
         for(response_field,field,value)in cases{
             let adapter=Arc::new(Held{descriptors:graph.canonical_document.fields().bindings.values().map(|b|(b.descriptor(),graph.canonical_document.fields().documents[&b.descriptor()].clone())).collect(),sent:AtomicUsize::new(0),release:AtomicBool::new(false)});
@@ -315,10 +350,15 @@ fn recorded_mcp_checkpoint_corruption_cannot_change_the_frozen_request_or_publis
             let config=ExecutionConfig{lease_ms:100,poll_interval:Duration::from_millis(1),..Default::default()};let engine=ExecutionEngine::launch(runtime.clone(),config.clone()).unwrap();let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::new(),"checkpoint",None).await.unwrap();
             let deadline=std::time::Instant::now()+Duration::from_secs(10);while adapter.sent.load(Ordering::SeqCst)==0{assert!(std::time::Instant::now()<deadline);actix::clock::sleep(Duration::from_millis(1)).await;}
             engine.shutdown().await.unwrap();clock.0.store(1200,Ordering::SeqCst);let lease=store.acquire(&run.run_id,"checkpoint".into(),1200,1300).await.unwrap();let attempt=store.records(&run.run_id,RecordFamily::Attempt,None,100).await.unwrap().pop().unwrap();
+            let Value::Map(attempt_fields)=&attempt.payload else{panic!()};
+            let invocation=match attempt_fields.get("invocation_id").unwrap(){Value::Text(id)=>id.parse().unwrap(),_=>panic!()};
+            let before_response=runtime.inspect_mcp_evidence(&caller,&run.run_id,invocation,attempt.key.id.parse().unwrap(),65536).await.unwrap();
+            assert!(!before_response.response_received);
+            assert!(before_response.raw_response.is_none() && before_response.normalized.is_none());
             let mut attempt_payload=change(&attempt.payload,[("dispatch_state",Value::Text("response_recorded".into()))]);
             let mut response=object([("raw",Value::Bytes(RESPONSE.to_vec())),("raw_digest",Value::Text(htlk_executable::digest::hash_bytes(RESPONSE).to_string())),("delivery",Value::Text("response_received".into())),("influence_labels",SecurityLabels::default().to_value(&Limits::default()).unwrap())]);
             let normalization_corruption = value.clone();
-            if response_field{response=change(&response,[(field,value)]);}else if field!="normalization"{attempt_payload=change(&attempt_payload,[(field,value)]);}
+            if response_field{response=change(&response,[(field,value)]);}else if !field.starts_with("normalization"){attempt_payload=change(&attempt_payload,[(field,value)]);}
             let mut writes=vec![update(&attempt,attempt_payload,true),RecordWrite{key:RecordKey{family:RecordFamily::Response,id:attempt.key.id.clone()},expected_revision:None,final_record:true,payload:response}];
             if field == "normalization" {
                 let Value::Map(attempt_fields) = &attempt.payload else { panic!() };
@@ -329,14 +369,39 @@ fn recorded_mcp_checkpoint_corruption_cannot_change_the_frozen_request_or_publis
                         ("invocation_id", attempt_fields.get("invocation_id").unwrap().clone()),
                         ("attempt_id", Value::Text(attempt.key.id.clone())),
                         ("canonical_path", Value::Text(format!("/bindings/{binding}"))),
-                        ("normalization_digest", normalization_corruption),
+                        ("normalization_digest", normalization_corruption.clone()),
                         ("normalization", object([])), ("failure_code", Value::Null),
                         ("influence_labels", SecurityLabels::default().to_value(&Limits::default()).unwrap()),
                     ]) });
             }
+            if let Some(member) = field.strip_prefix("normalization:") {
+                let Value::Map(attempt_fields)=&attempt.payload else{panic!()};
+                let mut payload=change(&normalization_template,[("invocation_id",attempt_fields.get("invocation_id").unwrap().clone()),("attempt_id",Value::Text(attempt.key.id.clone()))]);
+                if ["category","invocation_id","attempt_id","canonical_path"].contains(&member) {
+                    payload=change(&payload,[(member,normalization_corruption)]);
+                } else {
+                    let Value::Map(fields)=&payload else{panic!()};
+                    let inner=if member=="raw_malformed" {
+                        let raw=br#"{"content":[],"content":[]}"#;
+                        let digest=Value::Text(htlk_executable::digest::hash_bytes(raw).to_string());
+                        response=change(&writes[1].payload,[("raw",Value::Bytes(raw.to_vec())),("raw_digest",digest.clone())]);
+                        writes[1].payload=response;
+                        change(fields.get("normalization").unwrap(),[("raw_digest",digest)])
+                    } else if member=="failure_shape" {
+                        change(fields.get("normalization").unwrap(),[("failure_code",normalization_corruption.clone())])
+                    } else {change(fields.get("normalization").unwrap(),[(member,normalization_corruption)])};
+                    let digest=htlk_executable::digest::hash_bytes(&htlk_executable::cbor::encode(&inner,&Limits::default()).unwrap());
+                    payload=change(&payload,[("normalization",inner),("normalization_digest",Value::Text(digest.to_string()))]);
+                    if member=="failure_shape" {payload=change(&payload,[("failure_code",Value::Integer(7))]);}
+                }
+                writes.push(RecordWrite{key:RecordKey{family:RecordFamily::Observation,id:format!("{}:normalization",attempt.key.id)},expected_revision:None,final_record:true,payload});
+            }
             for reservation in store.records(&run.run_id,RecordFamily::Reservation,None,100).await.unwrap(){writes.push(update(&reservation,change(&reservation.payload,[("state",Value::Text("released".into()))]),true));}
             for usage in store.records(&run.run_id,RecordFamily::Usage,None,100).await.unwrap(){writes.push(update(&usage,change(&usage.payload,[("concurrency_reserved",Value::Integer(0))]),false));}
             store.commit(&lease,transaction(writes,1200)).await.unwrap();adapter.release.store(true,Ordering::SeqCst);clock.0.store(1400,Ordering::SeqCst);
+            if field.starts_with("normalization:") && !["normalization:detail","normalization:raw_malformed"].contains(&field) {
+                assert!(runtime.inspect_mcp_evidence(&caller,&run.run_id,invocation,attempt.key.id.parse().unwrap(),65536).await.is_err(),"inspection admitted {field}");
+            }
             let recovered=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock));let engine=ExecutionEngine::launch(recovered.clone(),config).unwrap();
             let deadline=std::time::Instant::now()+Duration::from_secs(5);loop{let header=store.run_header(&run.run_id).await.unwrap();if header.status.is_terminal(){assert_eq!(header.status,RunStatus::Failed,"response={response_field}/{field}");break;}assert!(std::time::Instant::now()<deadline,"stalled response={response_field}/{field}");actix::clock::sleep(Duration::from_millis(2)).await;}
             assert_eq!(adapter.sent.load(Ordering::SeqCst),1);assert_eq!(store.records(&run.run_id,RecordFamily::Artifact,None,100).await.unwrap().len(),1,"corrupt checkpoint published an output");engine.shutdown().await.unwrap();store.close().await.unwrap();

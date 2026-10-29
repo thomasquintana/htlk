@@ -7,7 +7,7 @@ use htlk::runtime::{
     Authorization, HostContext, Runtime, RuntimeConfig, RuntimePolicy,
     execution::{ExecutionConfig, ExecutionEngine, RunView},
     failure::{FailureCode, RuntimeFailure},
-    identity::InvocationId,
+    identity::{InvocationId, RunId},
     mcp::{McpAdapter, McpFuture, McpPolicy, McpRequest, McpRunContext},
     records::{RunStatus, SecurityLabels},
     store::{SqliteStore, StoreConfig},
@@ -109,6 +109,21 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
     };
     value.get(key).unwrap()
 }
+async fn terminal(runtime: &Runtime, caller: &HostContext, run: &RunId) -> RunView {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match runtime.inspect_run(caller, run).await {
+                Ok(view) if view.header.status.is_terminal() => break view,
+                Ok(_) => {}
+                Err(error) if error.code() == FailureCode::Fenced => {}
+                Err(error) => panic!("run inspection failed: {error:?}"),
+            }
+            actix::clock::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("run did not settle within the bounded polling window")
+}
 async fn execute(
     declared: bool,
     selected: ToolResultPolicy,
@@ -126,6 +141,25 @@ async fn execute_with_revocation(
     raw: &str,
     revoke_on_reply: bool,
 ) -> (Arc<Runtime>, RunView, Arc<AtomicUsize>) {
+    let (runtime, view, calls, _) = execute_recorded(
+        declared,
+        selected,
+        granted,
+        application,
+        raw,
+        revoke_on_reply,
+    )
+    .await;
+    (runtime, view, calls)
+}
+async fn execute_recorded(
+    declared: bool,
+    selected: ToolResultPolicy,
+    granted: ToolResultPolicy,
+    application: Option<JsonDocument>,
+    raw: &str,
+    revoke_on_reply: bool,
+) -> (Arc<Runtime>, RunView, Arc<AtomicUsize>, SqliteStore) {
     let limits = Limits::default();
     let descriptor = if declared {
         r#"{"name":"tool","inputSchema":{"type":"object"},"outputSchema":{"type":"object","required":["title"],"properties":{"title":{"type":"string"}}}}"#
@@ -168,11 +202,12 @@ async fn execute_with_revocation(
         revoked: revoked.clone(),
         revoke_on_reply,
     });
+    let store = SqliteStore::in_memory(StoreConfig::default())
+        .await
+        .unwrap();
     let runtime = Arc::new(
         Runtime::new(
-            SqliteStore::in_memory(StoreConfig::default())
-                .await
-                .unwrap(),
+            store.clone(),
             Arc::new(registry),
             Arc::new(Policy { granted, revoked }),
             RuntimeConfig::default(),
@@ -197,19 +232,150 @@ async fn execute_with_revocation(
         .start_run(&caller, graph.fingerprint, &BTreeMap::new(), "start", None)
         .await
         .unwrap();
-    let view = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let view = runtime.inspect_run(&caller, &run.run_id).await.unwrap();
-            if view.header.status.is_terminal() {
-                break view;
-            }
-            actix::clock::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .unwrap();
+    let view = terminal(&runtime, &caller, &run.run_id).await;
     engine.shutdown().await.unwrap();
-    (runtime, view, reply.calls.clone())
+    (runtime, view, reply.calls.clone(), store)
+}
+
+#[test]
+fn original_evidence_remains_readable_when_pinned_processing_is_unavailable() {
+    actix::System::new().block_on(async {
+        let raw=r#"{"isError":true,"content":[{"type":"text","text":"private-failure {\"status\":\"unknown\"}"}]}"#;
+        let (runtime,view,calls,store)=execute_recorded(false,Default::default(),Default::default(),None,raw,false).await;
+        let limits=Limits::default();
+        let owner=HostContext::new("owner".into(),&limits).unwrap();
+        let invocation=InvocationId::new(view.header.root_scope,&"work".parse().unwrap(),&limits).unwrap();
+        let node=runtime.inspect_node(&owner,&view.header.run_id,invocation).await.unwrap();
+        let attempt=node.attempts[0].attempt_id;
+        let bounded=runtime.inspect_mcp_evidence(&owner,&view.header.run_id,invocation,attempt,raw.len()+1).await.unwrap();
+        assert_eq!(bounded.raw_response.as_deref(),Some(raw.as_bytes()));
+        assert!(!bounded.raw_truncated && bounded.normalized_truncated);
+        assert!(bounded.normalized.is_none());
+        let reopened=Runtime::new(store,Arc::new(htlk::runtime::NativeRegistry::new(&limits).unwrap()),Arc::new(Policy{granted:Default::default(),revoked:Arc::new(AtomicBool::new(false))}),RuntimeConfig::default()).unwrap();
+        let evidence=reopened.inspect_mcp_evidence(&owner,&view.header.run_id,invocation,attempt,65536).await.unwrap();
+        assert_eq!(evidence.raw_response.as_deref(),Some(raw.as_bytes()));
+        assert!(evidence.normalized.is_none());
+        assert_eq!(evidence.reconstruction_failure,Some(FailureCode::Profile));
+        assert_eq!(evidence.failure_code,Some(FailureCode::McpToolError));
+        assert_eq!(calls.load(Ordering::SeqCst),1);
+    });
+}
+
+#[test]
+fn runtime_inference_and_normalization_failures_keep_typed_causes_and_stable_codes() {
+    use htlk::compiler::analyzer::InferenceError;
+    use htlk::runtime::{RuntimeError, ToolNormalizationError};
+    use std::error::Error;
+    let limits = Limits::default();
+    let json_error =
+        JsonDocument::new(br#"{"private-marker":1,"private-marker":2}"#, &limits).unwrap_err();
+    for (error, code) in [
+        (
+            RuntimeError::from(InferenceError::Context),
+            FailureCode::Input,
+        ),
+        (
+            RuntimeError::from(InferenceError::AllocationFailed),
+            FailureCode::Budget,
+        ),
+        (
+            RuntimeError::from(InferenceError::Json(json_error)),
+            FailureCode::Input,
+        ),
+        (
+            RuntimeError::from(InferenceError::Json(
+                JsonDocument::new(
+                    b"{}",
+                    &Limits {
+                        max_document_bytes: 1,
+                        ..limits
+                    },
+                )
+                .unwrap_err(),
+            )),
+            FailureCode::Budget,
+        ),
+        (
+            RuntimeError::from(ToolNormalizationError::Binding),
+            FailureCode::Profile,
+        ),
+    ] {
+        assert_eq!(error.code(), code);
+        assert!(error.source().is_some());
+        assert!(!error.to_string().contains("private-marker"));
+    }
+}
+
+#[test]
+fn scripted_adapter_cancellation_before_invoke_is_not_sent_and_calls_no_provider() {
+    actix::System::new().block_on(async {
+        use htlk::runtime::{
+            identity::RunId,
+            mcp::{McpCancellation, McpDelivery},
+        };
+        let limits = Limits::default();
+        let descriptor = JsonDocument::new(
+            br#"{"name":"tool","inputSchema":{"type":"object"}}"#,
+            &limits,
+        )
+        .unwrap();
+        let binding = McpBinding::new(
+            ServerIdentity::new(
+                "test".into(),
+                McpTransport::Stdio,
+                "fixture".into(),
+                "1".into(),
+                &limits,
+            )
+            .unwrap(),
+            descriptor.digest(),
+            htlk_executable::McpBindingKind::Tool {
+                name: "tool".into(),
+                input_schema: JsonDocument::new(br#"{"type":"object"}"#, &limits)
+                    .unwrap()
+                    .digest(),
+                output_schema: None,
+                result_policy: Box::default(),
+            },
+            &limits,
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let adapter = Reply {
+            descriptor,
+            raw: br#"{"content":[]}"#.to_vec(),
+            calls: calls.clone(),
+            revoked: Arc::new(AtomicBool::new(false)),
+            revoke_on_reply: false,
+        };
+        let context = McpRunContext {
+            run_id: RunId::new("cancelled-before-send".into(), &limits).unwrap(),
+            host: HostContext::new("owner".into(), &limits).unwrap(),
+            fence: 1,
+            cancellation: Arc::new(McpCancellation::new()),
+        };
+        let mut connection = adapter.connect(&binding, &context, &limits).await.unwrap();
+        let cancellation = Arc::new(McpCancellation::new());
+        cancellation.cancel();
+        let request = McpRequest {
+            response_limits: limits.clone(),
+            cancellation,
+            cancellation_grace_ms: 100,
+            method: "tools/call".into(),
+            params: JsonDocument::new(br#"{"name":"tool","arguments":{}}"#, &limits)
+                .unwrap()
+                .value()
+                .clone(),
+            timeout_ms: 1000,
+            max_response_bytes: 65536,
+            idempotency_key: None,
+        };
+        let outcome = connection.invoke(request).await;
+        assert_eq!(outcome.delivery, McpDelivery::NotSent);
+        assert_eq!(outcome.result.unwrap_err().code(), FailureCode::Cancelled);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        connection.close().await.unwrap();
+    });
 }
 #[test]
 fn failed_tool_evidence_is_durable_authorized_bounded_and_not_a_success_artifact() {
@@ -251,7 +417,7 @@ fn passive_inference_uses_genuine_accepted_producers_and_retains_source_labels_w
     actix::System::new().block_on(async {
         use htlk::runtime::execution::McpInferenceSelection;
         let raw =
-            r#"{"content":[],"structuredContent":{"price":1,"secret":"do-not-copy-private"}}"#;
+            r#"{"content":[],"structuredContent":{"price":1,"secret":"do-not-copy-private","nested":{"x":1}}}"#;
         let (runtime, view, calls) = execute(
             false,
             ToolResultPolicy::default(),
@@ -282,6 +448,27 @@ fn passive_inference_uses_genuine_accepted_producers_and_retains_source_labels_w
         );
         assert_eq!(proposal.labels().as_slice(), ["confidential".to_owned()]);
         assert_eq!(proposal.sources(), std::slice::from_ref(&selection));
+        let debug = format!("{proposal:?}");
+        assert!(!debug.contains("do-not-copy-private") && !debug.contains("confidential"));
+        for resource in ["samples", "sample_bytes", "bounded_sample_bytes", "depth"] {
+            let mut restricted = policy.clone();
+            let selected = if resource == "samples" {
+                restricted.limits.samples = 1;
+                vec![selection.clone(), selection.clone()]
+            } else {
+                match resource {
+                    "sample_bytes" => restricted.limits.sample_bytes = 1,
+                    "bounded_sample_bytes" => restricted.limits.sample_bytes = 130,
+                    _ => restricted.limits.depth = 1,
+                }
+                vec![selection.clone()]
+            };
+            let error = runtime.infer_mcp_results(&owner, &selected, &restricted).await.expect_err(resource);
+            assert_eq!(error.code(), FailureCode::Budget, "{resource}: {error}");
+        }
+        assert_eq!(runtime.infer_mcp_results(&owner, &[], &policy).await.unwrap_err().code(), FailureCode::Input);
+        let errors = htlk::compiler::analyzer::InferencePolicy { sample_kind: htlk::compiler::analyzer::InferenceSampleKind::ToolError, ..policy.clone() };
+        assert_eq!(runtime.infer_mcp_results(&owner, std::slice::from_ref(&selection), &errors).await.unwrap_err().code(), FailureCode::Input);
         assert!(
             !std::str::from_utf8(proposal.revision().evidence().as_bytes())
                 .unwrap()
@@ -323,6 +510,31 @@ fn passive_inference_uses_genuine_accepted_producers_and_retains_source_labels_w
             1,
             "learning from recorded results never probes or repeats the tool"
         );
+    });
+}
+
+#[test]
+fn passive_sampling_never_merges_identical_results_from_distinct_server_contexts() {
+    actix::System::new().block_on(async {
+        let (runtime,first,calls)=execute(false,Default::default(),Default::default(),None,r#"{"content":[],"structuredContent":{"price":1}}"#).await;
+        let limits=Limits::default();
+        let owner=HostContext::new("owner".into(),&limits).unwrap();
+        let catalogs=MCPCatalogInputs::from_json(br#"{
+          "tools":{"catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{"service":{"deployment_id":"other","transport":"stdio","implementation_name":"fixture","implementation_version":"1"}},"schema_documents":{},"tools":[{"server":"service","descriptor":{"name":"tool","inputSchema":{"type":"object"}}}]},
+          "resources":{"catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{},"schema_documents":{},"resources":[],"templates":[]},
+          "prompts":{"catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{},"schema_documents":{},"prompts":[]}
+        }"#,&limits).unwrap();
+        let (compiler,_)=support::native_compiler_with_timeouts(10000,1000);
+        let graph=compiler.compile_source(r#"ir_version="0.1" graph test.other{inputs={}outputs={value=McpToolResult}nodes{args=eval(json,{})work=call(mcp.tool("service","tool"))}edges{edge args{from=args.outputs.value to=work.inputs.arguments}edge out{from=work.outputs.value to=outputs.value}}}"#,&catalogs).unwrap();
+        runtime.register_graph(&owner,&graph.executable_bytes,&[]).await.unwrap();
+        let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{poll_interval:Duration::from_millis(1),..Default::default()}).unwrap();
+        let run=runtime.start_run(&owner,graph.fingerprint,&BTreeMap::new(),"other",None).await.unwrap();
+        let second=terminal(&runtime,&owner,&run.run_id).await;
+        assert_eq!(second.header.status,RunStatus::Succeeded);
+        engine.shutdown().await.unwrap();
+        let selections=[&first,&second].map(|view|htlk::runtime::execution::McpInferenceSelection{run_id:view.header.run_id.clone(),invocation_id:InvocationId::new(view.header.root_scope,&"work".parse().unwrap(),&limits).unwrap()});
+        assert_eq!(runtime.infer_mcp_results(&owner,&selections,&Default::default()).await.unwrap_err().code(),FailureCode::Input);
+        assert_eq!(calls.load(Ordering::SeqCst),2,"sampling dispatched no additional operation");
     });
 }
 
@@ -378,6 +590,103 @@ fn diagnostic_detail_limits_mark_truncation_without_losing_the_pinned_decision()
             Some(&Value::Null)
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn candidate_source_and_parse_diagnostic_truncation_preserve_the_actual_result() {
+    actix::System::new().block_on(async {
+        for (maximum,raw,kind) in [
+            (700,r#"{"content":[{"type":"text","text":"null"},{"type":"text","text":"null"},{"type":"text","text":"null"}]}"#,"candidate"),
+            (513,r#"{"content":[{"type":"text","text":"one"},{"type":"text","text":"two"},{"type":"text","text":"three"},{"type":"text","text":"four"}]}"#,"parse"),
+        ] {
+            let mut policy=ToolResultPolicy::default();
+            policy.extraction.limits.diagnostic_bytes=maximum;
+            let (runtime,view,calls)=execute(false,policy.clone(),policy,None,raw).await;
+            assert_eq!(view.header.status,RunStatus::Succeeded);
+            let limits=Limits::default();
+            let owner=HostContext::new("owner".into(),&limits).unwrap();
+            let invocation=InvocationId::new(view.header.root_scope,&"work".parse().unwrap(),&limits).unwrap();
+            let node=runtime.inspect_node(&owner,&view.header.run_id,invocation).await.unwrap();
+            let evidence=runtime.inspect_mcp_evidence(&owner,&view.header.run_id,invocation,node.attempts[0].attempt_id,65536).await.unwrap();
+            let normalization=evidence.recorded_normalization.as_ref().unwrap();
+            assert_eq!(field(normalization,"detail_truncated"),&Value::Bool(true));
+            let Value::Array(detail)=field(normalization,"detail") else{panic!()};
+            assert!(!detail.is_empty());
+            assert_eq!(field(&detail[0],"kind"),&Value::Text(kind.into()));
+            assert_eq!(evidence.normalized.as_ref().unwrap().extraction().data(),if kind=="candidate" {Some(&Value::Null)}else{None});
+            assert_eq!(calls.load(Ordering::SeqCst),1);
+        }
+    });
+}
+
+#[test]
+fn incomplete_generic_results_remain_usable_but_cannot_be_passive_schema_samples() {
+    actix::System::new().block_on(async {
+        let mut policy = ToolResultPolicy::default();
+        policy.extraction.limits.work = 1;
+        let (runtime, view, calls) = execute(
+            false,
+            policy.clone(),
+            policy,
+            None,
+            r#"{"content":[{"type":"text","text":"null"}]}"#,
+        )
+        .await;
+        assert_eq!(view.header.status, RunStatus::Succeeded);
+        let owner = HostContext::new("owner".into(), &Limits::default()).unwrap();
+        let invocation = InvocationId::new(
+            view.header.root_scope,
+            &"work".parse().unwrap(),
+            &Limits::default(),
+        )
+        .unwrap();
+        let selection = htlk::runtime::execution::McpInferenceSelection {
+            run_id: view.header.run_id.clone(),
+            invocation_id: invocation,
+        };
+        assert_eq!(
+            runtime
+                .infer_mcp_results(&owner, &[selection], &Default::default())
+                .await
+                .unwrap_err()
+                .code(),
+            FailureCode::Budget
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    });
+}
+
+#[test]
+fn malformed_received_results_keep_durable_processing_failure_without_salvage_or_recall() {
+    actix::System::new().block_on(async {
+        for raw in [
+            r#"{"content":[],"content":[]}"#,
+            r#"{"content":[{"type":"text","text":"{\"x\":1}"}],"structuredContent":{"n":9007199254740993}}"#,
+            r#"{"content":[{"type":"text","text":"{\"x\":1}"},{"type":"image","data":"!","mimeType":"image/png"}]}"#,
+        ] {
+            let (runtime, view, calls) = execute(false, ToolResultPolicy::default(), ToolResultPolicy::default(), None, raw).await;
+            assert!(view.outputs.is_none());
+            assert_eq!(node_failure(&runtime,&view).await, FailureCode::McpProtocol);
+            let limits = Limits::default();
+            let owner = HostContext::new("owner".into(), &limits).unwrap();
+            let invocation = InvocationId::new(view.header.root_scope, &"work".parse().unwrap(), &limits).unwrap();
+            let node = runtime.inspect_node(&owner, &view.header.run_id, invocation).await.unwrap();
+            let attempt = node.attempts[0].attempt_id;
+            let evidence = runtime.inspect_mcp_evidence(&owner, &view.header.run_id, invocation, attempt,65536).await.unwrap();
+            assert!(evidence.response_received && evidence.effect_outcome_uncertain);
+            assert_eq!(evidence.raw_response.as_deref(),Some(raw.as_bytes()));
+            assert_eq!(evidence.reconstruction_failure,Some(FailureCode::McpProtocol));
+            assert!(evidence.normalized.is_none());
+            assert_eq!(field(evidence.recorded_normalization.as_ref().unwrap(),"processing_failure"),&Value::Bool(true));
+            let wrong_attempt = htlk::runtime::identity::AttemptId::new(invocation,2,&limits).unwrap();
+            assert_eq!(runtime.inspect_mcp_evidence(&owner,&view.header.run_id,invocation,wrong_attempt,65536).await.unwrap_err().code(),FailureCode::Input);
+            let selection = htlk::runtime::execution::McpInferenceSelection {run_id:view.header.run_id.clone(),invocation_id:invocation};
+            assert_eq!(runtime.infer_mcp_results(&owner,std::slice::from_ref(&selection),&Default::default()).await.unwrap_err().code(),FailureCode::Input);
+            let policy = htlk::compiler::analyzer::InferencePolicy {sample_kind:htlk::compiler::analyzer::InferenceSampleKind::ToolError,..Default::default()};
+            assert_eq!(runtime.infer_mcp_results(&owner,&[selection],&policy).await.unwrap_err().code(),FailureCode::McpProtocol);
+            assert_eq!(calls.load(Ordering::SeqCst),1);
+        }
     });
 }
 
@@ -517,6 +826,29 @@ fn schema_less_calls_publish_one_envelope_for_text_json_multimodal_and_empty_res
                 result.metadata.security_labels().as_slice(),
                 ["confidential".to_owned()]
             );
+            if status != "selected" {
+                let selection = htlk::runtime::execution::McpInferenceSelection {
+                    run_id: view.header.run_id.clone(),
+                    invocation_id: InvocationId::new(
+                        view.header.root_scope,
+                        &"work".parse().unwrap(),
+                        &Limits::default(),
+                    )
+                    .unwrap(),
+                };
+                assert_eq!(
+                    runtime
+                        .infer_mcp_results(
+                            &HostContext::new("owner".into(), &Limits::default()).unwrap(),
+                            &[selection],
+                            &Default::default()
+                        )
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    FailureCode::OutputMissing
+                );
+            }
             assert_eq!(
                 runtime
                     .read_artifact(

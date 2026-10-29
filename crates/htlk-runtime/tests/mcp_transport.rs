@@ -21,6 +21,8 @@ use std::{
 const DESCRIPTOR: &str =
     r#"{"name":"lookup","inputSchema":{"type":"object"},"outputSchema":{"type":"object"}}"#;
 const RESULT: &str = r#"{"content":[],"structuredContent":{"answer":42}}"#;
+const UTF8_RESULT: &str =
+    r#"{"content":[{"type":"text","text":"café"}],"structuredContent":{"answer":42}}"#;
 fn run_context() -> htlk_runtime::mcp::McpRunContext {
     let limits = Limits::default();
     htlk_runtime::mcp::McpRunContext {
@@ -81,6 +83,14 @@ fn native_discovery_and_request_preflight_fail_without_dispatch() {
         let context = run_context();
         let limits = Limits::default();
         assert_eq!(adapter.descriptor(&binding, &context, &limits).await.unwrap_err().code(), FailureCode::McpIdentity);
+        for endpoint in [McpEndpoint::Http{url:"invalid://unused".into(),headers:BTreeMap::new()},McpEndpoint::Stdio{program:"/htlk-test-nonexistent-program".into(),arguments:vec![],environment:BTreeMap::new()},McpEndpoint::Stdio{program:"/bin/sh".into(),arguments:vec!["-c".into(),"IFS= read -r line".into()],environment:BTreeMap::new()}] {
+            let expected=if matches!(endpoint,McpEndpoint::Http{..}){FailureCode::McpIdentity}else{FailureCode::McpTransport};
+            let isolated=NativeMcpAdapter::new(BTreeMap::from([("test".into(),endpoint)]),1000).unwrap();
+            assert_eq!(isolated.descriptor(&binding,&context,&limits).await.unwrap_err().code(),expected);
+            isolated.shutdown().await.unwrap();
+            isolated.shutdown().await.unwrap();
+            assert!(matches!(isolated.connect(&binding,&context,&limits).await,Err(error) if error.code()==FailureCode::McpTransport));
+        }
         // Argument/deadline preflight must precede even endpoint resolution.
         let cancelled = request(4096);
         cancelled.cancellation.cancel();
@@ -93,6 +103,78 @@ fn native_discovery_and_request_preflight_fail_without_dispatch() {
         context.cancellation.cancel();
         assert!(matches!(adapter.connect(&binding, &context, &limits).await, Err(error) if error.code() == FailureCode::Cancelled));
         adapter.shutdown().await.unwrap();
+    });
+}
+
+#[test]
+fn stdio_reverse_requests_and_live_preflight_preserve_authority_and_not_sent_evidence() {
+    actix::System::new().block_on(async {
+        let script = r#"
+          import {createInterface} from 'node:readline';
+          const send=v=>process.stdout.write(JSON.stringify(v)+'\n');
+          let initialize;
+          for await (const line of createInterface({input:process.stdin})) {
+            const r=JSON.parse(line);
+            if(r.method==='initialize') {initialize=r; const packet=JSON.parse(process.env.PACKET);for(let i=0;i<(packet.params?.flood ? 1025:1);i++)send(packet); if(process.env.EXPECTED==='notify') send({jsonrpc:'2.0',id:r.id,result:JSON.parse(process.env.INIT)}); continue;}
+            if(r.id===-7 && !r.method) {
+              const code=process.env.EXPECTED;
+              if(code==='ok' ? !r.result : r.error?.code!==Number(code)) process.exit(21);
+              send({jsonrpc:'2.0',id:initialize.id,result:JSON.parse(process.env.INIT)}); continue;
+            }
+            if(r.method==='notifications/initialized') continue;
+            if(r.method==='tools/list') {send({jsonrpc:'2.0',id:r.id,result:{tools:[JSON.parse(process.env.DESCRIPTOR)]}});continue;}
+            if(r.method==='tools/call') {send({jsonrpc:'2.0',id:r.id,result:{content:[{type:'text',text:'private-payload'}]}});continue;}
+            process.exit(22);
+          }
+        "#;
+        for (packet, expected) in [
+            (r#"{"jsonrpc":"2.0","method":"notifications/progress","params":{}}"#,Some("notify")),
+            (r#"{"jsonrpc":"2.0","id":-7,"method":"ping","params":{}}"#, Some("ok")),
+            (r#"{"jsonrpc":"2.0","id":-7,"method":"ping","params":false}"#, Some("-32602")),
+            (r#"{"jsonrpc":"2.0","id":-7,"method":"sampling/createMessage","params":{}}"#, Some("-32601")),
+            (r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#, None),
+            (r#"{"jsonrpc":"2.0","method":"notifications/progress","params":{"flood":true}}"#,None),
+            (r#"{"jsonrpc":"2.0","id":-7,"method":"ping","result":{}}"#, None),
+        ] {
+            let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Stdio{program:"node".into(),arguments:vec!["--input-type=module".into(),"-e".into(),script.into()],environment:BTreeMap::from([("PACKET".into(),packet.into()),("INIT".into(),initialize().into()),("DESCRIPTOR".into(),DESCRIPTOR.into()),("EXPECTED".into(),expected.unwrap_or("bad").into())])})]),2000).unwrap();
+            let binding=binding(McpTransport::Stdio);
+            let context=run_context();
+            let limits=Limits::default();
+            let connected=adapter.connect(&binding,&context,&limits).await;
+            if expected.is_none() {
+                assert!(matches!(connected,Err(error) if error.code()==FailureCode::McpProtocol));
+            } else {
+                let mut connection=connected.unwrap();
+                for mode in ["cancelled","timeout","depth","bytes"] {
+                    let mut isolated=run_context();
+                    isolated.run_id=htlk_runtime::identity::RunId::new(format!("preflight-{mode}"),&limits).unwrap();
+                    let mut preflight=adapter.connect(&binding,&isolated,&limits).await.unwrap();
+                    let mut invalid=request(4096);
+                    let code=match mode {
+                        "cancelled"=>{invalid.cancellation.cancel();FailureCode::Cancelled},
+                        "timeout"=>{invalid.timeout_ms=0;FailureCode::Profile},
+                        "depth"=>{invalid.response_limits.max_depth=129;FailureCode::Profile},
+                        _=>{invalid.max_response_bytes=1;FailureCode::Input},
+                    };
+                    let outcome=preflight.invoke(invalid).await;
+                    assert_eq!(outcome.delivery,McpDelivery::NotSent,"{mode}");
+                    assert_eq!(outcome.result.unwrap_err().code(),code,"{mode}");
+                    let rejected=preflight.invoke(request(4096)).await;
+                    assert_eq!(rejected.delivery,McpDelivery::NotSent);
+                    assert_eq!(rejected.result.unwrap_err().code(),FailureCode::McpTransport);
+                    preflight.close().await.unwrap();
+                }
+                let outcome=connection.invoke(request(4096)).await;
+                assert_eq!(outcome.delivery,McpDelivery::ResponseReceived);
+                assert!(outcome.result.is_ok());
+                assert!(!format!("{outcome:?}").contains("private-payload"));
+                connection.close().await.unwrap();
+                let rejected=connection.invoke(request(4096)).await;
+                assert_eq!(rejected.delivery,McpDelivery::NotSent);
+                assert_eq!(rejected.result.unwrap_err().code(),FailureCode::McpTransport);
+            }
+            adapter.shutdown().await.unwrap();
+        }
     });
 }
 fn initialize() -> &'static str {
@@ -255,6 +337,51 @@ fn native_task_required_tools_are_rejected_during_discovery() {
     });
 }
 
+#[test]
+fn discovery_rejects_malformed_identity_capabilities_and_inventory_before_tool_dispatch() {
+    actix::System::new().block_on(async {
+        let init_cases=[
+            (r#"{}"#,FailureCode::McpProtocol,false),
+            (r#"{"protocolVersion":"old","serverInfo":{"name":"fixture","version":"1"},"capabilities":{"tools":{}}}"#,FailureCode::McpIdentity,false),
+            (r#"{"protocolVersion":1,"serverInfo":{"name":"fixture","version":"1"},"capabilities":{}}"#,FailureCode::McpProtocol,false),
+            (r#"{"protocolVersion":"2025-11-25","serverInfo":[],"capabilities":{}}"#,FailureCode::McpProtocol,false),
+            (r#"{"protocolVersion":"2025-11-25","serverInfo":{"name":"fixture","version":1},"capabilities":{}}"#,FailureCode::McpProtocol,false),
+            (r#"{"protocolVersion":"2025-11-25","serverInfo":{"name":"fixture","version":"1"},"capabilities":null}"#,FailureCode::McpProtocol,false),
+            (r#"{"protocolVersion":"2025-11-25","serverInfo":{"name":"fixture","version":"1"},"capabilities":{}}"#,FailureCode::McpDescriptor,true),
+        ];
+        for (init,code,notified) in init_cases {
+            let mut steps=vec![HttpStep{method:"initialize",session:None,status:200,result:init.into(),new_session:None}];
+            if notified {steps.push(HttpStep{method:"notifications/initialized",session:None,status:202,result:String::new(),new_session:None});}
+            let (url,peer)=lifecycle_peer(steps);
+            let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Http{url,headers:BTreeMap::new()})]),2000).unwrap();
+            let error=adapter.descriptor(&binding(McpTransport::StreamableHttp),&run_context(),&Limits::default()).await.unwrap_err();
+            assert_eq!(error.code(),code,"{init}");
+            adapter.shutdown().await.unwrap();peer.join().unwrap();
+        }
+        for inventory in ["[]", r#"{"tools":{}}"#, r#"{"tools":[null]}"#, r#"{"tools":[],"nextCursor":0}"#] {
+            let steps=vec![
+                HttpStep{method:"initialize",session:None,status:200,result:initialize().into(),new_session:None},
+                HttpStep{method:"notifications/initialized",session:None,status:202,result:String::new(),new_session:None},
+                HttpStep{method:"tools/list",session:None,status:200,result:inventory.into(),new_session:None},
+            ];
+            let (url,peer)=lifecycle_peer(steps);
+            let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Http{url,headers:BTreeMap::new()})]),2000).unwrap();
+            assert_eq!(adapter.descriptor(&binding(McpTransport::StreamableHttp),&run_context(),&Limits::default()).await.unwrap_err().code(),FailureCode::McpProtocol,"{inventory}");
+            adapter.shutdown().await.unwrap();peer.join().unwrap();
+        }
+        let changed=DESCRIPTOR.strip_suffix('}').unwrap().to_owned()+r#", "description":"live drift"}"#;
+        let steps=vec![
+            HttpStep{method:"initialize",session:None,status:200,result:initialize().into(),new_session:None},
+            HttpStep{method:"notifications/initialized",session:None,status:202,result:String::new(),new_session:None},
+            HttpStep{method:"tools/list",session:None,status:200,result:format!(r#"{{"tools":[{changed}]}}"#),new_session:None},
+        ];
+        let (url,peer)=lifecycle_peer(steps);
+        let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Http{url,headers:BTreeMap::new()})]),2000).unwrap();
+        assert_eq!(adapter.invoke(&binding(McpTransport::StreamableHttp),&run_context(),request(4096)).await.unwrap_err().code(),FailureCode::McpDescriptor);
+        adapter.shutdown().await.unwrap();peer.join().unwrap();
+    });
+}
+
 // A deliberately independent HTTP peer uses raw bytes, so duplicate keys and
 // unsafe numbers reach the adapter without an intermediary JSON parser.
 fn http_peer(result: String, sse: bool) -> (String, std::thread::JoinHandle<()>, Arc<AtomicBool>) {
@@ -362,7 +489,9 @@ fn http_peer(result: String, sse: bool) -> (String, std::thread::JoinHandle<()>,
                         held = Some(socket);
                         continue;
                     }
-                    if result.starts_with("key:") {
+                    if result == "utf8-split" {
+                        UTF8_RESULT.into()
+                    } else if result.starts_with("key:") {
                         RESULT.into()
                     } else {
                         result.clone()
@@ -393,12 +522,18 @@ fn http_peer(result: String, sse: bool) -> (String, std::thread::JoinHandle<()>,
                 let Value::Integer(id) = fields.get("id").unwrap() else {
                     panic!()
                 };
-                let rpc = if index == 4 && result.starts_with("error:") {
+                let rpc = if index == 4 && result.starts_with("wire:") {
+                    result[5..].to_owned()
+                } else if index == 4 && result.starts_with("error:") {
                     format!(r#"{{"jsonrpc":"2.0","id":{id},"error":{}}}"#, &result[6..])
                 } else {
                     format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{content}}}"#)
                 };
-                if sse {
+                if index == 4 && result.starts_with("sse:") {
+                    ("200 OK", "text/event-stream", result[4..].to_owned())
+                } else if index == 4 && result == "bad-mime" {
+                    ("200 OK", "text/plain", rpc)
+                } else if sse {
                     (
                         "200 OK",
                         "text/event-stream",
@@ -408,7 +543,27 @@ fn http_peer(result: String, sse: bool) -> (String, std::thread::JoinHandle<()>,
                     ("200 OK", "application/json", rpc)
                 }
             };
-            http_response(&mut socket, status, mime, &body);
+            if index == 4 && result == "utf8-split" {
+                let split = body.find('é').unwrap() + 1;
+                write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: test-session\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+                socket.write_all(&body.as_bytes()[..split]).unwrap();
+                socket.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+                socket.write_all(&body.as_bytes()[split..]).unwrap();
+            } else if index == 4 && result == "missing-mime" {
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            } else if index == 4 && result == "changed-session" {
+                write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nMcp-Session-Id: forged\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            } else if index == 4 && result == "invalid-utf8" {
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1\r\nConnection: close\r\n\r\n\xff").unwrap();
+            } else {
+                http_response(&mut socket, status, mime, &body);
+            }
             if index == 5 {
                 if side {
                     write!(held.take().unwrap(),"event: message\rdata: {{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{RESULT}}}\r\r").unwrap();
@@ -498,6 +653,21 @@ fn native_protocol_dedup_requires_explicit_compound_binding_support_and_sends_th
             Some(htlk_runtime::mcp::McpDeduplication::Protocol)
         );
         request.idempotency_key = Some(key);
+        assert_eq!(
+            adapter
+                .deduplication(
+                    &binding,
+                    invocation,
+                    &request.params,
+                    &Limits {
+                        max_document_bytes: 1,
+                        ..limits.clone()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+            FailureCode::McpIdentity
+        );
         assert!(
             adapter
                 .invoke(&binding, &run_context(), request)
@@ -516,6 +686,7 @@ fn http_json_and_sse_preserve_frozen_requests_and_validate_raw_ingress() {
         for (response, sse, max, expected) in [
             (RESULT.to_string(), false, 4096, None),
             (RESULT.to_string(), true, 4096, None),
+            ("utf8-split".to_owned(), true, 4096, None),
             (
                 r#"{"content":[],"content":[],"structuredContent":{}}"#.into(),
                 false,
@@ -538,6 +709,7 @@ fn http_json_and_sse_preserve_frozen_requests_and_validate_raw_ingress() {
                 Some(FailureCode::McpProtocol),
             ),
         ] {
+            let split = response == "utf8-split";
             let (url, peer, _) = http_peer(response, sse);
             let adapter = NativeMcpAdapter::new(
                 BTreeMap::from([(
@@ -562,12 +734,51 @@ fn http_json_and_sse_preserve_frozen_requests_and_validate_raw_ingress() {
             } else {
                 assert_eq!(
                     JsonDocument::new(&result.unwrap(), &Limits::default()).unwrap(),
-                    JsonDocument::new(RESULT.as_bytes(), &Limits::default()).unwrap()
+                    JsonDocument::new(
+                        if split {
+                            UTF8_RESULT.as_bytes()
+                        } else {
+                            RESULT.as_bytes()
+                        },
+                        &Limits::default()
+                    )
+                    .unwrap()
                 )
             }
             peer.join().unwrap();
         }
     })
+}
+
+#[test]
+fn hostile_http_framing_and_rpc_envelopes_never_claim_received_completion() {
+    actix::System::new().block_on(async {
+        for response in [
+            "bad-mime".to_owned(), "missing-mime".into(), "changed-session".into(), "invalid-utf8".into(),
+            r#"wire:{"jsonrpc":"1.0","id":4,"result":{}}"#.into(),
+            r#"wire:{"jsonrpc":"2.0","id":5,"result":{}}"#.into(),
+            r#"wire:{"jsonrpc":"2.0","id":4,"result":{},"error":{"code":-1,"message":"ambiguous"}}"#.into(),
+            r#"wire:{"jsonrpc":"2.0","id":4,"error":{"code":"bad","message":"malformed"}}"#.into(),
+            "sse:data: null\n\n".into(),
+            "sse:data: {\n\n".into(),
+            "sse:: keepalive\n\n".into(),
+            format!("sse:{}", ": keepalive\n\n".repeat(1025)),
+        ] {
+            let (url,peer,sent)=http_peer(response.clone(),false);
+            let adapter=NativeMcpAdapter::new(BTreeMap::from([("test".into(),McpEndpoint::Http{url,headers:BTreeMap::new()})]),2000).unwrap();
+            let binding=binding(McpTransport::StreamableHttp);
+            let context=run_context();
+            let limits=Limits::default();
+            let mut connection=adapter.connect(&binding,&context,&limits).await.unwrap();
+            let outcome=connection.invoke(request(65536)).await;
+            assert!(sent.load(Ordering::SeqCst));
+            assert_eq!(outcome.delivery,McpDelivery::PossiblySent,"{response}");
+            assert_eq!(outcome.result.unwrap_err().code(),FailureCode::McpProtocol,"{response}");
+            connection.close().await.unwrap();
+            adapter.shutdown().await.unwrap();
+            peer.join().unwrap();
+        }
+    });
 }
 #[test]
 fn live_http_connection_reports_correlated_errors_and_cancels_the_actual_request() {

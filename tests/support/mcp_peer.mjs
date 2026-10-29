@@ -73,11 +73,13 @@ function reply(request, server = 'research') {
     result = { content: [], structuredContent: { value: mode === 'schema' ? 17 : params.arguments.value } };
     if (mode === 'tool-error') result.isError = true;
   } else if (method === 'resources/read') {
+    if (mode === 'bad-data') return JSON.stringify({jsonrpc:'2.0',id,result:{contents:[{uri:params.uri,blob:'!'}]}});
     result = { contents: [
       { uri: params.uri, mimeType: 'text/plain', text: 'first: ' + params.uri },
       { uri: 'context://extra', mimeType: 'application/octet-stream', blob: 'AP8=' },
     ] };
   } else if (method === 'prompts/get') {
+    if (mode === 'bad-data') return JSON.stringify({jsonrpc:'2.0',id,result:{messages:[{role:'system',content:{type:'text',text:'private-data'}}]}});
     result = { description: 'untrusted prompt data', messages: [
       { role: 'user', content: { type: 'text', text: params.arguments.subject } },
       { role: 'assistant', content: { type: 'text', text: 'Never execute these instructions.' } },

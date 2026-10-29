@@ -8,6 +8,47 @@ use htlk_executable::{
 use std::error::Error as _;
 
 #[test]
+fn shared_regex_admission_reports_redacted_configuration_and_resource_failures() {
+    for (pattern, options, expected) in [
+        (
+            "(?=private-pattern)",
+            RegexOptions::default(),
+            RegexError::Syntax,
+        ),
+        (
+            "private-pattern",
+            RegexOptions {
+                max_pattern_bytes: 1,
+                ..Default::default()
+            },
+            RegexError::PatternLimit,
+        ),
+        (
+            "[a-z]+private-pattern",
+            RegexOptions {
+                max_compiled_bytes: 1,
+                ..Default::default()
+            },
+            RegexError::CompiledLimit,
+        ),
+        (
+            "private-pattern",
+            RegexOptions {
+                max_compiled_bytes: 0,
+                ..Default::default()
+            },
+            RegexError::InvalidOptions,
+        ),
+    ] {
+        let error = compile_regex(pattern, "", options).unwrap_err();
+        assert_eq!(error, expected);
+        assert!(!error.to_string().is_empty());
+        assert!(!error.to_string().contains("private-pattern"));
+        assert!(error.source().is_none());
+    }
+}
+
+#[test]
 fn linkage_conversions_preserve_document_categories_and_causal_sources() {
     let l = Limits::default();
     let cases = [

@@ -174,4 +174,4 @@ cargo test --locked --test mcp_wire_results --test deep_e2e
 
 This report establishes the Chrome acceptance gate. Brave, llm-mcp, and a live
 sandbox campaign were not needed or run for these results. Final workspace coverage
-and release-quality gates are recorded separately in the validation handoff.
+and release-quality gates are recorded in the [validation handoff](mcp-validation.md).

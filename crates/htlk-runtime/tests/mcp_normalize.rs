@@ -83,6 +83,107 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
 }
 
 #[test]
+fn processing_errors_preserve_sources_privacy_and_operational_classification() {
+    use htlk_executable::{McpResultError, cbor};
+    use htlk_runtime::{
+        EvaluationError, ExtractionError as X, ToolNormalizationError as N, failure::FailureCode,
+    };
+    use std::error::Error;
+    let limits = Limits::default();
+    let malformed =
+        JsonDocument::new(br#"{"private-payload":1,"private-payload":2}"#, &limits).unwrap_err();
+    let codec = cbor::decode(&[0xff], &limits).unwrap_err();
+    let extraction = [
+        (
+            X::Protocol(htlk_analyzer::McpValidationError::Json(malformed.clone())),
+            true,
+            FailureCode::McpProtocol,
+        ),
+        (
+            X::Policy(McpResultError::Shape("host policy")),
+            true,
+            FailureCode::Profile,
+        ),
+        (X::from(codec.clone()), true, FailureCode::Budget),
+        (
+            X::Schema(htlk_analyzer::NativeSchemaError::UnknownRoot),
+            true,
+            FailureCode::Profile,
+        ),
+        (X::Json(malformed), true, FailureCode::Budget),
+        (X::SchemaUnavailable, false, FailureCode::Profile),
+        (X::AllocationFailed, false, FailureCode::Budget),
+    ];
+    for (error, wrapped, code) in extraction {
+        assert_eq!(error.source().is_some(), wrapped);
+        assert!(!error.to_string().contains("private-payload"));
+        let error = N::Extraction(error);
+        assert_eq!(error.code(), code);
+        assert!(error.source().is_some());
+        assert!(!error.to_string().contains("private-payload"));
+    }
+    for (error, wrapped, code) in [
+        (N::Binding, false, FailureCode::Profile),
+        (
+            N::Evaluation(EvaluationError::Limit("steps")),
+            true,
+            FailureCode::ExpressionLimit,
+        ),
+        (
+            N::Model(McpResultError::Shape("source span")),
+            true,
+            FailureCode::Invariant,
+        ),
+        (N::Codec(codec), true, FailureCode::Budget),
+    ] {
+        assert_eq!(error.source().is_some(), wrapped);
+        assert_eq!(error.code(), code);
+        assert!(!error.to_string().is_empty());
+    }
+}
+
+#[test]
+fn non_tool_bindings_and_actual_check_limits_cannot_become_schema_mismatches() {
+    let limits = Limits::default();
+    let schema = json(r#"{"type":"object"}"#);
+    let (binding, native) = fixture(Some(&schema), ToolResultPolicy::default(), &[]);
+    let resource = McpBinding::new(
+        binding.server().clone(),
+        binding.descriptor(),
+        McpBindingKind::Resource {
+            uri: "context://fixture".into(),
+        },
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        normalize_mcp_tool_result(
+            &json(r#"{"content":[]}"#),
+            &resource,
+            &native,
+            &limits,
+            &evaluator()
+        )
+        .unwrap_err(),
+        htlk_runtime::ToolNormalizationError::Binding
+    );
+    let mut tight = evaluator();
+    tight.max_steps = 1;
+    let error = normalize_mcp_tool_result(
+        &json(r#"{"content":[],"structuredContent":{"nested":{"a":1}}}"#),
+        &binding,
+        &native,
+        &limits,
+        &tight,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.code(),
+        htlk_runtime::failure::FailureCode::ExpressionLimit
+    );
+}
+
+#[test]
 fn text_recovery_does_not_establish_declared_compliance_and_report_is_explicit() {
     let output =
         json(r#"{"type":"object","properties":{"price":{"type":"number"}},"required":["price"]}"#);
@@ -174,8 +275,9 @@ fn observe_grants_no_refined_type_and_enforce_or_application_checks_reject_misma
             &evaluator()
         )
         .unwrap()
-        .failure(),
-        Some(F::InferredSchema)
+        .failure()
+        .map(F::code),
+        Some(htlk_runtime::failure::FailureCode::InferredSchema)
     );
     policy.inferred_schema.as_mut().unwrap().mode = InferredSchemaPolicy::Observe;
     policy.application_schema = Some(schema.digest());
@@ -314,4 +416,34 @@ fn required_extraction_exhaustion_is_a_budget_failure_not_a_retryable_schema_mis
     );
     assert_eq!(result.extraction().exhausted_limit(), Some("work"));
     assert!(result.extraction().data().is_none());
+    let schema = json(r#"{"type":"null"}"#);
+    for mode in [InferredSchemaPolicy::Observe, InferredSchemaPolicy::Enforce] {
+        let mut policy = ToolResultPolicy {
+            inferred_schema: Some(AdoptedInference {
+                schema: schema.digest(),
+                evidence: Digest::from_bytes([9; 32]),
+                mode,
+            }),
+            ..Default::default()
+        };
+        policy.extraction.limits.work = 1;
+        let (binding, native) = fixture(None, policy, std::slice::from_ref(&schema));
+        let result = normalize_mcp_tool_result(
+            &response,
+            &binding,
+            &native,
+            &Limits::default(),
+            &evaluator(),
+        )
+        .unwrap();
+        assert!(result.extraction().data().is_none());
+        assert_eq!(
+            result.failure(),
+            if mode == InferredSchemaPolicy::Enforce {
+                Some(F::RequiredExtraction)
+            } else {
+                None
+            }
+        );
+    }
 }
