@@ -4,6 +4,11 @@ Authority: runtime §§7, 11, 13–14. Configure an `Arc<dyn McpAdapter>` with
 `Runtime::with_mcp` and launch `ExecutionEngine` to execute compiler-pinned calls,
 resource reads, URI-template reads and prompt retrievals.
 
+Every tool produces one `McpToolResult` envelope under a frozen host-selected
+policy. [Protected evidence and passive inference](mcp-evidence.md) describes
+durable normalization decisions, authorized error/candidate inspection, and
+schema proposals from actual recorded invocations without extra tool calls.
+
 ## Trusted transport configuration
 
 `NativeMcpAdapter` routes deployment IDs to operator-supplied `McpEndpoint::Stdio`

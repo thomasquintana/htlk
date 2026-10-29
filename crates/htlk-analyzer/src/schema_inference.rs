@@ -102,7 +102,8 @@ pub struct SampleObservation {
     pub complete: bool,
     /// The observation was truncated.
     pub truncated: bool,
-    /// The observation or effect outcome is uncertain.
+    /// The source JSON observation itself is uncertain. External effect outcome
+    /// uncertainty is retained separately in source evidence and grants no replay.
     pub uncertain: bool,
 }
 /// Bounded operator/host-selected sample. This record grants no artifact access.

@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add bounded structural schema inference from explicit identified samples, with
   presence observations, protected-value digests, separate error sampling, immutable
   revisions and schema differences for deliberate adoption.
+- Persist protected tool normalization decisions before output acceptance and add
+  bounded authorized original/extracted evidence inspection. Add passive inference
+  from genuine recorded MCP producers with source labels/provenance and separate
+  effect uncertainty, without provider recall or automatic schema adoption.
 - Add trusted run/principal/fence/lifetime context to MCP adapter methods, dedicated
   native transport ownership, per-attempt session leases and acknowledged shutdown.
 - Add stateful stdio/HTTP/SSE browser and sandbox capability sequences, isolated

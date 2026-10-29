@@ -215,7 +215,7 @@ fn reopened_response_recorded_checkpoint_finishes_with_no_mcp_adapter_and_matche
         let recovered=Arc::new(Runtime::new(reopened.clone(),registry,Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock));
         let engine=ExecutionEngine::launch(recovered.clone(),config).unwrap();let view=terminal(&recovered,&caller,&run.run_id).await;assert_eq!(view.header.status,RunStatus::Succeeded);assert_eq!(adapter.sent.load(Ordering::SeqCst),1);assert!(view.header.fence>lease.fence());
         let entries=reopened.journal(&run.run_id,0,100).await.unwrap();let mut replay=ReplayState::begin(&entries[0],&Limits::default()).unwrap();for entry in &entries[1..]{replay.apply(entry,&Limits::default()).unwrap();}assert_eq!(replay.header(),&view.header);
-        for family in [RecordFamily::Scope,RecordFamily::Invocation,RecordFamily::Artifact,RecordFamily::Usage,RecordFamily::Reservation,RecordFamily::Attempt,RecordFamily::Response,RecordFamily::Guard,RecordFamily::Binding]{for record in reopened.records(&run.run_id,family,None,100).await.unwrap(){assert_eq!(replay.record(&record.key),Some(&record));}}
+        for family in [RecordFamily::Scope,RecordFamily::Invocation,RecordFamily::Artifact,RecordFamily::Usage,RecordFamily::Reservation,RecordFamily::Attempt,RecordFamily::Response,RecordFamily::Guard,RecordFamily::Binding,RecordFamily::Observation]{for record in reopened.records(&run.run_id,family,None,100).await.unwrap(){assert_eq!(replay.record(&record.key),Some(&record));}}
         engine.shutdown().await.unwrap();reopened.close().await.unwrap();std::fs::remove_file(&path).unwrap();
     })
 }
@@ -303,6 +303,7 @@ fn recorded_mcp_checkpoint_corruption_cannot_change_the_frozen_request_or_publis
             (false,"owner_fence",Value::Integer(0)),(false,"owner_fence",Value::Integer(i64::MAX)),
             (false,"number",Value::Integer(2)),(false,"deduplication",Value::Text("forged".into())),
             (false,"protocol_key",Value::Text("forged".into())),(false,"encoded_request",Value::Null),
+            (false,"result_policy",Value::Null),(false,"normalization",bad.clone()),
             (false,"encoded_request",Value::Bytes(b"{}".to_vec())),(false,"dispatch_state",Value::Text("prepared".into())),
             (true,"delivery",Value::Text("not_sent".into())),(true,"delivery",Value::Text("unknown".into())),
             (true,"raw_digest",bad),(true,"raw",Value::Null),
@@ -316,8 +317,23 @@ fn recorded_mcp_checkpoint_corruption_cannot_change_the_frozen_request_or_publis
             engine.shutdown().await.unwrap();clock.0.store(1200,Ordering::SeqCst);let lease=store.acquire(&run.run_id,"checkpoint".into(),1200,1300).await.unwrap();let attempt=store.records(&run.run_id,RecordFamily::Attempt,None,100).await.unwrap().pop().unwrap();
             let mut attempt_payload=change(&attempt.payload,[("dispatch_state",Value::Text("response_recorded".into()))]);
             let mut response=object([("raw",Value::Bytes(RESPONSE.to_vec())),("raw_digest",Value::Text(htlk_executable::digest::hash_bytes(RESPONSE).to_string())),("delivery",Value::Text("response_received".into())),("influence_labels",SecurityLabels::default().to_value(&Limits::default()).unwrap())]);
-            if response_field{response=change(&response,[(field,value)]);}else{attempt_payload=change(&attempt_payload,[(field,value)]);}
+            let normalization_corruption = value.clone();
+            if response_field{response=change(&response,[(field,value)]);}else if field!="normalization"{attempt_payload=change(&attempt_payload,[(field,value)]);}
             let mut writes=vec![update(&attempt,attempt_payload,true),RecordWrite{key:RecordKey{family:RecordFamily::Response,id:attempt.key.id.clone()},expected_revision:None,final_record:true,payload:response}];
+            if field == "normalization" {
+                let Value::Map(attempt_fields) = &attempt.payload else { panic!() };
+                let binding = graph.canonical_document.fields().bindings.keys().next().unwrap();
+                writes.push(RecordWrite { key: RecordKey { family: RecordFamily::Observation, id: format!("{}:normalization", attempt.key.id) },
+                    expected_revision: None, final_record: true, payload: object([
+                        ("category", Value::Text("mcp_normalization".into())),
+                        ("invocation_id", attempt_fields.get("invocation_id").unwrap().clone()),
+                        ("attempt_id", Value::Text(attempt.key.id.clone())),
+                        ("canonical_path", Value::Text(format!("/bindings/{binding}"))),
+                        ("normalization_digest", normalization_corruption),
+                        ("normalization", object([])), ("failure_code", Value::Null),
+                        ("influence_labels", SecurityLabels::default().to_value(&Limits::default()).unwrap()),
+                    ]) });
+            }
             for reservation in store.records(&run.run_id,RecordFamily::Reservation,None,100).await.unwrap(){writes.push(update(&reservation,change(&reservation.payload,[("state",Value::Text("released".into()))]),true));}
             for usage in store.records(&run.run_id,RecordFamily::Usage,None,100).await.unwrap(){writes.push(update(&usage,change(&usage.payload,[("concurrency_reserved",Value::Integer(0))]),false));}
             store.commit(&lease,transaction(writes,1200)).await.unwrap();adapter.release.store(true,Ordering::SeqCst);clock.0.store(1400,Ordering::SeqCst);

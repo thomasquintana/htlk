@@ -37,6 +37,13 @@ core contribution and envelope fingerprint; schema/regex/URI identities and the
 empty graph/policy are unchanged. Tests verify that versions 1–6 reject without
 adding tables or changing original run/journal authority.
 
+Protected normalization/evidence and passive sampling add execution/mcp_evidence.rs
+and execution/mcp_samples.rs to both explicit core manifests. The analyzer's
+observation-uncertainty documentation also changes its source contribution. All
+four source-based profile identities refresh; graph/policy records are unchanged.
+Recovery tests now retain and verify immutable normalization observations before
+successful artifact publication, including through real worker process death.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

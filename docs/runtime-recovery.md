@@ -21,7 +21,12 @@ producer-slot index rows are rebuilt transactionally from canonical metadata; an
 index is never used as proof that an output was accepted. Missing/corrupt retained
 bytes and invalid metadata fail recovery; explicit tombstones remain distinguishable.
 
-Attempts retain frozen encoded parameters, one-based IDs and delivery state. Waits
+Attempts retain frozen encoded parameters, result policies, one-based IDs and
+delivery state. Tool normalization decisions are immutable protected observations
+recorded before publication. Recovery reconstructs and checks their pinned
+decisions without recalling the provider; recorded operational failures do not
+become retries or silently change into success. See [MCP evidence](mcp-evidence.md).
+Waits
 retain invocation/generation identities and deadlines. Usage must account for every
 outstanding reservation, including ancestry adopted by extension. Rebuilding derived
 indexes does not replace accepted records or append fabricated execution decisions.

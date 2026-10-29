@@ -641,6 +641,8 @@ pub enum RuntimeError {
     Artifact(Box<ArtifactError>),
     /// Protected tool normalization processing failed independently of contract mismatch.
     ToolNormalization(Box<crate::ToolNormalizationError>),
+    /// Authorized passive inference failed without dispatching or producing a revision.
+    Inference(Box<htlk_analyzer::InferenceError>),
 }
 impl RuntimeError {
     pub(crate) fn failure(code: FailureCode) -> Self {
@@ -655,6 +657,15 @@ impl RuntimeError {
             Self::Record(_) => FailureCode::Input,
             Self::Artifact(error) => error.code(FailureBoundary::Input),
             Self::ToolNormalization(error) => error.code(),
+            Self::Inference(error) => match error.as_ref() {
+                htlk_analyzer::InferenceError::Limit { .. }
+                | htlk_analyzer::InferenceError::AllocationFailed => FailureCode::Budget,
+                htlk_analyzer::InferenceError::Json(
+                    htlk_executable::JsonError::LimitExceeded { .. }
+                    | htlk_executable::JsonError::AllocationFailed,
+                ) => FailureCode::Budget,
+                _ => FailureCode::Input,
+            },
             Self::Verification(error) => match error.as_ref() {
                 ExecutableVerificationError::Envelope(
                     htlk_executable::EnvelopeError::FingerprintMismatch,
@@ -688,6 +699,7 @@ impl std::error::Error for RuntimeError {
             Self::Record(e) => Some(e),
             Self::Artifact(e) => Some(e.as_ref()),
             Self::ToolNormalization(e) => Some(e.as_ref()),
+            Self::Inference(e) => Some(e.as_ref()),
         }
     }
 }
@@ -724,5 +736,10 @@ impl From<ArtifactError> for RuntimeError {
 impl From<crate::ToolNormalizationError> for RuntimeError {
     fn from(error: crate::ToolNormalizationError) -> Self {
         Self::ToolNormalization(Box::new(error))
+    }
+}
+impl From<htlk_analyzer::InferenceError> for RuntimeError {
+    fn from(error: htlk_analyzer::InferenceError) -> Self {
+        Self::Inference(Box::new(error))
     }
 }

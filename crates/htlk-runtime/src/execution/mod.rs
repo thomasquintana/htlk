@@ -7,6 +7,10 @@ pub use extension::{CloseWait, ExtensionReceipt, ExtensionRequest};
 mod host;
 mod inspection;
 mod mcp;
+mod mcp_evidence;
+pub use mcp_evidence::McpEvidenceView;
+mod mcp_samples;
+pub use mcp_samples::{McpInferenceSelection, ProtectedInferenceRevision};
 mod recovery;
 pub use inspection::{
     AttemptView, DecisionView, GraphView, HistoryEntry, HistoryPage, NodeView, RunView, ScopeView,

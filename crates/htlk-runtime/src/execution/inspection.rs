@@ -634,10 +634,9 @@ impl Runtime {
             .into_iter()
             .map(|a| {
                 let response = responses.iter().find(|r| r.key.id == a.key.id);
-                let decision = observations.iter().find(|r| {
-                    map(&r.payload).ok().and_then(|m| m.get("attempt_id"))
-                        == Some(&Value::Text(a.key.id.clone()))
-                });
+                let decision = observations
+                    .iter()
+                    .find(|r| r.key.id == format!("{}:decision", a.key.id));
                 Ok(AttemptView {
                     validation: if let Some(decision) = decision {
                         optional_text(&decision.payload, "decision")?

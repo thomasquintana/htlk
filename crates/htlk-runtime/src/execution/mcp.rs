@@ -180,9 +180,40 @@ async fn operate_inner(
                 {
                     return Err(RuntimeError::failure(FailureCode::Digest));
                 }
-                let result = match normalize(runtime, scope, binding, raw, &attempt.payload).await {
-                    Ok(result) => result,
-                    Err(error) => {
+                let result = if matches!(binding.kind(), McpBindingKind::Tool { .. }) {
+                    let attempt_id: AttemptId = attempt.key.id.parse().map_err(|_| err())?;
+                    let evidence_id = super::mcp_evidence::record_id(&attempt.key.id);
+                    let saved = match runtime
+                        .store
+                        .record(
+                            lease.run_id(),
+                            &key(RecordFamily::Observation, &evidence_id),
+                        )
+                        .await
+                    {
+                        Ok(record) => Some(record),
+                        Err(crate::store::StoreError::Missing) => None,
+                        Err(error) => return Err(error.into()),
+                    };
+                    let raw_digest = digest(&response.payload, "raw_digest")?;
+                    if let Some(saved) = &saved
+                        && let Some(code) = super::mcp_evidence::validate_record(
+                            saved,
+                            invocation,
+                            attempt_id,
+                            binding,
+                            raw_digest,
+                            &runtime.config.limits,
+                        )?
+                    {
+                        return fail_attempt(runtime, lease, node, record, &attempt, code, &policy)
+                            .await;
+                    }
+                    let assessed =
+                        super::mcp_evidence::assess(runtime, &scope.executable, binding, raw);
+                    if saved.is_some()
+                        && let Err(error) = &assessed
+                    {
                         return fail_attempt(
                             runtime,
                             lease,
@@ -193,6 +224,87 @@ async fn operate_inner(
                             &policy,
                         )
                         .await;
+                    }
+                    let evidence = super::mcp_evidence::record_value(
+                        (invocation, attempt_id),
+                        binding,
+                        raw_digest,
+                        assessed.as_ref(),
+                        delivery,
+                        &labels(&record.payload, &runtime.config.limits)?,
+                        &runtime.config.limits,
+                    )?;
+                    if let Some(saved) = &saved {
+                        if field(&saved.payload, "normalization_digest")?
+                            != field(&evidence, "normalization_digest")?
+                        {
+                            return Err(RuntimeError::failure(FailureCode::Digest));
+                        }
+                    } else {
+                        step::commit(
+                            runtime,
+                            lease,
+                            format!("normalize:{attempt_id}"),
+                            vec![insert(
+                                RecordFamily::Observation,
+                                evidence_id,
+                                evidence,
+                                true,
+                            )],
+                            None,
+                        )
+                        .await?;
+                        return Ok(true);
+                    }
+                    match assessed {
+                        Ok(result) => {
+                            if let Some(failure) = result.failure() {
+                                return fail_attempt(
+                                    runtime,
+                                    lease,
+                                    node,
+                                    record,
+                                    &attempt,
+                                    failure.code(),
+                                    &policy,
+                                )
+                                .await;
+                            }
+                            result
+                                .envelope()
+                                .to_value(&runtime.config.limits)
+                                .map_err(|error| {
+                                    RuntimeError::from(crate::ToolNormalizationError::Model(error))
+                                })?
+                        }
+                        Err(error) => {
+                            return fail_attempt(
+                                runtime,
+                                lease,
+                                node,
+                                record,
+                                &attempt,
+                                error.code(),
+                                &policy,
+                            )
+                            .await;
+                        }
+                    }
+                } else {
+                    match normalize(runtime, scope, binding, raw, &attempt.payload).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            return fail_attempt(
+                                runtime,
+                                lease,
+                                node,
+                                record,
+                                &attempt,
+                                error.code(),
+                                &policy,
+                            )
+                            .await;
+                        }
                     }
                 };
                 let proposed = object([(
@@ -856,22 +968,7 @@ async fn normalize(
     let document = JsonDocument::new(raw, &runtime.config.limits)
         .map_err(|_| RuntimeError::failure(FailureCode::McpProtocol))?;
     match binding.kind() {
-        McpBindingKind::Tool { .. } => {
-            let result = crate::normalize_mcp_tool_result(
-                &document,
-                binding,
-                scope.executable.schemas(),
-                &runtime.config.limits,
-                &scope.executable.policy().fields().evaluator_limits,
-            )?;
-            if let Some(failure) = result.failure() {
-                return Err(RuntimeError::failure(failure.code()));
-            }
-            result
-                .envelope()
-                .to_value(&runtime.config.limits)
-                .map_err(|error| crate::ToolNormalizationError::Model(error).into())
-        }
+        McpBindingKind::Tool { .. } => Err(err()),
         McpBindingKind::Prompt { .. } => {
             crate::validate_mcp_prompt_result(&document, &runtime.config.limits)
                 .map_err(|_| RuntimeError::failure(FailureCode::McpProtocol))?;
