@@ -18,6 +18,7 @@ mod native_schema;
 mod regex;
 mod schema_catalog;
 mod schema_hints;
+mod schema_inference;
 mod schema_locations;
 mod schema_projection;
 mod schema_resources;
@@ -47,6 +48,11 @@ pub use native_schema::{
 pub use regex::{RegexError, RegexOptions, validate_regex};
 pub use schema_catalog::{
     ResolvedSchema, SchemaCatalog, SchemaClosure, SchemaReference, SchemaReferenceKind,
+};
+pub use schema_inference::{
+    InferenceContext, InferenceError, InferenceLimits, InferencePolicy, InferenceRevision,
+    InferenceSample, InferenceSampleKind, SCHEMA_INFERENCE_PROFILE, SampleObservation,
+    infer_schema,
 };
 pub use schema_locations::{JSON_SCHEMA_DIALECT, SchemaLocationError, SchemaLocations};
 pub use schema_projection::DECLARED_FIELDS;

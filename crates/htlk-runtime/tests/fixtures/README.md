@@ -17,6 +17,12 @@ and URI-template identities. The schema-validator/model contributions, empty
 scope and policy retain their previous identities. The fixed fixture is again
 generated deliberately, not rewritten by tests.
 
+Structural inference adds its public model, merge, and wire sources to both
+explicit analyzer contribution lists. This refreshes analyzer/schema-validator,
+core, and regex identities. The model and URI-template contributions and the
+empty scope/policy are unchanged; schema proposals/evidence are not present in
+this empty graph. Dedicated inference tests exercise those records independently.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

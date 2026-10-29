@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resource content, including strict image/audio/embedded-resource base64 checks.
 - Add deterministic bounded literal-JSON extraction with UTF-8 source evidence,
   conservative scalar boundaries, explicit selection, ambiguity, and exhaustion.
+- Add bounded structural schema inference from explicit identified samples, with
+  presence observations, protected-value digests, separate error sampling, immutable
+  revisions and schema differences for deliberate adoption.
 - Add trusted run/principal/fence/lifetime context to MCP adapter methods, dedicated
   native transport ownership, per-attempt session leases and acknowledged shutdown.
 - Add stateful stdio/HTTP/SSE browser and sandbox capability sequences, isolated

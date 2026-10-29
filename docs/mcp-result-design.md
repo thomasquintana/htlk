@@ -265,6 +265,37 @@ automatically capture entire private responses. Sanitized samples are explicitly
 identified, with exclusions recorded; redaction must not silently alter inferred
 meaning. Compiler admission never discovers or calls providers.
 
+The dependency-neutral implementation lives in `htlk-analyzer::infer_schema` and
+accepts an explicit bounded slice of `InferenceSample` records. Each sample names
+an immutable source reference, JSON value, exact server/descriptor/extraction-policy
+context, success/completeness/truncation/uncertainty facts, and explicit sanitization
+exclusions. Repeated references must identify identical observations and count
+once; different references to the same value count as separate observations.
+Ordinary and error inference are separate pinned policy selections.
+
+Every successful revision contains a schema and a separate canonical evidence
+document. Evidence embeds the complete policy and its digest, context pins,
+schema digest, eligible/excluded references with value digests/byte counts/status,
+per-position present/total/type counts, aggregate source flags, and explicit
+`complete:true`/`limit_exhausted:null`. Raw sample values are not copied into it.
+Observation paths describe structural merge positions (`/properties/<escaped-key>`
+and `/items`); they are not necessarily pointers into an emitted `anyOf` wrapper.
+Family alternatives have fixed null/boolean/numeric/string/array/object order.
+
+Resource exhaustion returns a typed `InferenceError::Limit` with its allowance
+and selected-sample count, and produces no partially adoptable revision. Hosts
+retain this failure as bounded protected diagnostics. Successful inference with
+excluded incomplete/error observations records the exclusions and source flags;
+it does not silently use those observations. Revision decoding checks closed
+records, schema/policy digests, source counts/order/eligibility and observations.
+It does not authenticate artifacts: binding admission checks context pins and the
+host uses existing authorization/provenance for source selection.
+
+Inference bounds include source-reference/value bytes, structural/ordering visits,
+and conservative cumulative derived allocation before grouping/metadata/path
+construction. Schema and evidence share one output allowance. Revision differences
+are bounded schema paths plus old/new digests and never change either revision.
+
 New observations can generate proposed immutable revisions and bounded diffs.
 Existing executables, including future runs and crash recovery, keep their adopted
 revision. Adopting another revision requires recompilation and a new executable
