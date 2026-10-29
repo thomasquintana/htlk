@@ -111,6 +111,8 @@ pub enum McpValidationError {
     Descriptor,
     /// Prompt result fails its protocol schema.
     PromptResult,
+    /// Tool result fails its protocol schema, independently of declared output data.
+    ToolResult,
     /// Malformed normalized snapshot.
     SnapshotShape,
     /// Snapshot differs from its frozen binding/request.

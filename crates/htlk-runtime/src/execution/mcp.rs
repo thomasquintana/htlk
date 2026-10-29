@@ -845,17 +845,8 @@ async fn normalize(
         .map_err(|_| RuntimeError::failure(FailureCode::McpProtocol))?;
     match binding.kind() {
         McpBindingKind::Tool { output_schema, .. } => {
-            if !htlk_analyzer::mcp_schema_validators()
-                .map_err(|_| err())?
-                .validate(
-                    &format!("{}:CallToolResult", htlk_analyzer::MCP_SCHEMA_URI),
-                    &document,
-                    &runtime.config.limits,
-                )
-                .map_err(|_| err())?
-            {
-                return Err(RuntimeError::failure(FailureCode::McpProtocol));
-            }
+            crate::validate_mcp_tool_result(&document, &runtime.config.limits)
+                .map_err(|_| RuntimeError::failure(FailureCode::McpProtocol))?;
             if map(document.value())?.get("isError") == Some(&Value::Bool(true)) {
                 return Err(RuntimeError::failure(FailureCode::McpToolError));
             }

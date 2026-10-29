@@ -6,6 +6,37 @@ use htlk_executable::{
     digest::Digest,
 };
 
+/// Validates every pinned tool-result content alternative, with or without a schema.
+/// This does not assess `outputSchema`, extract JSON, or turn `isError` into success.
+///
+/// # Errors
+/// Returns malformed protocol shapes, invalid base64, or resource/engine failures.
+pub fn validate_mcp_tool_result(
+    document: &JsonDocument,
+    limits: &Limits,
+) -> Result<(), McpValidationError> {
+    if !mcp_schema_validators()?.validate(
+        &format!("{MCP_SCHEMA_URI}:CallToolResult"),
+        document,
+        limits,
+    )? {
+        return Err(McpValidationError::ToolResult);
+    }
+    let Value::Map(root) = document.value() else {
+        return Err(McpValidationError::ToolResult);
+    };
+    let Some(Value::Array(content)) = root.get("content") else {
+        return Err(McpValidationError::ToolResult);
+    };
+    for block in content {
+        let Value::Map(block) = block else {
+            return Err(McpValidationError::ToolResult);
+        };
+        content_binary(block, limits)?;
+    }
+    Ok(())
+}
+
 /// Validates protocol prompt results, including base64 content under value limits.
 ///
 /// # Errors
@@ -34,22 +65,25 @@ pub fn validate_mcp_prompt_result(
         let Some(Value::Map(content)) = message.get("content") else {
             return Err(McpValidationError::PromptResult);
         };
-        match content.get("type") {
-            Some(Value::Text(kind)) if kind == "image" || kind == "audio" => {
-                if let Some(Value::Text(data)) = content.get("data") {
-                    base64_data(data, limits)?;
-                }
+        content_binary(content, limits)?;
+    }
+    Ok(())
+}
+fn content_binary(content: &Map, limits: &Limits) -> Result<(), McpValidationError> {
+    match content.get("type") {
+        Some(Value::Text(kind)) if kind == "image" || kind == "audio" => {
+            if let Some(Value::Text(data)) = content.get("data") {
+                base64_data(data, limits)?;
             }
-            Some(Value::Text(kind)) if kind == "resource" => {
-                if let Some(Value::Map(resource)) = content.get("resource")
-                    && !matches!(resource.get("text"), Some(Value::Text(_)))
-                    && let Some(Value::Text(data)) = resource.get("blob")
-                {
-                    base64_data(data, limits)?;
-                }
-            }
-            _ => (),
         }
+        Some(Value::Text(kind)) if kind == "resource" => {
+            if let Some(Value::Map(resource)) = content.get("resource")
+                && let Some(Value::Text(data)) = resource.get("blob")
+            {
+                base64_data(data, limits)?;
+            }
+        }
+        _ => (),
     }
     Ok(())
 }

@@ -35,7 +35,9 @@ pub use evaluate::{
     EvaluationFrame, EvaluationMeter, EvaluationOutcome, EvaluationResult, EvaluationUsage,
     EvaluationValue, evaluate, evaluate_condition,
 };
-pub use mcp_protocol::{validate_mcp_prompt_result, validate_resource_snapshot};
+pub use mcp_protocol::{
+    validate_mcp_prompt_result, validate_mcp_tool_result, validate_resource_snapshot,
+};
 pub use native_profile::native_profile;
 pub use native_registry::{
     NativeCallContext, NativeFunction, NativeFunctionImpl, NativeRegistry, NativeRegistryError,

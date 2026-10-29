@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inferred-schema adoption contract for the interoperability redesign.
 - Add canonical MCP result-policy records and the checked `McpToolResult` native
   type, including candidate provenance and absent-versus-null integrity checks.
+- Add shared tool-result protocol admission for text, structured, multimodal, and
+  resource content, including strict image/audio/embedded-resource base64 checks.
 - Add trusted run/principal/fence/lifetime context to MCP adapter methods, dedicated
   native transport ownership, per-attempt session leases and acknowledged shutdown.
 - Add stateful stdio/HTTP/SSE browser and sandbox capability sequences, isolated

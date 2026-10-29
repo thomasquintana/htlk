@@ -165,7 +165,27 @@ fn matches_builtin(
             };
             meter.charge((json.as_bytes().len() as u64).saturating_mul(5))?;
             match htlk_executable::McpToolResult::from_value(json.value(), meter.program_limits()) {
-                Ok(_) => Ok(true),
+                Ok(result) => {
+                    let Value::Map(result) = result.value() else {
+                        return Ok(false);
+                    };
+                    let Some(protocol) = result.get("protocol_result") else {
+                        return Ok(false);
+                    };
+                    let Some(protocol) = json_value(protocol, meter)? else {
+                        return Ok(false);
+                    };
+                    match crate::validate_mcp_tool_result(&protocol, meter.program_limits()) {
+                        Ok(()) => Ok(true),
+                        Err(
+                            McpValidationError::ToolResult | McpValidationError::BinaryEncoding,
+                        ) => Ok(false),
+                        Err(McpValidationError::BinaryLimit) => Err(Error::Limit("binary bytes")),
+                        Err(McpValidationError::Native(error)) => Err(error.into()),
+                        Err(McpValidationError::Codec(error)) => Err(error.into()),
+                        Err(_) => Err(Error::OperandType),
+                    }
+                }
                 Err(htlk_executable::McpResultError::Shape(_)) => Ok(false),
                 Err(htlk_executable::McpResultError::Codec(error)) => Err(error.into()),
                 Err(htlk_executable::McpResultError::Limit(resource)) => {

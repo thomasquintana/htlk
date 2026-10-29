@@ -6,6 +6,11 @@ Adding the built-in's projections and checked native validation also refreshes
 analyzer/runtime source identities. The reviewed generator refreshes the native
 profile and envelope fingerprint; the empty root scope and policy are unchanged.
 
+Shared complete tool-result protocol admission refreshes runtime/analyzer source
+identities again. Its image/audio/resource base64 checks and dedicated ToolResult
+error category change core, regex, and schema-validator identities, while the
+model and URI-template contribution, empty scope, and policy remain unchanged.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

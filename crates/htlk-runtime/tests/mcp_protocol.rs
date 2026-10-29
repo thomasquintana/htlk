@@ -5,7 +5,10 @@ use htlk_executable::cbor as htlk_cbor;
 use htlk_executable::{
     JsonDocument as J, McpBinding, McpBindingKind, McpTransport, ServerIdentity,
 };
-use htlk_runtime::{expand_uri_template, validate_mcp_prompt_result, validate_resource_snapshot};
+use htlk_runtime::{
+    expand_uri_template, validate_mcp_prompt_result, validate_mcp_tool_result,
+    validate_resource_snapshot,
+};
 fn j(s: &str) -> J {
     J::new(s.as_bytes(), &Limits::default()).unwrap()
 }
@@ -44,6 +47,77 @@ fn prompt_results_validate_roles_content_and_binary_encoding() {
             &l
         ),
         Err(E::BinaryEncoding)
+    );
+}
+
+#[test]
+fn tool_protocol_accepts_every_content_kind_without_requiring_structured_data() {
+    let limits = Limits::default();
+    for source in [
+        r#"{"content":[]}"#,
+        r#"{"content":[{"type":"text","text":"Navigation completed."}]}"#,
+        r#"{"content":[{"type":"text","text":"one"},{"type":"text","text":"two"}]}"#,
+        r#"{"content":[],"structuredContent":{"price":25}}"#,
+        r#"{"content":[],"isError":true,"_meta":{"trace":"retained"},"extension":{"original":true}}"#,
+        r#"{"content":[{"type":"image","mimeType":"image/png","data":"AA=="},{"type":"audio","mimeType":"audio/wav","data":"AA=="}]}"#,
+        r#"{"content":[{"type":"resource_link","name":"page","uri":"https://example.test/page"}]}"#,
+        r#"{"content":[{"type":"resource","resource":{"uri":"test://text","text":"original","mimeType":"text/plain"}}]}"#,
+        r#"{"content":[{"type":"resource","resource":{"uri":"test://bytes","blob":"AA==","mimeType":"application/octet-stream"}}]}"#,
+    ] {
+        let document = j(source);
+        let original = document.clone();
+        validate_mcp_tool_result(&document, &limits).unwrap();
+        assert_eq!(document, original);
+    }
+}
+
+#[test]
+fn tool_protocol_rejects_malformed_shapes_and_every_binary_encoding_path() {
+    let limits = Limits::default();
+    for source in [
+        r#"{}"#,
+        r#"[]"#,
+        r#"{"content":null}"#,
+        r#"{"content":[{}]}"#,
+        r#"{"content":[],"isError":"true"}"#,
+        r#"{"content":[],"structuredContent":[]}"#,
+        r#"{"content":[{"type":"text"}]}"#,
+        r#"{"content":[{"type":"image","data":"AA=="}]}"#,
+        r#"{"content":[{"type":"unrecognized","text":"x"}]}"#,
+    ] {
+        assert_eq!(
+            validate_mcp_tool_result(&j(source), &limits),
+            Err(E::ToolResult),
+            "{source}"
+        );
+    }
+    for source in [
+        r#"{"content":[{"type":"image","mimeType":"image/png","data":"invalid!"}]}"#,
+        r#"{"content":[{"type":"audio","mimeType":"audio/wav","data":"AA==trailing"}]}"#,
+        r#"{"content":[{"type":"resource","resource":{"uri":"test://blob","blob":"A==="}}]}"#,
+    ] {
+        assert_eq!(
+            validate_mcp_tool_result(&j(source), &limits),
+            Err(E::BinaryEncoding)
+        );
+    }
+    for source in [
+        r#"{"content":[],"content":[]}"#,
+        r#"{"content":[],"extension":9007199254740993}"#,
+    ] {
+        assert!(J::new(source.as_bytes(), &limits).is_err());
+    }
+    let document =
+        j(r#"{"content":[{"type":"text","text":"a response exceeding a tighter host bound"}]}"#);
+    let tight = Limits {
+        max_document_bytes: 16,
+        ..limits
+    };
+    let error = validate_mcp_tool_result(&document, &tight).unwrap_err();
+    assert_ne!(
+        error,
+        E::ToolResult,
+        "resource exhaustion must remain distinguishable"
     );
 }
 
