@@ -44,6 +44,13 @@ four source-based profile identities refresh; graph/policy records are unchanged
 Recovery tests now retain and verify immutable normalization observations before
 successful artifact publication, including through real worker process death.
 
+The explicitly linked content library has its own source/model implementation
+digest and complete manifest. Its implementation is not an implicit core library
+inventory. Shared compiled-regex access and typed JSON/pointer evaluator causes
+refresh core, regex and analyzer/schema identities; the URI contribution and
+empty graph/policy retain their previous identities. Content-library tests check
+the independently selected complete manifest and real checked native dispatch.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

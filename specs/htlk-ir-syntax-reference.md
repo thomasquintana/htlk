@@ -171,7 +171,7 @@ Every primitive operation produces one output named `value`. A composite node ha
 | Operation | Input declaration | Result |
 |---|---|---|
 | `eval(T, expr)` | Optional `inputs` table in node options, default empty | `value` with declaration T |
-| `call(mcp.tool(server, name))` | Derived `arguments` object constrained by input schema | Validated structured object |
+| `call(mcp.tool(server, name))` | Derived `arguments` object constrained by input schema | `McpToolResult` envelope with optional checked `data` |
 | `read(mcp.resource(server, uri))` | Empty | `McpResourceResult` |
 | `read(mcp.template(server, template))` | Derived `arguments` record of required string variables | `McpResourceResult` |
 | `fetch(mcp.prompt(server, name))` | Derived `arguments` record of string prompt parameters | `McpPromptResult` |

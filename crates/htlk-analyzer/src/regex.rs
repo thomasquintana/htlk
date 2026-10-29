@@ -57,6 +57,18 @@ impl std::error::Error for RegexError {}
 /// # Errors
 /// Returns redacted syntax, configuration or compiler-size failures.
 pub fn validate_regex(pattern: &str, flags: &str, options: RegexOptions) -> Result<(), RegexError> {
+    compile_regex(pattern, flags, options).map(|_| ())
+}
+/// Compiles the exact pinned literal-regex profile for an explicitly metered match.
+/// Compiled state is private host data and never enters executable records.
+///
+/// # Errors
+/// Returns redacted syntax, configuration or compiler-size failures.
+pub fn compile_regex(
+    pattern: &str,
+    flags: &str,
+    options: RegexOptions,
+) -> Result<regex::Regex, RegexError> {
     if options.max_pattern_bytes == 0 || options.max_compiled_bytes == 0 {
         return Err(RegexError::InvalidOptions);
     }
@@ -76,6 +88,5 @@ pub fn validate_regex(pattern: &str, flags: &str, options: RegexOptions) -> Resu
         .map_err(|error| match error {
             regex::Error::CompiledTooBig(_) => RegexError::CompiledLimit,
             _ => RegexError::Syntax,
-        })?;
-    Ok(())
+        })
 }

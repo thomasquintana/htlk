@@ -5,6 +5,7 @@ use htlk::{
         Authorization, HostContext, NativeRegistry, Runtime, RuntimeConfig, RuntimePolicy,
         execution::{ExecutionConfig, ExecutionEngine},
         failure::{FailureCode, RuntimeFailure},
+        link_mcp_content_library,
         mcp::{McpEndpoint, NativeMcpAdapter},
         records::{InputValue, RunStatus, SecurityLabels},
         store::{SqliteStore, StoreConfig},
@@ -85,7 +86,7 @@ fn compiler(limits: &Limits) -> Result<(Compiler, NativeRegistry)> {
                 max_regex_bytes: 4096,
                 max_regex_compiled_bytes: 65536,
                 max_output_bytes: 65536,
-                max_steps: 100000,
+                max_steps: 1_000_000,
             },
             maximum_scope_depth: 32,
             maximum_expanded_nodes: 1000,
@@ -94,11 +95,12 @@ fn compiler(limits: &Limits) -> Result<(Compiler, NativeRegistry)> {
     )?;
     let mut registry = NativeRegistry::new(limits)?;
     let profile = registry.link_policy(&policy)?;
+    let content = link_mcp_content_library(&mut registry, limits)?;
     Ok((
         Compiler::new(CompilerConfig {
             profile,
             policy,
-            libraries: BTreeMap::new(),
+            libraries: BTreeMap::from([(content.implementation_digest(), content)]),
             mcp_result_policies: BTreeMap::new(),
             mcp_result_documents: BTreeMap::new(),
             limits: limits.clone(),

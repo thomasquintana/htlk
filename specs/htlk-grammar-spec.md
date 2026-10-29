@@ -233,6 +233,7 @@ Some storage terms are needed to state type limits precisely. A **byte** is eigh
 | `enum("a", "b")` | One of the listed strings. |
 | `McpResourceResult` | Ordered normalized MCP resource content with provenance. |
 | `McpPromptResult` | Validated MCP prompt result data. |
+| `McpToolResult` | Original tool protocol result, bounded JSON candidates/selection, optional normalized data and independent schema assessments. |
 
 A **URI**, or Uniform Resource Identifier, names material such as a resource; it is not necessarily an address that can be opened on the web. A **timestamp** represents a time. A **snapshot** is the contents accepted from one read, not a continually updating view. **Provenance** records where a value came from. An **artifact** is an accepted value plus separate provenance and access information.
 
@@ -320,7 +321,7 @@ The three protocol operations share one runtime request/validation mechanism:
 
 | Source operation | Inputs | Outputs |
 |---|---|---|
-| `call(mcp.tool("server", "tool"))` | `arguments`: complete object constrained by input schema | `value`: complete structured object constrained by output schema |
+| `call(mcp.tool("server", "tool"))` | `arguments`: complete object constrained by input schema | `value: McpToolResult`; application data is explicitly selected/narrowed |
 | `read(mcp.resource("server", "uri"))` | None | `value: McpResourceResult` |
 | `read(mcp.template("server", "template"))` | `arguments`: object of string template variables | `value: McpResourceResult` |
 | `fetch(mcp.prompt("server", "prompt"))` | `arguments`: object of required/optional string parameters | `value: McpPromptResult` |

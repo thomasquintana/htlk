@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounded authorized original/extracted evidence inspection. Add passive inference
   from genuine recorded MCP producers with source labels/provenance and separate
   effect uncertainty, without provider recall or automatic schema adoption.
+- Add the explicit source-pinned `htlk.mcp-content` pure library with metered
+  original content/data access, candidate selection, strict JSON/pointers, checked
+  narrowing, deterministic joining and unique regex capture. Include exact-manifest
+  printing, consumer examples and first-version rebuild guidance.
 - Add trusted run/principal/fence/lifetime context to MCP adapter methods, dedicated
   native transport ownership, per-attempt session leases and acknowledged shutdown.
 - Add stateful stdio/HTTP/SSE browser and sandbox capability sequences, isolated

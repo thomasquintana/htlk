@@ -14,6 +14,7 @@ pub mod failure;
 pub mod identity;
 pub mod influence;
 pub mod mcp;
+mod mcp_content;
 mod mcp_control;
 mod mcp_extract;
 mod mcp_normalize;
@@ -37,6 +38,7 @@ pub use evaluate::{
     EvaluationFrame, EvaluationMeter, EvaluationOutcome, EvaluationResult, EvaluationUsage,
     EvaluationValue, evaluate, evaluate_condition,
 };
+pub use mcp_content::{link_mcp_content_library, mcp_content_library};
 pub use mcp_extract::{
     ExtractedCandidate, ExtractionDiagnostic, ExtractionError, ExtractionReport, ExtractionSource,
     ExtractionStatus, ExtractionUsage, TextExtractionMethod, extract_mcp_json,

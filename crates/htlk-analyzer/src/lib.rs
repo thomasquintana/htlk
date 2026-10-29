@@ -45,7 +45,7 @@ pub use native_schema::{
     NativeSchemaDiagnostic, NativeSchemaError, NativeSchemaOptions, NativeSchemas,
     SchemaDiagnosticLocation,
 };
-pub use regex::{RegexError, RegexOptions, validate_regex};
+pub use regex::{RegexError, RegexOptions, compile_regex, validate_regex};
 pub use schema_catalog::{
     ResolvedSchema, SchemaCatalog, SchemaClosure, SchemaReference, SchemaReferenceKind,
 };

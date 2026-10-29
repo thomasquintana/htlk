@@ -669,6 +669,13 @@ pub(crate) fn compile_regex(
     flags: &str,
     meter: &mut EvaluationMeter<'_>,
 ) -> Result<(), EvaluationError> {
+    compile_regex_for_match(pattern, flags, meter).map(|_| ())
+}
+pub(crate) fn compile_regex_for_match(
+    pattern: &str,
+    flags: &str,
+    meter: &mut EvaluationMeter<'_>,
+) -> Result<regex::Regex, EvaluationError> {
     if pattern.len() as u64 > meter.policy.max_regex_bytes {
         return Err(EvaluationError::Limit("regex bytes"));
     }
@@ -681,7 +688,7 @@ pub(crate) fn compile_regex(
     // Reserve the configured compiler-size allowance before native work;
     // this deterministic upper-bound charge is independent of caches.
     meter.charge(meter.policy.max_regex_compiled_bytes)?;
-    htlk_analyzer::validate_regex(
+    htlk_analyzer::compile_regex(
         pattern,
         flags,
         htlk_analyzer::RegexOptions {
@@ -692,8 +699,7 @@ pub(crate) fn compile_regex(
     .map_err(|e| match e {
         htlk_analyzer::RegexError::CompiledLimit => EvaluationError::Limit("regex compiled bytes"),
         _ => EvaluationError::Regex,
-    })?;
-    Ok(())
+    })
 }
 #[inline(never)]
 fn sequence(
@@ -1079,6 +1085,10 @@ pub enum EvaluationError {
     Type(crate::TypeError),
     /// Native schema validation failed operationally.
     NativeSchema(crate::NativeSchemaError),
+    /// Strict JSON parsing failed without semantic repair.
+    Json(htlk_executable::JsonError),
+    /// Explicit JSON-pointer access failed without guessing a path.
+    JsonPointer(htlk_executable::JsonPointerError),
     /// A required schema or projection plan is unavailable.
     UnresolvedType,
     /// Codec failure.
@@ -1123,6 +1133,10 @@ impl EvaluationError {
                 "E_EXPRESSION_LIMIT"
             }
             Self::Expression(ExpressionError::LimitExceeded { .. }) => "E_EXPRESSION_LIMIT",
+            Self::Json(htlk_executable::JsonError::LimitExceeded { .. })
+            | Self::JsonPointer(htlk_executable::JsonPointerError::LimitExceeded { .. }) => {
+                "E_EXPRESSION_LIMIT"
+            }
             Self::AbsentOperand => "E_EXPRESSION_ABSENT",
             _ => "E_EXPRESSION",
         }
@@ -1146,6 +1160,16 @@ impl From<crate::TypeError> for EvaluationError {
 impl From<crate::NativeSchemaError> for EvaluationError {
     fn from(e: crate::NativeSchemaError) -> Self {
         Self::NativeSchema(e)
+    }
+}
+impl From<htlk_executable::JsonError> for EvaluationError {
+    fn from(error: htlk_executable::JsonError) -> Self {
+        Self::Json(error)
+    }
+}
+impl From<htlk_executable::JsonPointerError> for EvaluationError {
+    fn from(error: htlk_executable::JsonPointerError) -> Self {
+        Self::JsonPointer(error)
     }
 }
 impl From<crate::ExpressionTypeError> for EvaluationError {
@@ -1172,6 +1196,8 @@ impl std::error::Error for EvaluationError {
             Self::Analysis(e) => Some(e),
             Self::Registry(e) => Some(e.as_ref()),
             Self::NativeSchema(e) => Some(e),
+            Self::Json(e) => Some(e),
+            Self::JsonPointer(e) => Some(e),
             _ => None,
         }
     }

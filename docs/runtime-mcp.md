@@ -8,6 +8,10 @@ Every tool produces one `McpToolResult` envelope under a frozen host-selected
 policy. [Protected evidence and passive inference](mcp-evidence.md) describes
 durable normalization decisions, authorized error/candidate inspection, and
 schema proposals from actual recorded invocations without extra tool calls.
+Use the explicitly linked [metered content library](mcp-content-library.md) for
+original text/content access, explicit candidate selection, strict JSON and checked
+narrowing. [Development rebuild instructions](development-state.md) describe the
+first-version executable/store reset.
 
 ## Trusted transport configuration
 
