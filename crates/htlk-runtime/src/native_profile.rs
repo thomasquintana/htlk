@@ -71,6 +71,7 @@ pub fn native_profile(
         include_bytes!("store_retention.rs"),
         include_bytes!("execution/recovery.rs"),
         include_bytes!("mcp_protocol.rs"),
+        include_bytes!("mcp_extract.rs"),
         include_bytes!("uri_template.rs"),
     ]);
     let regex = EngineIdentity::new(

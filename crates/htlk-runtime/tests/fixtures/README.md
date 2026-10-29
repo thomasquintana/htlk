@@ -11,6 +11,12 @@ identities again. Its image/audio/resource base64 checks and dedicated ToolResul
 error category change core, regex, and schema-validator identities, while the
 model and URI-template contribution, empty scope, and policy remain unchanged.
 
+The bounded extraction implementation adds `mcp_extract.rs` to both explicit
+runtime core manifests. Its source and the manifest update refresh core, regex,
+and URI-template identities. The schema-validator/model contributions, empty
+scope and policy retain their previous identities. The fixed fixture is again
+generated deliberately, not rewritten by tests.
+
 The run-scoped MCP integration refreshes core, regex and URI-template profile
 identities because the native source manifest changes and now includes
 `mcp/native_sessions.rs`. The independent Node checker includes that same source

@@ -15,6 +15,7 @@ pub mod identity;
 pub mod influence;
 pub mod mcp;
 mod mcp_control;
+mod mcp_extract;
 mod mcp_protocol;
 mod native_profile;
 mod native_registry;
@@ -34,6 +35,10 @@ pub use evaluate::{
     ConditionResult, ConditionValue, EvaluationArgument, EvaluationContext, EvaluationError,
     EvaluationFrame, EvaluationMeter, EvaluationOutcome, EvaluationResult, EvaluationUsage,
     EvaluationValue, evaluate, evaluate_condition,
+};
+pub use mcp_extract::{
+    ExtractedCandidate, ExtractionDiagnostic, ExtractionError, ExtractionReport, ExtractionSource,
+    ExtractionStatus, ExtractionUsage, TextExtractionMethod, extract_mcp_json,
 };
 pub use mcp_protocol::{
     validate_mcp_prompt_result, validate_mcp_tool_result, validate_resource_snapshot,

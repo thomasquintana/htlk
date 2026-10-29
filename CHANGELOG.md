@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type, including candidate provenance and absent-versus-null integrity checks.
 - Add shared tool-result protocol admission for text, structured, multimodal, and
   resource content, including strict image/audio/embedded-resource base64 checks.
+- Add deterministic bounded literal-JSON extraction with UTF-8 source evidence,
+  conservative scalar boundaries, explicit selection, ambiguity, and exhaustion.
 - Add trusted run/principal/fence/lifetime context to MCP adapter methods, dedicated
   native transport ownership, per-attempt session leases and acknowledged shutdown.
 - Add stateful stdio/HTTP/SSE browser and sandbox capability sequences, isolated

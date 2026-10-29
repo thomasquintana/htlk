@@ -131,6 +131,19 @@ Every scan byte, parse attempt byte, and retained representation contributes to 
 documented monotonic counter before the corresponding work/reservation. Parsing
 depth cannot exceed the codec's supported depth. Never reset a budget per block.
 
+Profile-1 charges are conservative reservations, not exact process heap telemetry.
+Each attempted parse reserves `64 * input_bytes + 256` allocation bytes and four
+parse work units per byte, plus trimmed-boundary scanning. Each newly retained
+value reserves `64 * JCS_bytes + 1024` allocation bytes and
+`8 * JCS_bytes + 512` output bytes, covering candidate/selected-data copies and
+native versus JSON representation overhead. Additional sources reserve 512
+allocation/256 output bytes. Scanner stack/span entries reserve 32 allocation
+bytes; diagnostics reserve 256 allocation/128 diagnostic bytes per event. The
+report reserves 512 output bytes. Original structured-value conversion is
+preflighted recursively by nodes/text/keys before copying. Fence scanning reserves
+six work units per original byte; span sorting and source searches are charged
+before work. Allowances are cumulative even when temporaries are released.
+
 Discovery order is original structured content, then content blocks by protocol
 index. Inside a text block, attempt its trimmed whole value, then fenced regions
 by byte position, then remaining embedded regions by byte position. Preserve
