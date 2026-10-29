@@ -22,6 +22,10 @@ use htlk_executable::{
 };
 use std::{collections::BTreeMap, sync::Arc};
 
+#[cfg(test)]
+#[path = "step_tests.rs"]
+mod tests;
+
 pub(super) struct ScopeState {
     pub record: StoredRecord,
     pub executable: Arc<crate::VerifiedExecutable<'static>>,
@@ -31,12 +35,26 @@ pub(super) struct ScopeState {
     pub context: HostContext,
     pub nodes: BTreeMap<Identifier, StoredRecord>,
 }
+#[derive(Debug)]
 pub(super) enum Progress {
     Changed,
     Blocked,
     Terminal,
 }
 pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progress, RuntimeError> {
+    tick_observed(
+        runtime,
+        lease,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+async fn tick_observed(
+    runtime: Arc<Runtime>,
+    lease: RunLease,
+    #[cfg(test)] probe: Option<&tests::Probe>,
+) -> Result<Progress, RuntimeError> {
     let header = runtime.store.run_header(lease.run_id()).await?;
     if header.status.is_terminal() {
         return Ok(Progress::Terminal);
@@ -219,8 +237,9 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
             return Ok(Progress::Changed);
         }
     }
-    if runtime.store.run_header(lease.run_id()).await?.sequence != header.sequence {
-        return Ok(Progress::Changed);
+    #[cfg(test)]
+    if let Some(probe) = probe {
+        probe.pause(tests::Stage::BeforeWaitScan).await;
     }
     let mut external = false;
     for wait in super::control::all(&runtime, &lease, RecordFamily::Wait).await? {
@@ -229,6 +248,10 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
             wake_at = wake_at.min(number(&wait.payload, "expires_at")?);
         }
     }
+    #[cfg(test)]
+    if let Some(probe) = probe {
+        probe.pause(tests::Stage::BeforeInvocationScan).await;
+    }
     for invocation in super::control::all(&runtime, &lease, RecordFamily::Invocation).await? {
         if !invocation.final_record
             && matches!(map(&invocation.payload)?.get("retry_at"),Some(Value::Integer(due))if *due>now)
@@ -236,6 +259,16 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
             external = true;
             wake_at = wake_at.min(number(&invocation.payload, "retry_at")?);
         }
+    }
+    #[cfg(test)]
+    if let Some(probe) = probe {
+        probe.pause(tests::Stage::AfterExternalScans).await;
+    }
+    // Scope progress and external work are separate, paginated observations. A
+    // host reply can close the last wait after its invocation was examined, so
+    // validate the sequence only after every read used by the no-progress decision.
+    if runtime.store.run_header(lease.run_id()).await?.sequence != header.sequence {
+        return Ok(Progress::Changed);
     }
     if external {
         let mut observations = runtime.quiescent.lock().map_err(|_| err())?;

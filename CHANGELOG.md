@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Revalidate execution progress after all external-work scans so a concurrently
+  accepted host reply cannot cause a false `E_INVARIANT` run failure. Stable
+  no-progress states still fail the invariant check.
 - Preserve native MCP sessions across operations within each run/server, including
   browser pages and sandbox handles. Expired or ambiguous sessions now fail without
   replacing state or replaying operations.
