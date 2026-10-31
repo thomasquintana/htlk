@@ -28,7 +28,7 @@ fn competing_coordinators_and_duplicate_host_commands_preserve_one_authoritative
             let store=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();let second=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();
             let left=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(e2e::Policy),RuntimeConfig::default()).unwrap());let right=Arc::new(Runtime::new(second.clone(),registry,Arc::new(e2e::Policy),RuntimeConfig::default()).unwrap());
             left.register_graph(&e2e::caller(),&graph.executable_bytes,&[]).await.unwrap();
-            let config=ExecutionConfig{workers,max_runs:3,lease_ms:1000,poll_interval:Duration::from_millis(1)};
+            let config=ExecutionConfig{workers,max_runs:3,lease_ms:1000,poll_interval:Duration::from_millis(1),..Default::default()};
             let engines=[ExecutionEngine::launch(left.clone(),config.clone()).unwrap(),ExecutionEngine::launch(right.clone(),config).unwrap()];
             let mut commands=vec![];
             let seeds=[i64::MIN,-1,0,1,i64::MAX];

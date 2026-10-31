@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add explicit engine run scope and bounded idempotent run attachment. An attached-
+  scope engine starts empty and leaves unrelated saved runs untouched, including
+  ownership, recovery, deadline enforcement and MCP dispatch. Global store
+  supervision remains an explicit hosting mode.
 - Add a durable opt-in live-session example, bounded five-server acceptance
   controllers, offline evidence/accounting audits and a 75-tool results matrix.
 - Expand MCP admission, inference, evidence/recovery and independent transport
