@@ -78,7 +78,7 @@ loop_member = description | inputs | outputs | when | preconditions | postcondit
             | carried | body | "until", "=", expression | "max_iterations", "=", integer ;
 carried = "carried", "=", "{", [ initializer, { ",", initializer }, [ "," ] ], "}" ;
 initializer = identifier, "=", "inputs", ".", identifier ;
-body = "body", "{", nodes, edges, "}" ;
+body = "body", "{", ( nodes, edges | edges, nodes ), "}" ;
 
 expression = disjunction ;
 disjunction = conjunction, { "or", conjunction } ;

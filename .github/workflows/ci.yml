@@ -57,17 +57,17 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Validate documentation links and anchors
+        run: node tools/validate-docs.mjs
+
       - name: Validate specifications
         run: node specs/validate-specs.mjs
 
       - name: Independently validate executable fixtures
         run: node tools/validate-executable-fixtures.mjs
 
-      - name: Test coverage enforcement
-        run: node --test tools/coverage.test.mjs
-
-      - name: Test offline live-controller helpers
-        run: python3 -B -m unittest discover -s tools -p live_tools_test.py -v
+      - name: Test documentation, coverage and discovery helpers
+        run: node --test tools/validate-docs.test.mjs tools/coverage.test.mjs tools/discover-mcp.test.mjs
 
       - name: Check formatting
         run: cargo fmt --all --check

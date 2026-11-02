@@ -40,8 +40,8 @@ MCP catalogs remain the only operation inventories supplied to compilation.
 `MCPCatalogInputs::from_json` parses the complete tools/resources/prompts object,
 rejecting duplicate decoded keys, unknown owned fields, conflicting aliases and
 descriptors, invalid protocol versions, and digest assertion mismatches. Resolution
-uses supplied snapshots exclusively. Unselected protocol-valid tools need not have
-HTLK's callable `outputSchema`.
+uses supplied snapshots exclusively. Both selected and unselected tools may omit
+`outputSchema`; every accepted tool result uses `McpToolResult`.
 
 ## Public operations
 
@@ -62,6 +62,33 @@ and package pin is checked, while unvisited module bodies are not parsed or type
 Imports resolve exported definitions in their defining module. Inspection validates
 the actual target implementation/import closure even for an index-only request;
 it does not additionally compile the bundle entry graph.
+
+For a host that already loaded `bundle` and `catalogs`, inspect an index and then
+only the exports needed for an edit:
+
+```rust
+# use htlk_compiler::{Compiler, SourceBundle, ModuleRef, MCPCatalogInputs, CompilationFailure};
+fn inspect(compiler: &Compiler, bundle: &SourceBundle, catalogs: &MCPCatalogInputs)
+    -> Result<(), CompilationFailure>
+{
+    let module = ModuleRef {
+        package_digest: bundle.entry.package_digest,
+        module_path: "types".into(),
+    };
+    let index = compiler.inspect_module(bundle, &module, &[], catalogs)?;
+    for export in &index.available_exports {
+        println!("{}: {:?}", export.name, export.kind);
+    }
+    let selected = compiler.inspect_module(bundle, &module, &["BriefOutcome".into()], catalogs)?;
+    // The host chooses how to render these typed summaries for a person or agent.
+    println!("{:?}", selected.exports);
+    Ok(())
+}
+```
+
+These names match the repository's modular decision-brief fixture. The typed report
+is not a public serialized JSON DTO or executable authorization. Refresh it when
+source pins, catalogs, or the profile change; compile the actual caller afterward.
 
 ## Output and diagnostics
 

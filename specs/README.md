@@ -1,33 +1,54 @@
-# HTLK IR specification bundle — Draft 0.1
+# HTLK specifications — Draft 0.1
 
-HTLK is the Harness Toolkit. HTLK IR describes tasks as explicit graphs that a compiler checks and a runtime executes. These files specify the language and system; the compiler and runtime implementations live in the repository's component crates.
+These documents define the language and system contracts. For a practical starting
+point, use the [user guide](../docs/user-guide.md).
 
-## Start here
+| Authority | Owns |
+|---|---|
+| [Language reference](htlk-ir-syntax-reference.md) | Source syntax, types, scope, binding, completion, loops, and expression semantics. |
+| [Compiler specification](compiler-spec.md) | Catalogs, source packages/modules, interface reports, static verification, composition, canonical representation, and identity. |
+| [Runtime specification](runtime-spec.md) | Execution, effects, authorization, persistence, recovery, extension, and stable failures. |
+| [MCP result specification](mcp-spec.md) | Result envelopes, extraction, assessments, and schema inference/adoption. |
+| [EBNF](htlk-ir.ebnf) | Machine-readable source grammar, checked against the language reference. |
+| [Executable CDDL](htlk-executable.cddl) | Machine-readable portable record shapes; semantic verification is additionally required. |
 
-- [Modules and source packages](htlk-modules-spec.md): the new compiler design for composing programs across files and package directories, with four numbered diagrams.
-- [Multi-file decision-brief example](examples/modules/README.md): five modules, three packages, exact dependency pins, and a complete source bundle.
-- [User guide](htlk-ir-user-guide.md): learn graph composition through an LLM research, drafting, and review workflow.
-- [Compiler specification](compiler-spec.md): inputs, catalogs, verification, graph composition, and deterministic serialization.
-- [Syntax reference](htlk-ir-syntax-reference.md) and [EBNF](htlk-ir.ebnf): exact source forms and grammar.
-- [Language specification](htlk-grammar-spec.md): meanings and relationships of the language constructs.
-- [Runtime specification](runtime-spec.md) and [executable CDDL](htlk-executable.cddl): execution, recovery, and portable graph records.
-- [Change log](CHANGELOG.md): the unified baseline and migration notes.
+The [worked examples](examples/README.md) include standalone and modular source,
+catalogs, and inputs consumed by the compiler/runtime test suites. Examples and
+tutorials explain the contracts; they do not introduce competing rules. Agent
+repository instructions live in [AGENTS.md](../AGENTS.md).
 
 ## Version baseline
 
-Every HTLK-owned format uses version `0.1`: source, manifests, bundles, interface reports, executable records, catalogs, evaluator core, and runtime journal records. External MCP, JSON Schema, and third-party implementation identities retain their actual versions. Modules are resolved by the compiler; the runtime does not load source files.
+All HTLK-owned formats use `0.1`: source, source manifests/bundles, logical interface
+reports, canonical/executable records, catalogs, evaluator core, and runtime journal
+records. External MCP (`2025-11-25`), JSON Schema (`2020-12`), library versions, and
+third-party implementation identities retain their actual versions. The private
+SQLite schema version is independent of these format labels.
 
-The executable envelope uses `format: "htlk.executable.graph"` and `version: "0.1"`.
-Its fingerprint hashes `UTF8("htlk.executable.graph/0.1\n") || payload` with one LF
-byte in the prefix and exact raw payload bytes. No alternate envelope format,
-version-field alias, or fingerprint formula is supported.
+The executable envelope has exactly `format`, `version`, `fingerprint`, and byte-string
+`payload`. Its format is `htlk.executable.graph`, its version is `0.1`, and its
+fingerprint hashes `UTF8("htlk.executable.graph/0.1\n") || payload` with one LF byte
+and the exact raw payload. Alternate formats, aliases, and formulas are rejected.
 
-Contract fields are `preconditions` and `postconditions`, each containing one Boolean expression. This baseline resets earlier draft version labels and renames contract record keys, which changes affected bytes and content identifiers. Earlier source must be migrated and recompiled; stored executables and runtime history must not simply be relabeled.
+Contract fields are `preconditions` and `postconditions`, each one optional Boolean
+expression. Omission means true. Older `requires`/`ensures` spellings and their error
+codes are not aliases. Earlier draft source must be explicitly updated, package
+snapshots/pins rebuilt, and executables recompiled. Never relabel stored executable
+bytes, fingerprints, or journal history. Matching version labels alone cannot
+establish compatibility; the runtime requires exact implementation/profile selection
+and rejects incompatible private stores.
 
-The separately distributed runtime video is a historical earlier-draft recording. It has not been revised or relabeled and may show previous keywords and versions. These current text specifications are authoritative for the 0.1 baseline.
+## Validation
 
-## Checks
+From the repository root:
 
-With Node.js installed, run `node validate-specs.mjs` from this directory. The checker verifies grammar/example consistency, local links and diagram captions, source package digests, and the split example's correspondence to the single-file tutorial. It does not type-check or execute HTLK programs. Compiler byte equivalence and runtime behavior are exercised by the Rust suites; see the [alignment review](../docs/spec-alignment.md) and [runtime conformance evidence](../docs/runtime-conformance.md).
+```console
+node tools/validate-docs.mjs
+node specs/validate-specs.mjs
+node tools/validate-executable-fixtures.mjs
+```
 
-Earlier version archives are retained separately; this archive contains the current specification and source examples, not the video/media bundle.
+These check Markdown links/anchors, grammar/examples, synchronized module snapshots
+and package digests, and independent executable/hash fixtures. The spec checker is
+not a semantic compiler or full CDDL instance validator. Rust compilation,
+doctests, and runtime scenarios provide separate evidence; see [testing](../docs/testing.md).

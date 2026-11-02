@@ -1,8 +1,9 @@
-# Interactive user guide
+# HTLK user guide
 
 Learn HTLK by running small workflows and experimenting with their inputs. This
 guide starts with the basics of Rust tooling, then walks through six terminal
-lessons backed by HTLK's actual compiler and runtime.
+lessons backed by HTLK's actual compiler and runtime. After the lessons, continue
+with [writing workflows](#writing-workflows) and the worked decision-brief example.
 
 ## 1. Install Rust
 
@@ -271,12 +272,10 @@ cargo run --example interactive_guide --locked -- --help
 
 ## Where to go next
 
-- [HTLK IR user guide](../specs/htlk-ir-user-guide.md): deeper language examples,
-  workflow patterns, and a larger worked example.
+- [Writing workflows](#writing-workflows): language patterns and a larger worked example.
 - [Compiler guide](../crates/htlk-compiler/README.md): standalone source,
   source bundles, diagnostics, module inspection, and graph joins.
-- [Runtime guide](../crates/htlk-runtime/README.md): embedding the runtime and its
-  public execution boundary.
+- [Runtime guide](runtime-guide.md): embedding, execution, and durable state.
 - [IR syntax reference](../specs/htlk-ir-syntax-reference.md): exact syntax and
   available built-in expressions.
 - [Detailed API examples](executable-api.md): executable, compiler, analyzer, and
@@ -301,3 +300,202 @@ cargo run --example interactive_guide --locked -- --help
 | MCP catalog | A supplied snapshot of tool/resource/prompt descriptors used during compilation. |
 | Host policy | Trusted application rules controlling admission, authorization, and protection. |
 | Wait | An addressed request for typed input or an exact-action approval. |
+
+## Writing workflows
+
+Start with the result you need to deliver. Give it a type and acceptance checks,
+then identify the inputs and visible operations needed to produce it. Use tasks
+to group responsibilities with useful public interfaces. Descriptions help readers
+and planning agents understand intent; types, edges, and contracts govern execution.
+
+### A complete first program
+
+This is the same credential-free passthrough graph used by the first lessons:
+
+```htlk
+ir_version = "0.1"
+graph hello {
+    inputs = { message = string }
+    outputs = { message = string }
+    nodes {}
+    edges {
+        edge message { from = inputs.message to = outputs.message }
+    }
+}
+```
+
+The graph declares two ports and connects them. It supplies no initial message:
+your Rust host provides that when starting a run. A compiler checks the source
+and emits executable bytes; registration checks those bytes against the runtime's
+actual configuration; starting a run supplies values; execution produces artifacts.
+The tutorial's [`host.rs`](../examples/interactive_guide/host.rs) implements that
+sequence. For an embedding application, follow the [runtime guide](runtime-guide.md).
+
+### Add a calculation
+
+An edge moves one complete value. To select a field, build an argument object,
+render text, or calculate a condition, add an `eval` node. The expression reads
+the node's own inputs, which need explicit incoming edges.
+
+```htlk
+ir_version = "0.1"
+graph compare {
+    inputs = { left = integer, right = integer }
+    outputs = { greater = boolean }
+    nodes {
+        compare = eval(boolean, inputs.left > inputs.right) {
+            inputs = { left = integer, right = integer }
+        }
+    }
+    edges {
+        edge left { from = inputs.left to = compare.inputs.left }
+        edge right { from = inputs.right to = compare.inputs.right }
+        edge result { from = compare.outputs.value to = outputs.greater }
+    }
+}
+```
+
+`eval(T, expression)` checks that the result fits T; it does not convert it. Native
+integers and floats are distinct. Arithmetic and richer transformations use linked
+pure libraries. HTLK has no infix `+` and does not execute arbitrary scripts.
+
+### Understand tool results before using them
+
+MCP tools are selected from supplied catalogs. Each call receives one complete
+argument object and returns an `McpToolResult`, even for schema-less, text-only,
+or multimodal tools. Its important parts are:
+
+| Part | Meaning |
+|---|---|
+| `protocol_result` | Original admitted protocol content. |
+| `extraction` | Literal JSON candidates and the pinned selection decision. |
+| Optional `data` | Selected application JSON, if selection succeeded. |
+| `validation` | Separate declared, inferred, and application assessments. |
+
+A tool envelope is not its application object. If a review returns an `accepted`
+field, it belongs to selected `data`, not `outputs.value.accepted`. Check presence
+and narrow the JSON to the application type before using it. A selected JSON null
+is present data; missing data is absence. The [MCP guide](mcp-guide.md) shows the
+shipped `htlk.mcp-content` helpers and their real manifest selection.
+
+Tools may omit `outputSchema`. When one is advertised, default enforcement checks
+original `structuredContent`; JSON recovered from prose cannot establish declared
+compliance. `isError: true` fails the invocation even if its text contains usable
+diagnostic JSON. Evidence remains available through authorized inspection.
+
+### Put each check at the right boundary
+
+| Mechanism | Use it for |
+|---|---|
+| Types and schemas | Required representation and fields. |
+| `preconditions` | Whether supplied inputs permit a meaningful attempt. |
+| `postconditions` | Whether proposed results may be accepted. |
+| Node `when` | Whether an operation should run, including its effects. |
+| Edge `when` | Whether one source should supply a destination. |
+| Loop `until` | Whether the current iteration completes successfully. |
+
+Each contract is one Boolean expression; combine checks with `and`, `or`, and
+parentheses. An omitted contract means true. Putting a positive-review requirement
+on the reviewer call would make a negative review fail the node. A revision loop
+usually needs a successful negative review so it can read feedback and try again.
+Put the quality decision in the loop's termination condition instead.
+
+Schemas and persuasive prompts do not prove factual quality. Stronger verification
+requires actual checks: resolve citations, compare evidence, execute generated-code
+tests, or request an independent review through explicit nodes or linked functions.
+
+### Branch, recover, and distinguish absence
+
+Several conditional edges can target the same destination. All their guards settle;
+exactly one true guard selects its source. Two true guards fail with
+`E_BINDING_CONFLICT`. The analyzer recognizes simple complements and distinct
+literal comparisons, but runtime uniqueness is always checked.
+
+A common fallback uses `when = status(@primary) == "failed"`. Status and error
+inspection belongs in allowed guard/contract contexts; an ordinary `eval` cannot
+read arbitrary siblings. Route required data through its own ports. Guard an
+unavailable output with a lazy status test before reading it.
+
+Keep these states distinct:
+
+- Optional absence: no value was supplied; `present` can test it.
+- Present null: an actual value allowed by a nullable type.
+- Pending: a producer has not settled yet.
+- Failure: a selected producer has no ordinary successful output.
+
+`present` does not hide failed producers. A false edge does not suppress its
+producer's effects; use the producer's node guard for that. Scopes settle all
+instantiated children. A failed child can lead to a successful fallback; a required
+unexported effect needs an explicit completion postcondition.
+
+### Study the decision-brief workflow
+
+Open [`decision_brief.htlk`](../specs/examples/decision_brief.htlk), then its
+[catalogs and behavior notes](../specs/examples/README.md). The tools in those
+catalogs are illustrative contracts, with scripted implementations in the tests.
+They are not bundled research/model services.
+
+The program performs these steps:
+
+1. Render two research queries from the input question.
+2. Run two occurrences of the reusable research task.
+3. Combine their checked evidence strings.
+4. Enter a loop with an empty prior draft and feedback.
+5. Draft and review; carry the new draft and feedback into the next iteration.
+6. Publish an accepted brief, or an explicit `needs_attention` outcome after failure.
+
+The loop runs at most three iterations. Acceptance on reviews one, two, and three
+uses 4, 6, and 8 calls respectively. Three negative reviews reach `E_LOOP_LIMIT`
+and the ordinary fallback. A successfully reported `needs_attention` result is a
+runtime success, but it is not an accepted recommendation. Empty input,
+cancellation, or an enclosing deadline can stop the run without fallback output.
+
+Each iteration has fresh values and provenance. Only committed `next` values feed
+the next iteration. Both next values and proposed outputs are checked even on the
+final iteration; a true final `until` succeeds. Retrying an MCP request repeats frozen
+arguments; revising a draft is a new iteration with new arguments. Neither retries
+nor a large call budget replaces the explicit loop bound.
+
+To run the controlled implementation scenarios from the repository root:
+
+```console
+cargo test --test runtime_mcp decision_brief_ --locked
+cargo test --test compiler source_output_is_admitted_under_exact_native_configuration --locked
+```
+
+Install Node.js 24 to run the full workspace suite, which also starts independent
+local MCP peers. See [testing](testing.md) for the complete check commands.
+
+### Reuse tasks and split source files
+
+A task exposes public ports and hides internal scope names. Each `use(task)` creates
+an independent occurrence. Start with the [five-file example](../specs/examples/modules/README.md):
+entry graph, shared type, prompt templates, research task, and refinement task.
+
+Imports select explicitly exported task/type/prompt definitions from exact source
+snapshots. They do not execute code, fetch dependencies, discover services, or share
+mutable state. Your host collects the files into a source bundle. The compiler
+verifies actual definitions, even if an authoring agent saw only generated interfaces.
+
+`Compiler::inspect_module` returns typed Rust export summaries. A host can first
+request an index and then selected summaries, render those for an author or agent,
+and compile the proposed caller against the actual source. See the
+[compiler API](../crates/htlk-compiler/README.md) for a concrete invocation. Reports
+must match current source pins, catalogs, and profile; they are not executable stubs.
+
+### Compose and extend deliberately
+
+Compiler joins combine two checked graphs through public whole ports. Any required
+field extraction or conversion belongs inside an operand. The joined result is a
+new executable containing ordinary task scopes.
+
+Live extension is stricter: existing work and inputs must remain unchanged. Keep
+the run open with a typed planning wait, compile/register an additive composition,
+then install it and close the wait atomically. See the runnable
+[`runtime_workflow`](../examples/runtime_workflow.rs) example and
+[extension guide](runtime-guide.md#extend-a-running-workflow).
+
+For first-result racing, early quorums, or automatic competitor cancellation, use
+an explicit arbiter service or host integration. Ordinary sibling nodes settle
+together. Keep search bounded, isolate effects behind useful task interfaces, and
+make repair and compensation visible in the graph.

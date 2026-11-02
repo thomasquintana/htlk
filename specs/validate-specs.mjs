@@ -8,13 +8,13 @@ import { createHash } from "node:crypto";
 import { sourcePackageDigest, encodeSourceValue } from "./source-package-digest.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const files = ["htlk-grammar-spec.md", "htlk-ir-syntax-reference.md",
-  "compiler-spec.md", "runtime-spec.md", "CHANGELOG.md",
-  "htlk-ir-user-guide.md", "examples/README.md", "htlk-modules-spec.md",
-  "examples/modules/README.md", "README.md"];
+const files = ["htlk-ir-syntax-reference.md", "compiler-spec.md", "runtime-spec.md",
+  "mcp-spec.md", "../docs/user-guide.md", "../docs/mcp-guide.md",
+  "examples/README.md", "examples/modules/README.md", "README.md"];
 const docs = files.map(name => ({ name, text: fs.readFileSync(path.join(root, name), "utf8") }));
 const grammarText = fs.readFileSync(path.join(root, "htlk-ir.ebnf"), "utf8");
-const grammarBlock = docs[1].text.match(/^```ebnf\n([\s\S]*?)^```/m)?.[1];
+const grammarBlock = docs.find(doc => doc.name === "htlk-ir-syntax-reference.md")
+  .text.match(/^```ebnf\n([\s\S]*?)^```/m)?.[1];
 assert.equal(grammarBlock, grammarText, "EBNF file differs from the syntax reference");
 
 function grammarTokens(text) {
@@ -240,11 +240,9 @@ function countEntryGraphs(parser, tokens) {
 let examples = 0;
 let completePrograms = 0;
 let diagrams = 0;
-let guideDiagrams = 0;
-let moduleDiagrams = 0;
-let moduleListings = 0;
 let jsonExamples = 0;
 for (const doc of docs) {
+  let documentDiagrams = 0;
   const fenceLines = doc.text.match(/^```[^\n]*$/gm) ?? [];
   assert.equal(fenceLines.length % 2, 0, doc.name + ": unbalanced fences");
   if (files.slice(0, 4).includes(doc.name)) assert(doc.text.includes("**Status:** Draft 0.1"));
@@ -256,16 +254,11 @@ for (const doc of docs) {
   for (const block of doc.text.matchAll(/^```([^\n]*)\n([\s\S]*?)^```[ \t]*$/gm)) {
     const language = block[1].trim();
     if (language === "mermaid") {
-      const guide = doc.name === "htlk-ir-user-guide.md";
-      const moduleDoc = doc.name === "htlk-modules-spec.md";
-      if (guide) guideDiagrams++; else if (moduleDoc) moduleDiagrams++; else diagrams++;
+      diagrams++;
       const after = doc.text.slice(block.index + block[0].length);
-      const caption = after.match(moduleDoc ?
-        /^\s*\*\*Module diagram (\d+) — ([^\n]+)\*\* ([^\n]+)/ : guide ?
-        /^\s*\*\*Guide diagram (\d+) — ([^\n]+)\*\* ([^\n]+)/ :
-        /^\s*\*\*Diagram (\d+) — ([^\n]+)\*\* ([^\n]+)/);
+      const caption = after.match(/^\s*\*\*Diagram (\d+) — ([^\n]+)\*\* ([^\n]+)/);
       assert(caption, doc.name + ": missing diagram title/description");
-      assert.equal(Number(caption[1]), moduleDoc ? moduleDiagrams : guide ? guideDiagrams : diagrams, doc.name + ": diagram numbering");
+      assert.equal(Number(caption[1]), ++documentDiagrams, doc.name + ": diagram numbering");
     }
     if (language === "json") {
       JSON.parse(block[2]);
@@ -278,12 +271,10 @@ for (const doc of docs) {
     const complete = tokens[0]?.value === "ir_version";
     let accepted;
     if (complete) {
-      const isModuleListing = doc.name === "htlk-modules-spec.md";
-      if (isModuleListing) moduleListings++; else completePrograms++;
+      completePrograms++;
       assert.equal(JSON.parse(tokens[2].value), "0.1", "Wrong example IR version");
       accepted = parser.rule("document", 0).has(tokens.length);
-      if (accepted && !isModuleListing) assert.equal(countEntryGraphs(parser, tokens), 1, "Complete example needs one graph");
-      if (accepted && isModuleListing) assert(countEntryGraphs(parser, tokens) <= 1);
+      if (accepted) assert.equal(countEntryGraphs(parser, tokens), 1, "Complete example needs one graph");
     } else {
       const reached = new Set([0]);
       const work = [0];
@@ -303,25 +294,14 @@ for (const doc of docs) {
   }
 }
 
-// The downloadable program must remain a complete, syntax-valid copy of the
-// guide's worked-example declarations, not an independently drifting sample.
-const guideText = docs.find(doc => doc.name === "htlk-ir-user-guide.md").text;
-const guideBlocks = [...guideText.matchAll(/^```htlk\n([\s\S]*?)^```/gm)].map(m => m[1].trim());
-const partPrefixes = ["type BriefOutcome", "prompt opportunities_query",
-  "task research.find_evidence", "task brief.refine", "graph decision_brief"];
-const exampleParts = partPrefixes.map(prefix => {
-  const matches = guideBlocks.filter(block => block.startsWith(prefix));
-  assert.equal(matches.length, 1, "Missing or duplicated worked-example part " + prefix);
-  return matches[0];
-});
+// The complete worked source is the single authority. Guides link to it instead
+// of duplicating its declarations or depending on prose order for extraction.
 const programText = fs.readFileSync(path.join(root, "examples/decision_brief.htlk"), "utf8");
 const programTokens = sourceTokens(programText);
 const programParser = makeParser(programTokens);
 assert(programParser.rule("document", 0).has(programTokens.length), "Invalid complete example source");
 assert.equal(countEntryGraphs(programParser, programTokens), 1);
 const comparableTokens = text => sourceTokens(text).map(({ kind, value }) => ({ kind, value }));
-assert.deepEqual(comparableTokens(programText),
-  comparableTokens('ir_version = "0.1"\n' + exampleParts.join("\n")), "Guide and complete example differ");
 
 const catalogFixture = JSON.parse(fs.readFileSync(path.join(root, "examples/decision_brief.catalogs.json"), "utf8"));
 const inputFixture = JSON.parse(fs.readFileSync(path.join(root, "examples/decision_brief.inputs.json"), "utf8"));
@@ -350,9 +330,17 @@ assert.deepEqual(Object.keys(inputFixture), ["question"]);
 assert.equal(inputFixture.question.kind, "inline");
 assert.equal(typeof inputFixture.question.value, "string");
 assert(inputFixture.question.value.length > 0);
-const guideInputs = [...guideText.matchAll(/^```json\n([\s\S]*?)^```/gm)]
-  .map(m => JSON.parse(m[1])).find(value => value.question?.kind === "inline");
-assert.deepEqual(guideInputs, inputFixture, "Guide input example differs from fixture");
+
+// Independently pin body ordering/cardinality against the formal grammar.
+for (const source of ["body { nodes {} edges {} }", "body { edges {} nodes {} }"]) {
+  const tokens = sourceTokens(source);
+  assert(makeParser(tokens).rule("body", 0).has(tokens.length), "Body order rejected");
+}
+for (const source of ["body {}", "body { nodes {} }", "body { edges {} }",
+  "body { nodes {} nodes {} edges {} }", "body { edges {} nodes {} edges {} }"]) {
+  const tokens = sourceTokens(source);
+  assert(!makeParser(tokens).rule("body", 0).has(tokens.length), "Invalid body inventory accepted");
+}
 
 // Negative syntax checks ensure the grammar does not accidentally accept old forms.
 for (const invalid of [
@@ -526,6 +514,13 @@ assert.match(executableShape, /fingerprint:\s*digest/);
 assert.match(executableShape, /payload:\s*bstr/);
 assert(cddl.includes('ir_version: "0.1"'), "Canonical document version mismatch");
 const compilerText = docs.find(doc => doc.name === "compiler-spec.md").text;
+const runtimeText = docs.find(doc => doc.name === "runtime-spec.md").text;
+const failureSource = fs.readFileSync(path.join(root, "../crates/htlk-runtime/src/failure.rs"), "utf8");
+const failureCodes = new Set([...failureSource.matchAll(/^\s+\w+ => \("((?:E|MCP)_[A-Z_]+)"/gm)].map(m => m[1]));
+assert(failureCodes.size > 0, "No implementation failure codes found");
+const failureTable = runtimeText.split("## 16. Stable failures")[1].split("## 17.")[0];
+const documentedCodes = new Set([...failureTable.matchAll(/`((?:E|MCP)_[A-Z_]+)`/g)].map(m => m[1]));
+assert.deepEqual([...documentedCodes].sort(), [...failureCodes].sort(), "Stable failure table differs from runtime codes");
 assert(compilerText.includes('format: "htlk.executable.graph",\n    version: "0.1"'),
   "Compiler envelope prose differs from CDDL");
 assert(compilerText.includes('SHA256(UTF8("htlk.executable.graph/0.1\\n") || payload)'),
@@ -565,15 +560,13 @@ console.log(JSON.stringify({
   complete_programs_parsed: completePrograms,
   standalone_programs_parsed: 1,
   specification_diagrams: diagrams,
-  user_guide_diagrams: guideDiagrams,
-  module_diagrams: moduleDiagrams,
-  module_listings_parsed: moduleListings,
   module_files_parsed: moduleRecords.size,
   source_package_digests_checked: Object.keys(bundle.packages).length,
   json_examples_parsed: jsonExamples,
   fixture_tool_references_checked: calledTools.size,
   cddl_rules_reference_checked: declared.size,
   executable_envelope_contract_checked: true,
+  stable_failure_codes_checked: failureCodes.size,
   executable_fingerprint_vectors_checked: 2,
   contract_syntax_regressions: contractSyntaxRegressions,
   lexical_regressions: invalidLexemes.length + validLexemes.length + 2,

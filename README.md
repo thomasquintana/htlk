@@ -5,98 +5,87 @@
 [![Documentation](https://docs.rs/htlk/badge.svg)](https://docs.rs/htlk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-Harness Toolkit (`htlk`) is a Rust workspace for compiling and running
-harnesses. The root crate is a facade over two focused libraries:
+Harness Toolkit (`htlk`) is a Rust toolkit for building workflows with explicit
+steps, typed data connections, and checks on inputs and results. Use it to combine
+pure calculations, MCP tools, reusable tasks, bounded revision loops, and human
+input in a workflow your application can inspect and recover.
 
-- [`htlk-compiler`](https://crates.io/crates/htlk-compiler) compiles HTLK IR and source bundles into executable graphs, inspects module interfaces, and composes canonical graphs.
-- [`htlk-runtime`](https://crates.io/crates/htlk-runtime) executes Draft 0.1 graphs with fenced actors, durable SQLite state, trusted host policy and live MCP servers.
+You write the workflow in HTLK IR. The compiler checks it and produces a portable
+executable graph. Your Rust application supplies authentication, policy, inputs,
+and service connections; the runtime executes the graph and stores durable progress
+in SQLite. A checked graph still needs application-specific verification of its
+real-world results.
 
-Both components share [`htlk-executable`](crates/htlk-executable/README.md) for
-canonical Draft 0.1 records, bounded construction, explicit wire conversions, the public
-`cbor` adapter, canonical JSON, digests and envelopes. They also share
-[`htlk-analyzer`](crates/htlk-analyzer/README.md) for semantic linkage, typing,
-graph verification, offline schema preparation and immutable document-bound results.
-The analyzer depends on the model and on neither compiler nor runtime.
+## Try it
 
-`htlk_runtime::verify_executable` performs exact host-policy/implementation admission and
-recomputes semantic analysis from authoritative canonical bytes. Runtime owns
-evaluation, callback dispatch and actual-value enforcement. The compiler uses the
-same analysis for source lowering and canonical-input checking. Runtime graph
-registration now stores independently admitted immutable bytes under explicit host
-trust policy, with atomic typed run admission and authenticated idempotent receipts.
-The runtime drives pure/task/loop work, bounded stdio/HTTP MCP attempts, durable input
-waits and exact-action approvals, additive compiler-backed extension, checked recovery,
-protected inspection/source metadata and immutable retention tombstones.
+Install [Rust](https://rustup.rs/) and [Git](https://git-scm.com/downloads), then:
 
-Run `cargo run --example runtime_workflow --locked` for a complete compile/register/
-planning-window/join/extension workflow and a separately authenticated approval using
-a scripted pinned tool. It needs no provider credentials.
+```console
+git clone https://github.com/thomasquintana/htlk.git
+cd htlk
+cargo run --example interactive_guide --locked
+```
 
-## Installation
+The six terminal lessons let you compile a graph, run it with your own inputs, add
+a calculation, repair errors, answer a workflow's question, and approve or deny a
+scripted tool call. They use the real compiler/runtime and need no provider
+credentials or external services. The first build downloads dependencies and needs
+your platform's Rust build tools.
+
+Follow the [user guide](docs/user-guide.md) for setup, expected results, source
+editing, troubleshooting, and larger workflow patterns. To check all lessons automatically:
+
+```console
+cargo run --example interactive_guide --locked -- --check
+```
+
+HTLK is a library toolkit; these commands run example host applications from this
+repository. For a complete host workflow with composition, live extension, source
+inspection, and separately authenticated approval:
+
+```console
+cargo run --example runtime_workflow --locked
+```
+
+## Use it in Rust
 
 ```toml
 [dependencies]
 htlk = "0.1.0"
 ```
 
-The facade exposes the component crates as `htlk::compiler` and
-`htlk::runtime`. Applications that only need one layer can depend on its crate
-directly.
+The facade exposes `htlk::compiler` and `htlk::runtime`. Applications that need only
+one layer can depend on its component directly:
 
-## Interactive getting started
+| Crate | Responsibility |
+|---|---|
+| [htlk-compiler](crates/htlk-compiler/README.md) | Source and module compilation, interface inspection, and graph composition. |
+| [htlk-runtime](crates/htlk-runtime/README.md) | Execution, durable state, host policy, MCP connections, and recovery. |
+| [htlk-executable](crates/htlk-executable/README.md) | Canonical model, bounded codecs, digests, and executable envelopes. |
+| [htlk-analyzer](crates/htlk-analyzer/README.md) | Shared linkage, type checking, graph verification, and offline schema analysis. |
 
-New to HTLK or Rust? Follow the [interactive user guide](docs/interactive-guide.md)
-for setup and six hands-on terminal lessons. From a checkout of this repository:
-
-```console
-cargo run --example interactive_guide --locked
-```
-
-Compile a graph, run it with your own inputs, evaluate an expression, repair type
-errors, answer a workflow's question, and approve or deny a scripted MCP tool call.
-The lessons use the real compiler/runtime and need no provider credentials or
-external services. Use `m` for the menu, `r` to retry at a lesson's end, or `q` to quit.
-
-To verify the complete walkthrough automatically:
-
-```console
-cargo run --example interactive_guide --locked -- --check
-```
+The native runtime supports MCP 2025-11-25 over stdio and Streamable HTTP JSON/SSE.
+Tool results preserve text, structured, and multimodal content in a uniform envelope.
+Host policy governs effects and exact-action approvals. External hard token/cost
+budgets require enforcement the native adapter does not currently provide.
 
 ## Documentation
 
-- [Interactive user guide and Rust setup](docs/interactive-guide.md)
-- [Draft 0.1 specifications and IR grammar](specs/README.md)
-- [Compiler API and source package compilation](crates/htlk-compiler/README.md)
-- [Compiler implementation and conformance roadmap](docs/htlk-compiler-roadmap.md)
-- [Canonical executable model and digests](crates/htlk-executable/README.md)
-- [Deterministic CBOR profile and API](crates/htlk-executable/src/cbor/README.md)
-- [Shared semantic analysis](crates/htlk-analyzer/README.md)
-- [Runtime API, execution and supported native boundary](crates/htlk-runtime/README.md)
-- [Runtime conformance evidence](docs/runtime-conformance.md)
-- [MCP interoperability and actual Chrome acceptance](docs/mcp-live-acceptance.md)
-- [Five-server live acceptance: all 75 tools and measured findings](docs/mcp-sibling-acceptance.md)
-- [Specification alignment findings and resolutions](docs/spec-alignment.md)
-- [Inspection, source metadata and host example](docs/runtime-inspection.md)
-- [Detailed cross-crate API reference](docs/executable-api.md)
-- [Executable/verifier completion checklist](docs/htlk-executable-roadmap.md)
-- [CI documentation artifacts and crates.io releases](CONTRIBUTING.md#releases)
+- [User guide](docs/user-guide.md): learn and author workflows.
+- [Runtime guide](docs/runtime-guide.md): embed, operate, inspect, and recover them.
+- [MCP guide](docs/mcp-guide.md): connect services and consume results.
+- [Specifications](specs/README.md): authoritative language and system contracts.
+- [Detailed API examples](docs/executable-api.md): compiler, model, analyzer, and runtime APIs.
+- [Documentation index](docs/README.md): maintainer references and testing.
 
 ## Development
 
-The workspace follows latest stable Rust. Install the configured toolchain and
-run the standard checks:
-
-```console
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-```
-
-See `CONTRIBUTING.md` for contribution and release guidance.
+Install stable Rust and Node.js 24; the integration tests start independent local
+MCP peers. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete validation and
+release workflow, and [testing](docs/testing.md) for coverage and fixture maintenance.
+Changes are summarized in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See the `LICENSE` file.
-Third-party dependency notices are provided in `THIRD_PARTY_LICENSES`.
+Licensed under Apache-2.0. See [LICENSE](./LICENSE) and the dependency notices in
+[THIRD_PARTY_LICENSES](./THIRD_PARTY_LICENSES).

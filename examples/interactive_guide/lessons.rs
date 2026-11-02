@@ -429,7 +429,7 @@ must authenticate that reviewer. Typing an identity into graph data grants no au
             "Typed wait replies provide data. Exact-action approvals authorize a specific action.
 Try r to explore the other decision. For graph joins and live extension, run:
   cargo run --example runtime_workflow --locked
-Next reading: docs/interactive-guide.md#where-to-go-next",
+Next reading: docs/user-guide.md#where-to-go-next",
         )
     }
     .await;

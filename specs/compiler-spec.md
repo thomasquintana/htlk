@@ -1,7 +1,7 @@
 # HTLK Compiler Specification
 
 **Status:** Draft 0.1\
-**Companions:** [Language](htlk-grammar-spec.md) · [Syntax](htlk-ir-syntax-reference.md) · [Runtime](runtime-spec.md) · [Executable schema](htlk-executable.cddl)
+**Companions:** [Language](htlk-ir-syntax-reference.md) · [Runtime](runtime-spec.md) · [MCP results](mcp-spec.md) · [Executable schema](htlk-executable.cddl)
 
 ## 1. Responsibility and compiler boundary
 
@@ -67,7 +67,7 @@ flowchart LR
     Check -.-> Errors["Explain errors to the author"]
 ```
 
-**Diagram 8 — The compiler prepares work; it does not perform it.** The same checking code verifies both text-authored graphs and previously normalized graph documents. The latter skip text parsing, not correctness checks.
+**Diagram 1 — The compiler prepares work; it does not perform it.** The same checking code verifies both text-authored graphs and previously normalized graph documents. The latter skip text parsing, not correctness checks.
 
 A **dependency** means one step needs another's value or final outcome. A **scope** groups steps behind its own public ports. The compiler checks that references resolve, scopes do not access each other's private internals, and no chain of prerequisites circles back within one loop repetition. It also checks that types are compatible or that an actual-value check can enforce the boundary.
 
@@ -112,13 +112,13 @@ The **root** is the entry graph where execution begins. A **reachable closure** 
 
 A **source map** links a normalized record back to the author's text so an error can point to the relevant line or span. A **JSON Pointer** identifies a location in a structured document, such as `/nodes/0/id`; it is not a network address. **UTF-8** is the byte encoding used for source text. A byte offset counts stored bytes from the beginning, which is not always the same as counting displayed characters.
 
-`SourceMapEntry` contains `canonical_path` (an RFC 6901 JSON Pointer into the decoded document), `source`, `start_byte`, `end_byte` (exclusive UTF-8 source offsets), and optional `declaration_name`. `source` distinguishes the standalone string from an exact package/module/source-path location, as defined in [module source locations](htlk-modules-spec.md#7-locations-diagnostics-and-required-tests). Offsets are within that one string or file; canonical-input compilation has an empty source map. `documentation` maps canonical paths to retained author descriptions. These two report fields are **sidecars**—supporting information kept outside the executable—and are not authoritative descriptions of graph behavior. They are data that a host can retain for graph inspection; they are not fields of the executable payload. One canonical scope may have several source-map entries when identical definitions were deduplicated.
+`SourceMapEntry` contains `canonical_path` (an RFC 6901 JSON Pointer into the decoded document), `source`, `start_byte`, `end_byte` (exclusive UTF-8 source offsets), and optional `declaration_name`. `source` distinguishes the standalone string from an exact package/module/source-path location, as defined in [source locations](#source-locations). Offsets are within that one string or file; canonical-input compilation has an empty source map. `documentation` maps canonical paths to retained author descriptions. These two report fields are **sidecars**—supporting information kept outside the executable—and are not authoritative descriptions of graph behavior. They are data that a host can retain for graph inspection; they are not fields of the executable payload. One canonical scope may have several source-map entries when identical definitions were deduplicated.
 
 Passing a canonical document never trusts its IDs, schemas, function signatures, or “already verified” claims. The compiler rechecks them against its linked profile and supplied catalogs. Failure returns no partial executable. Source maps and author descriptions are separate compiler report data.
 
 ### 2.1 Multi-file and package compilation
 
-The [Modules and Source Packages specification](htlk-modules-spec.md) is the normative extension of this compiler contract. It defines the closed `SourceBundle` and manifest records, dependency digest calculation, import/export resolution, and `inspect_module` interface reports. The host collects directories into a finite source snapshot; the compiler resolves only supplied data. It still takes IR plus exactly three MCP catalogs, not a source-discovery service or fourth catalog.
+[Section 11](#11-source-packages-and-module-interfaces) defines source snapshots, dependency digests, module resolution, and interface reports. The host collects directories into a finite source snapshot; the compiler resolves only supplied data. It still takes IR plus exactly three MCP catalogs.
 
 Standalone and multi-file source use the same 0.1 language rules and normalize into a 0.1 canonical document. Every HTLK-owned format version and version label used in hash calculations in this specification is `0.1`. External protocol, schema, and third-party implementation versions retain their actual identities. Source packages, aliases, file locations, and interface reports are erased or kept outside the executable. Within this baseline, moving unchanged work into modules must not change executable bytes when the graph ID, resolved work, catalogs, and profile are unchanged. This is not a compatibility guarantee for bytes produced under earlier drafts: version labels and contract record keys have changed, so migrated source must be recompiled.
 
@@ -237,13 +237,13 @@ The compiler projects schemas conservatively:
 | Alternatives, references, open objects, complex refinements | Preserve the exact schema; expose only facts valid for all possible accepted values. |
 | Unconstrained schema | `json` with boundary checks. |
 
-A callable input and output schema must each accept only object roots. The baseline compiler establishes this when the root has `type: "object"` (including other keywords alongside it), or a reference chain resolves to such a root. Other schema layouts need a root object constraint. This is a protocol admission rule, not a general schema-equivalence proof.
+A callable input schema and its declared output schema, when present, must each accept only object roots. The baseline compiler establishes this when the root has `type: "object"` (including other keywords alongside it), or a reference chain resolves to such a root. Other schema layouts need a root object constraint. This is a protocol admission rule, not a general schema-equivalence proof.
 
 ### 3.2 MCP normalization
 
 This section defines the data shapes HTLK presents after reading MCP messages. **Structured content** is the MCP result's machine-readable object, in contrast to a plain text block intended for display. A **snapshot** is the accepted contents from one resource read, not a live view that changes when the resource changes.
 
-All tool calls have one schema-typed `arguments` input and one native `McpToolResult` `value` output. Bindings preserve optional declared output schemas and pin complete extraction/validation policies. Advertised schemas assess original `structuredContent`; extracted normalized data may have any HTLK JSON root. Explicit application narrowing retains runtime obligations. CompilerConfig supplies trusted `mcp_result_policies` keyed by server/descriptor digests and explicit `mcp_result_documents` for adopted schemas/evidence; source/tool output cannot modify these selections. Canonical input must match the same host selections. See the [result/extraction contract](../docs/mcp-result-design.md).
+All tool calls have one schema-typed `arguments` input and one native `McpToolResult` `value` output. Bindings preserve optional declared output schemas and pin complete extraction/validation policies. Advertised schemas assess original `structuredContent`; extracted normalized data may have any HTLK JSON root. Explicit application narrowing retains runtime obligations. CompilerConfig supplies trusted `mcp_result_policies` keyed by server/descriptor digests and explicit `mcp_result_documents` for adopted schemas/evidence; source/tool output cannot modify these selections. Canonical input must match the same host selections. See the [MCP result specification](mcp-spec.md).
 
 A **fixed read** names one catalog resource directly. A **template read** builds a resource identifier from named variables. **Percent encoding** represents characters in URI components using `%` followed by hexadecimal digits, according to the pinned URI-template rules. A **modifier** is template syntax that changes how a variable is expanded.
 
@@ -345,7 +345,7 @@ flowchart LR
     AA --> A
 ```
 
-**Diagram 9 — A hidden cycle that must be rejected.** The explicit data edges may look acyclic, but each node's admission depends on the other's completion. The compiler rejects the complete dependency cycle even if a short-circuit branch might avoid it at runtime.
+**Diagram 2 — A hidden cycle that must be rejected.** The explicit data edges may look acyclic, but each node's admission depends on the other's completion. The compiler rejects the complete dependency cycle even if a short-circuit branch might avoid it at runtime.
 
 Required invariants:
 
@@ -471,7 +471,7 @@ flowchart TB
     ChildURI -->|"start within child resource"| Item["Document pointer: /$defs/child/$defs/item"]
 ```
 
-**Diagram 10 — A schema URI identifies a resource location, not just bytes.** The document is stored once. A nested `$id` changes where fragment traversal starts; the verifier derives the URI-to-location index from the document rather than treating every URI as the outer root.
+**Diagram 3 — A schema URI identifies a resource location, not just bytes.** The document is stored once. A nested `$id` changes where fragment traversal starts; the verifier derives the URI-to-location index from the document rather than treating every URI as the outer root.
 
 The recommended suffix is `.htlkg`. Use the registered generic media type `application/cbor`. A vendor media type requires a separate registration decision and is not needed for this contract.
 
@@ -565,7 +565,7 @@ flowchart LR
     LS -->|"ordinary boundary edges"| RS
 ```
 
-**Diagram 11 — Composition uses existing scope machinery.** Operand definitions retain their content digests. The only new executable records describe the parent scope and its bindings.
+**Diagram 4 — Composition uses existing scope machinery.** Operand definitions retain their content digests. The only new executable records describe the parent scope and its bindings.
 
 A valid compile-time join may create new dependencies in either direction while remaining acyclic. Live extension is stricter because existing inputs are already frozen. The runtime verifies the append-only installation conditions; the compiler does not make an invalid live migration valid by issuing a certificate.
 
@@ -595,7 +595,7 @@ Diagnostic {
 
 Required error families are `C_SYNTAX`, `C_VERSION`, `C_DUPLICATE`, `C_NAME`, `C_SCOPE`, `C_TYPE`, `C_BINDING`, `C_DEPENDENCY_CYCLE`, `C_UNUSED_NODE`, `C_MCP`, `C_SCHEMA`, `C_LIBRARY`, `C_REGEX`, `C_PROMPT`, `C_LOOP`, `C_JOIN`, `C_POLICY`, and `C_SERIALIZATION`. A possibly overlapping conditional binding group produces `W_CONDITIONAL_WRITERS` unless simple syntactic complements or distinct literal equality tests establish exclusivity. It remains protected by the same runtime reducer.
 
-Module compilation adds `C_SOURCE_BUNDLE`, `C_PACKAGE_PIN`, `C_IMPORT`, `C_IMPORT_CYCLE`, `C_VISIBILITY`, and `C_SOURCE_LIMIT`. Locations and required multi-file equivalence, visibility, stale-interface, and incremental-compilation tests are defined in [module conformance](htlk-modules-spec.md#7-locations-diagnostics-and-required-tests).
+Module compilation adds `C_SOURCE_BUNDLE`, `C_PACKAGE_PIN`, `C_IMPORT`, `C_IMPORT_CYCLE`, `C_VISIBILITY`, and `C_SOURCE_LIMIT`. See [module conformance](#incremental-identity-and-module-conformance) for the additional required cases.
 
 Conformance must cover:
 
@@ -612,3 +612,105 @@ Conformance must cover:
 - Unchanged bytes after comment/declaration-order changes, and changed identity after a semantic edit.
 
 The executable schema and these invariants are the implementation contract. Parser crate, database, queue, UI, and worker topology are implementation choices; none requires an alternate language semantics.
+
+## 11. Source packages and module interfaces
+
+A module is one source file. A source package maps module names to source paths and exactly pinned package dependencies. Import/export visibility is defined in the [language reference](htlk-ir-syntax-reference.md#31-module-imports-and-exports). Importing creates no running work, shared state, initialization, or tool permission. A task use creates an independent ordinary scope occurrence. Source packages do not provide Rust plugins.
+
+### Snapshot records and identity
+
+All fields below are required; unknown fields and duplicate decoded keys fail. `Digest` is `sha256:` plus 64 lowercase hexadecimal digits. Maps use exact case-sensitive keys.
+
+```text
+SourcePackageManifest {
+    manifest_version: "0.1",
+    package_name: qualified_name,
+    package_version: nonempty_string,
+    modules: map(SourcePath),
+    dependencies: map(Digest)
+}
+SourcePackage { manifest: SourcePackageManifest, sources: map(SourceText) }
+ModuleRef { package_digest: Digest, module_path: ModulePath }
+SourceBundle {
+    format: "htlk_source_bundle",
+    format_version: "0.1",
+    entry: ModuleRef,
+    packages: map(SourcePackage)
+}
+```
+
+Module paths contain slash-separated snake_case identifiers. Source paths contain zero or more snake_case directories followed by a snake_case `.htlk` filename. Absolute paths, dot segments, empty segments, backslashes, and alternate spellings fail rather than normalize. Each manifest maps at least one module; source paths are unique and exactly equal the `sources` keys. Each source is UTF-8 without a byte-order mark. README files and other non-source assets are outside the snapshot.
+
+`package_name` is a qualified snake_case name; `package_version` is a nonempty descriptive label, not a version range. Dependencies use snake_case aliases other than `self` and select exact supplied package digests. The bundle contains exactly the entry package and its transitive manifest-dependency closure, without cycles, missing entries, or extras. Each dependency resolves aliases in its own manifest. Distinct exact versions of a named package may coexist if their reached MCP and library requirements remain compatible.
+
+```text
+source_package_digest(package) =
+    "sha256:" + lowercase_hex(SHA256(deterministic_cbor([
+        "htlk.source_package", "0.1", package.manifest, package.sources
+    ])))
+```
+
+Decode JSON with duplicate-key rejection before applying core deterministic CBOR. JSON layout/map order does not affect identity; exact decoded source text, comments, and line endings do. Every bundle package key must equal its recomputed digest. A dependency change requires new parent pins. This domain is distinct from executable record hashing; content identity authenticates no producer.
+
+### Collection and resolution
+
+The host reads `htlk_package.json`, mapped files, and exact dependency snapshots into a bounded bundle. A filesystem collector must reject symlink files or symlink components beneath the selected root, non-regular files, and root escapes. It must capture consistent contents, rereading or failing if files change during collection. The compiler hashes and parses the same supplied snapshot; it performs no filesystem search, network fetch, package-registry access, or build script execution.
+
+Validate every package record, digest, source encoding, and version header. Starting at the selected entry, parse and validate all declarations in its transitive import closure, including private/unused declarations. Unvisited module bodies are not syntax/type checked. The entry has exactly one graph; imported modules have none. Imports resolve exact mapped modules and exact exported names/kinds in their defining module. Direct dependencies alone are visible; there is no wildcard, relative path search, implicit re-export, or shadowing. Import, task-containment, type-alias, and execution-dependency cycles are independently rejected.
+
+Finite frontend ceilings cover source bytes, package/module counts, and dependency/import depth before unbounded allocation/traversal. Exceeding a ceiling fails without a partial executable. The executable retains only the entry graph's reached definition closure. MCP aliases remain catalog aliases even if a module alias has the same spelling; packages cannot override catalogs or remap servers silently.
+
+### Module inspection
+
+```text
+inspect_module(ir: SourceBundle, module: ModuleRef,
+               symbols: list(string), catalogs: MCPCatalogInputs)
+    -> ModuleInspectionSuccess | CompilationFailure
+
+ModuleInspectionSuccess {
+    interface_version: "0.1",
+    module: ModuleRef,
+    profile: Profile,
+    available_exports: list({name: string, kind: "type" | "prompt" | "task"}),
+    exports: list(ExportSummary),
+    diagnostics: list(Diagnostic)
+}
+ExportSummary =
+    {kind: "type", name: string, type: CanonicalType}
+  | {kind: "prompt", name: string,
+     parameters: map(CanonicalType), template_digest: Digest}
+  | {kind: "task", name: string, description: string,
+     inputs: map(Port), outputs: map(Port), scope_digest: Digest,
+     preconditions: CanonicalExpression, postconditions: CanonicalExpression,
+     limits: Limits}
+```
+
+These are logical report shapes; the current Rust API exposes typed report structures rather than a public serialized JSON DTO. Inspection validates the requested module and its import closure before filtering. That module may have zero or one checked graph; graphs are never exports. The bundle entry selects the package closure but is not additionally compiled as an entry graph. Empty `symbols` requests only the complete name/kind index; otherwise names must be unique exact public exports. Both result lists sort by name; unknown/private names fail. No implicit truncation or wildcard expansion occurs.
+
+Types and prompt parameters are resolved, including private aliases. Task description defaults to empty, omitted contracts to true, and omitted local limits to an empty map. Prompt/task bodies are omitted. A completion contract referring to direct-child outcomes is report data, not a predicate the caller can execute without the body. Reports promise neither effect freedom nor success for every type-valid input.
+
+Reports bind the exact `ModuleRef` and profile. A scope digest binds the normalized record/reference structure under its dependency environment; the executable fingerprint additionally binds external schema retrieval and execution-profile context. Hosts regenerate reports when selected source, catalog/schema, or implementation context changes. Compiler APIs resolve actual definitions and do not consume interface reports as executable substitutes.
+
+For bounded agent authoring, a host may render the selected module, required export summaries, applicable tool descriptors, objective, and targeted diagnostics. Formatting that context belongs to the host. Compilation still checks actual implementations. Huge interfaces require smaller responsibilities or fewer selected symbols, not silently omitted contracts. Module splitting does not shorten data sent to a tool at runtime.
+
+### Source locations
+
+```text
+SourceLocation = {kind: "inline"}
+  | {kind: "module", package_digest: Digest,
+     module_path: ModulePath, source_path: SourcePath}
+SourceSpan { source: SourceLocation, start_byte: integer, end_byte: integer }
+DiagnosticLocation = {kind: "source_span", span: SourceSpan}
+  | {kind: "source_bundle_path", pointer: JSONPointer}
+  | {kind: "canonical_record_path", pointer: JSONPointer}
+```
+
+Offsets are nonnegative exclusive-end UTF-8 byte offsets within the named source, bounded by its length and character boundaries. Bundle errors point into the snapshot; canonical errors into the submitted/proposed document. Join diagnostics identify the operand or composed result. Locations/source maps remain outside executable identity. Use sites should relate exported declaration locations; cycle diagnostics include involved imports/dependency paths. Sort diagnostics by location kind, package digest, module path, offset or pointer, then code, bytewise where applicable.
+
+### Incremental identity and module conformance
+
+Paths, package names/versions, aliases, import order, and export markers erase after resolution. Equal graph ID, reached normalized work, catalogs, and profile MUST yield identical standalone/modular executable bytes. A comment edit changes source pins but may leave executable identity unchanged. A reached private-body edit must update its implementation and callers even when exported ports stay equal.
+
+Caches must include source/version, resolved imported identities, selected catalog/schema content, and validation profile. Rebinding an alias invalidates its old resolution. Whole-program checks still apply; caching is optional. Source edits or recompilation never mutate an existing run; live installation follows the runtime's additive extension rules.
+
+Required tests cover standalone/modular byte equality; private/wrong-kind references and alias collisions; missing files/modules/packages, altered pins, duplicate keys and invalid paths; graph-bearing imports and indirect-only dependencies; cross-file cycles; changed private bodies versus unchanged signatures; comment-only identity behavior; multiple package versions and incompatible profile selections; checked interfaces followed by invalid caller bindings; stale report rejection by the host; frontend ceilings; and unchanged active runs after compilation. Filesystem-collector tests additionally cover symlinks, escapes, non-regular files, and inconsistent capture.

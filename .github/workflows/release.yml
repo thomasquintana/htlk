@@ -64,6 +64,12 @@ jobs:
             exit 1
           fi
 
+      - name: Validate documentation links and anchors
+        run: node tools/validate-docs.mjs
+
+      - name: Test documentation, coverage and discovery helpers
+        run: node --test tools/validate-docs.test.mjs tools/coverage.test.mjs tools/discover-mcp.test.mjs
+
       - name: Validate specifications
         run: node specs/validate-specs.mjs
 

@@ -52,7 +52,6 @@ publish.workspace = true
 repository.workspace = true
 description = "A facade for the Harness Toolkit compiler and actor-based runtime"
 readme = "README.md"
-exclude = ["docs/.plan-*.md"]
 documentation = "https://docs.rs/htlk"
 keywords = ["harness", "compiler", "runtime", "toolkit"]
 categories = ["compilers", "development-tools"]
@@ -79,10 +78,6 @@ test = true
 name = "mcp_capability_spike"
 path = "examples/mcp_capability_spike/main.rs"
 test = true
-
-[[example]]
-name = "mcp_live_acceptance"
-path = "examples/live_chrome/main.rs"
 
 [[example]]
 name = "mcp_live_session"
