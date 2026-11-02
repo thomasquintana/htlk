@@ -1,5 +1,8 @@
 //! Actix supervision of fenced durable graph execution.
 mod approval;
+mod artifacts;
+mod boundary;
+mod checkpoint;
 mod composite;
 mod control;
 mod extension;
@@ -12,6 +15,7 @@ pub use mcp_evidence::McpEvidenceView;
 mod mcp_samples;
 pub use mcp_samples::{McpInferenceSelection, ProtectedInferenceRevision};
 mod recovery;
+mod retry;
 pub use inspection::{
     AttemptView, DecisionView, GraphView, HistoryEntry, HistoryPage, NodeView, RunView, ScopeView,
     WaitView,
@@ -87,7 +91,8 @@ impl ExecutionEngine {
     /// can be used separately; this service consumes durable work and recovery hints.
     ///
     /// # Errors
-    /// Returns missing Actix context or invalid finite configuration.
+    /// Returns missing Actix context, invalid finite configuration, or an already
+    /// running engine attached to this runtime.
     pub fn launch(runtime: Arc<Runtime>, config: ExecutionConfig) -> Result<Self, RuntimeError> {
         if System::try_current().is_none()
             || config.workers == 0
@@ -99,6 +104,19 @@ impl ExecutionEngine {
             || config.lease_ms < 100
             || config.poll_interval.is_zero()
             || config.poll_interval > Duration::from_secs(10)
+        {
+            return Err(RuntimeError::failure(FailureCode::Profile));
+        }
+        // Reserve routing before starting any workers. Concurrent launches must
+        // never leave two supervisors sharing a single host-command address.
+        let mut execution = runtime
+            .execution
+            .lock()
+            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))?;
+        if execution
+            .as_ref()
+            .and_then(WeakAddr::upgrade)
+            .is_some_and(|address| address.connected())
         {
             return Err(RuntimeError::failure(FailureCode::Profile));
         }
@@ -114,11 +132,7 @@ impl ExecutionEngine {
             cursor: None,
         }
         .start();
-        *runtime
-            .execution
-            .lock()
-            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))? =
-            Some(address.downgrade());
+        *execution = Some(address.downgrade());
         Ok(Self { address })
     }
 
@@ -187,6 +201,18 @@ impl Actor for Supervisor {
         ctx.set_mailbox_capacity(64);
         ctx.notify(Poll);
         ctx.run_interval(self.config.poll_interval, |_, ctx| ctx.notify(Poll));
+    }
+    fn stopped(&mut self, ctx: &mut Self::Context) {
+        self.stop.cancel();
+        // A delayed stop from an earlier engine cannot detach its replacement.
+        if let Ok(mut execution) = self.runtime.execution.lock()
+            && execution
+                .as_ref()
+                .and_then(WeakAddr::upgrade)
+                .is_some_and(|address| address == ctx.address())
+        {
+            *execution = None;
+        }
     }
 }
 struct Poll;
@@ -311,7 +337,7 @@ impl Handler<Poll> for Supervisor {
                             config: actor.config.clone(),
                             run: run.clone(),
                             owner,
-                            lease: None,
+                            state: CoordinationState::Acquiring,
                             busy: false,
                             renewing: false,
                             workers: actor.workers.clone(),
@@ -319,7 +345,6 @@ impl Handler<Poll> for Supervisor {
                             initial_time: now,
                             renew_after: now.saturating_add(actor.config.lease_ms / 3),
                             checking: false,
-                            recovered: false,
                         }
                         .start();
                         actor.active.insert(run, address);
@@ -345,12 +370,11 @@ impl Handler<Stop> for Supervisor {
 }
 struct Coordinator {
     stop: Arc<crate::mcp::McpCancellation>,
-    recovered: bool,
     runtime: Arc<Runtime>,
     config: ExecutionConfig,
     run: RunId,
     owner: String,
-    lease: Option<RunLease>,
+    state: CoordinationState,
     busy: bool,
     renewing: bool,
     workers: Addr<Worker>,
@@ -358,6 +382,27 @@ struct Coordinator {
     initial_time: i64,
     renew_after: i64,
     checking: bool,
+}
+enum CoordinationState {
+    Acquiring,
+    Recovering(RunLease),
+    Ready(RunLease),
+}
+impl CoordinationState {
+    fn lease(&self) -> Option<&RunLease> {
+        match self {
+            Self::Acquiring => None,
+            Self::Recovering(lease) | Self::Ready(lease) => Some(lease),
+        }
+    }
+    fn is_recovered(&self) -> bool {
+        matches!(self, Self::Ready(_))
+    }
+    fn mark_recovered(&mut self) {
+        if let Self::Recovering(lease) = self {
+            *self = Self::Ready(lease.clone());
+        }
+    }
 }
 impl Actor for Coordinator {
     type Context = Context<Self>;
@@ -382,7 +427,7 @@ impl Actor for Coordinator {
                             ctx.stop();
                             return;
                         }
-                        actor.lease = Some(lease);
+                        actor.state = CoordinationState::Recovering(lease);
                         ctx.notify(Pulse)
                     }
                     Err(_) => ctx.stop(),
@@ -404,7 +449,7 @@ impl Message for Pulse {
 impl Handler<Pulse> for Coordinator {
     type Result = ();
     fn handle(&mut self, _: Pulse, ctx: &mut Self::Context) {
-        let Some(lease) = self.lease.clone() else {
+        let Some(lease) = self.state.lease().cloned() else {
             return;
         };
         if !self.checking {
@@ -465,14 +510,14 @@ impl Handler<Pulse> for Coordinator {
                     stop: self.stop.clone(),
                     runtime: self.runtime.clone(),
                     lease,
-                    recovering: !self.recovered,
+                    recovering: !self.state.is_recovered(),
                 })
                 .into_actor(self)
                 .map(|result, actor, ctx| {
                     actor.busy = false;
                     match result {
                         Ok(Ok(step::Progress::Changed)) => {
-                            actor.recovered = true;
+                            actor.state.mark_recovered();
                             ctx.notify(Pulse)
                         }
                         Ok(Ok(step::Progress::Blocked)) => {}

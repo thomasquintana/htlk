@@ -37,6 +37,48 @@ fn round_trip(e: &E) {
 }
 
 #[test]
+fn canonical_child_paths_preserve_field_and_operand_order_with_strict_indices() {
+    let ordered = make(K::Record(vec![
+        (
+            "z".into(),
+            make(K::Binary {
+                operator: B::And,
+                left: Box::new(literal(1)),
+                right: Box::new(make(K::Not(Box::new(literal(2))))),
+            }),
+        ),
+        ("a".into(), make(K::List(vec![literal(3), literal(4)]))),
+    ]));
+    let list = ordered.child(0).unwrap();
+    let binary = ordered.child(1).unwrap();
+    assert_eq!(list.child(1), Some(&literal(4)));
+    assert_eq!(binary.child(0), Some(&literal(1)));
+    let unary = binary.child(1).unwrap();
+    assert_eq!(unary.child(0), Some(&literal(2)));
+    assert!(ordered.child(2).is_none());
+    assert!(list.child(2).is_none());
+    assert!(binary.child(2).is_none());
+    assert!(unary.child(1).is_none());
+    assert!(literal(0).child(0).is_none());
+    assert_eq!(literal(0).children().len(), 0);
+    assert_eq!(
+        ordered.children().rev().collect::<Vec<_>>(),
+        vec![binary, list]
+    );
+    // Wire round trips must retain analysis paths, rather than exposing authored
+    // insertion order or CBOR's encoded-key ordering as a second traversal rule.
+    let decoded = E::decode(
+        &ordered.encode(&Limits::default()).unwrap(),
+        &Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.children().collect::<Vec<_>>(),
+        ordered.children().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn scalar_literals_have_exact_native_encodings() {
     for (value, expected) in [
         (S::Null, &b"\x82\x67literal\xf6"[..]),

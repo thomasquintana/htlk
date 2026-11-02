@@ -27,7 +27,7 @@ fn compile(config: CompilerConfig, catalogs: &MCPCatalogInputs)
         }
     "#, catalogs)?;
     assert_eq!(result.fingerprint, result.analysis().fingerprint());
-    Ok(result.executable_bytes)
+    Ok(result.into_artifact().executable_bytes)
 }
 ```
 

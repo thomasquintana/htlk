@@ -26,8 +26,8 @@ pub use inspect::{ExportIndexEntry, ExportKind, ExportSummary, ModuleInspectionS
 
 pub use catalogs::MCPCatalogInputs;
 pub use compiler::{
-    CompilationInput, CompilationSuccess, Compiler, CompilerCapabilities, CompilerConfig,
-    FrontendLimits,
+    CompilationArtifact, CompilationInput, CompilationSuccess, Compiler, CompilerCapabilities,
+    CompilerConfig, FrontendLimits,
 };
 pub use diagnostic::{
     CompilationFailure, Diagnostic, DiagnosticLocation, SourceLocation, SourceMapEntry, SourceSpan,

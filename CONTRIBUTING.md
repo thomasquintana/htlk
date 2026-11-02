@@ -29,6 +29,26 @@ cargo package --workspace --locked --target-dir "$(mktemp -d)"
 Every public API should include rustdoc. Behavior changes should include tests
 and an entry under the `Unreleased` section of `CHANGELOG.md`.
 
+### Rust design
+
+- Prefer immutable validated models, enums for state-specific data, and composition
+  over inheritance-style hierarchies. Keep invalid state combinations out of APIs.
+- Keep decisions and validation pure where possible. Isolate storage, clocks,
+  authorization callbacks, thread startup and network dispatch at explicit boundaries.
+- Give helpers the narrow capabilities they need. Introduce traits for genuine
+  implementation variation rather than for every extracted function or module.
+- Share domain rules such as canonical child ordering and checkpoint interpretation.
+  Retain independent checks at compiler/runtime and transactional trust boundaries.
+- Preserve lazy evaluation: unused branches and unselected candidates must not read
+  artifacts, interpret irrelevant source checkpoints or dispatch operations.
+- Use local mutation when it simplifies bounded construction or accounting. Prefer
+  straightforward control flow and small cohesive components over abstraction layers.
+
+Native profiles include explicit source contributions. When adding implementation
+modules, update both the Rust identity manifest and the independent fixture checker,
+then deliberately regenerate and review affected fixtures as described in
+`crates/htlk-runtime/tests/fixtures/README.md`.
+
 Package all workspace crates together: Cargo stages local packages so dependent
 crates can be verified before their new versions are published. For a local
 pre-commit package check, add `--allow-dirty`; CI checks the clean checkout.

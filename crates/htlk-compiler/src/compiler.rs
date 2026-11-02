@@ -79,14 +79,17 @@ pub struct CompilerCapabilities {
 }
 
 /// Complete checked compiler output. Reports do not affect executable identity.
+/// Authoritative artifact fields are readable through an immutable view; they
+/// cannot be replaced independently of the retained analysis.
+///
+/// ```compile_fail
+/// fn replace_bytes(output: &mut htlk_compiler::CompilationSuccess) {
+///     output.executable_bytes.clear();
+/// }
+/// ```
 #[derive(Clone)]
 pub struct CompilationSuccess {
-    /// Authoritative normalized executable document.
-    pub canonical_document: CanonicalDocument,
-    /// Deterministic fingerprinted CBOR envelope.
-    pub executable_bytes: Vec<u8>,
-    /// Envelope identity.
-    pub fingerprint: Digest,
+    artifact: CompilationArtifact,
     /// Nonfatal semantic reports.
     pub diagnostics: Vec<Diagnostic>,
     /// Source associations; empty for canonical input.
@@ -94,6 +97,26 @@ pub struct CompilationSuccess {
     /// Retained authored descriptions keyed by canonical pointer.
     pub documentation: BTreeMap<String, String>,
     analysis: std::sync::Arc<crate::analyzer::AnalyzedDocument>,
+}
+
+/// Detached compiler artifact data. While attached to [`CompilationSuccess`],
+/// this view is read-only so its document, bytes, identity and analysis agree.
+/// Consume the compilation with [`CompilationSuccess::into_artifact`] to obtain
+/// independently owned data without retaining a semantic-analysis association.
+#[derive(Clone, Debug)]
+pub struct CompilationArtifact {
+    /// Authoritative normalized executable document.
+    pub canonical_document: CanonicalDocument,
+    /// Deterministic fingerprinted CBOR envelope.
+    pub executable_bytes: Vec<u8>,
+    /// Envelope identity.
+    pub fingerprint: Digest,
+}
+impl std::ops::Deref for CompilationSuccess {
+    type Target = CompilationArtifact;
+    fn deref(&self) -> &Self::Target {
+        &self.artifact
+    }
 }
 impl std::fmt::Debug for CompilationSuccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -107,6 +130,23 @@ impl std::fmt::Debug for CompilationSuccess {
     }
 }
 impl CompilationSuccess {
+    /// Borrows the authoritative normalized document.
+    pub fn canonical_document(&self) -> &CanonicalDocument {
+        &self.artifact.canonical_document
+    }
+    /// Borrows the exact deterministic executable envelope bytes.
+    pub fn executable_bytes(&self) -> &[u8] {
+        &self.artifact.executable_bytes
+    }
+    /// Exact envelope identity shared with the retained analysis.
+    pub fn fingerprint(&self) -> Digest {
+        self.artifact.fingerprint
+    }
+    /// Consumes the result and detaches its authoritative data from analysis and
+    /// reports. Further changes to that data make no semantic-admission claim.
+    pub fn into_artifact(self) -> CompilationArtifact {
+        self.artifact
+    }
     /// Immutable semantic report for the exact document analyzed at compilation.
     /// Includes inferred expressions, checked value boundaries, runtime obligations,
     /// binding uniqueness plans and structural bounds. It is never serialized proof.
@@ -364,9 +404,11 @@ impl Compiler {
             .map_err(|e| fail("C_SERIALIZATION", e))?;
         let executable_bytes = envelope.encode(l).map_err(|e| fail("C_SERIALIZATION", e))?;
         Ok(CompilationSuccess {
-            canonical_document: document,
-            fingerprint: envelope.fingerprint(),
-            executable_bytes,
+            artifact: CompilationArtifact {
+                canonical_document: document,
+                fingerprint: envelope.fingerprint(),
+                executable_bytes,
+            },
             diagnostics,
             source_map: vec![],
             documentation: BTreeMap::new(),

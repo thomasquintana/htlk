@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make compiler artifacts immutable while attached to their semantic analysis;
+  use `CompilationSuccess::into_artifact` to take ownership of detached document
+  and executable data. Existing field reads remain available through a read-only view.
+- Share canonical expression-child navigation across analysis and compilation,
+  centralize typed invocation state/outcome interpretation, and separate pure
+  boundary/retry proposals from authorized I/O and transactional acceptance.
+- Narrow lazy worker artifact access to an explicit read capability, model
+  coordinator recovery and native-call alternatives with enums, and isolate
+  frontend resource accounting. Remove unused parser, provider, MCP SDK and vector
+  dependencies and refresh the source-derived native profile fixture.
 - Replace direct tool application-object outputs with one native `McpToolResult`
   envelope for every tool, including schema-less/text/multimodal calls. Graphs
   explicitly read and check `data`; upstream descriptors are never rewritten.
@@ -25,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Propagate guard-checkpoint storage failures instead of treating them as missing
+  guards, and inspect candidate source checkpoints only after unique guard selection.
+- Reject a second live execution engine on the same runtime before spawning workers;
+  shutdown releases routing for a replacement without an old engine detaching it.
 - Revalidate execution progress after all external-work scans so a concurrently
   accepted host reply cannot cause a false `E_INVARIANT` run failure. Stable
   no-progress states still fail the invariant check.

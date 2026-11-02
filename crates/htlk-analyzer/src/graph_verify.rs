@@ -384,15 +384,7 @@ impl<'a> ScopeChecker<'a> {
                 }
                 _ => (),
             }
-            let children: Vec<&Expression> = match expression.kind() {
-                E::Call { arguments, .. } | E::List(arguments) => arguments.iter().collect(),
-                E::Render { arguments, .. } => arguments.iter().map(|(_, e)| e).collect(),
-                E::Record(fields) => fields.iter().map(|(_, e)| e).collect(),
-                E::Get { value, .. } | E::Not(value) => vec![value],
-                E::Binary { left, right, .. } => vec![left, right],
-                _ => Vec::new(),
-            };
-            for (index, child) in children.into_iter().enumerate().rev() {
+            for (index, child) in expression.children().enumerate().rev() {
                 self.budget.charge(
                     size_of_val(self.current_path.as_slice()).saturating_add(size_of::<usize>()),
                 )?;

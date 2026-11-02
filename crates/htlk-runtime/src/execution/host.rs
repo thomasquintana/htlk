@@ -75,13 +75,13 @@ impl Handler<Command> for Supervisor {
 impl Handler<Command> for Coordinator {
     type Result = AtomicResponse<Self, Result<Value, RuntimeError>>;
     fn handle(&mut self, msg: Command, _: &mut Self::Context) -> Self::Result {
-        if !self.recovered {
+        if !self.state.is_recovered() {
             return AtomicResponse::new(Box::pin(
                 async { Err(RuntimeError::failure(FailureCode::Fenced)) }.into_actor(self),
             ));
         }
         let runtime = self.runtime.clone();
-        let lease = self.lease.clone();
+        let lease = self.state.lease().cloned();
         AtomicResponse::new(Box::pin(
             async move { apply(runtime, lease.ok_or_else(err)?, msg).await }.into_actor(self),
         ))

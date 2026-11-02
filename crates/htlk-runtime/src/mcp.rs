@@ -315,7 +315,9 @@ impl NativeMcpAdapter {
     pub async fn shutdown(&self) -> Result<(), RuntimeFailure> {
         self.sessions.shutdown().await
     }
-    /// Constructs trusted deployment routing with a finite discovery deadline.
+    /// Constructs trusted deployment routing and starts its dedicated transport
+    /// I/O thread with a finite discovery deadline. Use [`Self::shutdown`] for
+    /// bounded cleanup after stopping execution.
     ///
     /// # Errors
     /// Returns zero/unsupported timeout configuration.
@@ -332,7 +334,7 @@ impl NativeMcpAdapter {
             return Err(fail(FailureCode::Profile));
         }
         Ok(Self {
-            sessions: NativeSessions::new(endpoints, timeout_ms)?,
+            sessions: NativeSessions::launch(endpoints, timeout_ms)?,
             timeout_ms,
             idempotent_bindings: Default::default(),
         })
@@ -504,17 +506,30 @@ impl McpConnection for NativeConnection {
                     request.idempotency_key.as_deref(),
                 );
                 tokio::pin!(rpc);
-                tokio::time::timeout_at(deadline,async{
-                tokio::select!{
-                    biased;
-                    _=request.cancellation.cancelled()=>{
-                        let grace=tokio::time::Instant::now().checked_add(Duration::from_millis(request.cancellation_grace_ms)).unwrap_or(deadline).min(deadline);
-                            let notification=notifier.send();tokio::pin!(notification);
-                            tokio::time::timeout_at(grace,async{tokio::select!{result=rpc.as_mut()=>result,_=notification.as_mut()=>rpc.as_mut().await}}).await.unwrap_or_else(|_|Err(fail(FailureCode::McpTimeout)))
-                    },
-                    result=rpc.as_mut()=>result,
-                }
-            }).await.unwrap_or_else(|_|Err(fail(FailureCode::McpTimeout)))
+                tokio::time::timeout_at(deadline, async {
+                    tokio::select! {
+                        biased;
+                        _ = request.cancellation.cancelled() => {
+                            let grace = tokio::time::Instant::now()
+                                .checked_add(Duration::from_millis(request.cancellation_grace_ms))
+                                .unwrap_or(deadline)
+                                .min(deadline);
+                            let notification = notifier.send();
+                            tokio::pin!(notification);
+                            tokio::time::timeout_at(grace, async {
+                                tokio::select! {
+                                    result = rpc.as_mut() => result,
+                                    _ = notification.as_mut() => rpc.as_mut().await,
+                                }
+                            })
+                            .await
+                            .unwrap_or_else(|_| Err(fail(FailureCode::McpTimeout)))
+                        },
+                        result = rpc.as_mut() => result,
+                    }
+                })
+                .await
+                .unwrap_or_else(|_| Err(fail(FailureCode::McpTimeout)))
             };
             let delivery = self.session.delivery;
             let result = result.and_then(|value| {

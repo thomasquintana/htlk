@@ -2,6 +2,9 @@
 
 Authority: runtime §§4–6 and §§8–10. `ExecutionEngine::launch` starts an explicit
 Actix supervisor over an `Arc<Runtime>` inside the application's Actix system.
+Only one live engine may attach to a runtime. A duplicate launch returns `E_PROFILE`
+before starting workers; after acknowledged shutdown, a replacement may attach even
+if the host still retains the stopped engine handle.
 Admission remains available without workers. The supervisor pages its eligible
 runs, acquires fenced per-run ownership and resumes checkpoints.
 

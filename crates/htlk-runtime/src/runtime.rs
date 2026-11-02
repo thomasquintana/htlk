@@ -543,26 +543,14 @@ impl Runtime {
         context: &HostContext,
         id: ArtifactId,
     ) -> Result<AuthorizedValue, RuntimeError> {
-        let metadata = self.store.artifact_metadata(id).await.map_err(|e| {
-            if e == StoreError::Missing {
-                RuntimeError::failure(FailureCode::Input)
-            } else {
-                RuntimeError::from(e)
-            }
-        })?;
-        self.policy.authorize(
-            context,
-            Authorization::ReadArtifact {
-                metadata: &metadata,
-            },
-        )?;
-        metadata.to_value(&self.config.limits)?;
-        let bytes = self
-            .store
-            .artifact_bytes(id, metadata.storage_reference())
-            .await?;
-        let value = metadata.verify_value(&bytes, &self.config.limits)?;
-        Ok(AuthorizedValue { metadata, value })
+        self.artifact_reader().read(context, id).await
+    }
+    pub(crate) fn artifact_reader(&self) -> crate::artifact_access::ArtifactReader {
+        crate::artifact_access::ArtifactReader::new(
+            self.store.clone(),
+            Arc::clone(&self.policy),
+            self.config.limits.clone(),
+        )
     }
     fn cache(&self, executable: Arc<VerifiedExecutable<'static>>) -> Result<(), RuntimeError> {
         if self.config.max_cached_executables == 0 {

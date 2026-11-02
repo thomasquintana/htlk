@@ -121,10 +121,36 @@ impl BindingDecision {
 /// Returns duplicate candidate IDs or configured metadata/causal resource limits.
 pub fn reduce_binding(
     candidates: &[Identifier],
-    mut guard: impl FnMut(&Identifier) -> GuardEvaluation,
+    guard: impl FnMut(&Identifier) -> GuardEvaluation,
     mut source: impl FnMut(&Identifier) -> LabeledSource,
     limits: &Limits,
 ) -> Result<BindingDecision, ReducerError> {
+    match select_binding(candidates, guard, limits)? {
+        BindingSelection::Settled(decision) => Ok(decision),
+        BindingSelection::Source(selected) => {
+            let source = source(selected.edge());
+            selected.resolve(source)
+        }
+    }
+}
+
+/// Guard reduction is independent of source interpretation, which may fail at
+/// the checkpoint boundary. Only a unique selected source may be inspected.
+pub(crate) enum BindingSelection<'a> {
+    Settled(BindingDecision),
+    Source(SelectedBinding<'a>),
+}
+pub(crate) struct SelectedBinding<'a> {
+    edge: Identifier,
+    influence: SecurityLabels,
+    budget: RecordAccounting<'a>,
+    limits: &'a Limits,
+}
+pub(crate) fn select_binding<'a>(
+    candidates: &[Identifier],
+    mut guard: impl FnMut(&Identifier) -> GuardEvaluation,
+    limits: &'a Limits,
+) -> Result<BindingSelection<'a>, ReducerError> {
     let mut budget = RecordAccounting::new(limits)?;
     budget.collection(candidates.len(), 0)?;
     for edge in candidates {
@@ -166,18 +192,18 @@ pub fn reduce_binding(
     }
     let influence = SecurityLabels::combine(evaluated.iter().map(|g| &g.influence), limits)?;
     if !pending.is_empty() {
-        return Ok(BindingDecision::Pending {
+        return Ok(BindingSelection::Settled(BindingDecision::Pending {
             waiting_edges: pending,
             selected_edge: None,
             guard_failures: failures,
             influence,
-        });
+        }));
     }
     if !failures.is_empty() {
-        return Ok(BindingDecision::Failed {
+        return Ok(BindingSelection::Settled(BindingDecision::Failed {
             failures,
             influence,
-        });
+        }));
     }
     if selected.len() > 1 {
         let failures = selected
@@ -189,57 +215,75 @@ pub fn reduce_binding(
                 causes: vec![],
             })
             .collect();
-        return Ok(BindingDecision::Failed {
+        return Ok(BindingSelection::Settled(BindingDecision::Failed {
             failures,
             influence,
-        });
+        }));
     }
     let Some(edge) = selected.pop() else {
-        return Ok(BindingDecision::Absent {
+        return Ok(BindingSelection::Settled(BindingDecision::Absent {
             selected_edge: None,
             influence,
-        });
+        }));
     };
-    let selected = source(&edge);
-    budget.value(&selected.influence.to_value(limits)?, 1)?;
-    if let Some(cause) = &selected.cause {
-        check_causes(std::slice::from_ref(cause), &mut budget)?;
+    Ok(BindingSelection::Source(SelectedBinding {
+        edge,
+        influence,
+        budget,
+        limits,
+    }))
+}
+impl SelectedBinding<'_> {
+    pub(crate) fn edge(&self) -> &Identifier {
+        &self.edge
     }
-    let influence = influence.union(&selected.influence, limits)?;
-    Ok(match selected.state {
-        SourceState::Pending => BindingDecision::Pending {
-            waiting_edges: vec![edge.clone()],
-            selected_edge: Some(edge),
-            guard_failures: vec![],
-            influence,
-        },
-        SourceState::Value(artifact_id) => BindingDecision::Value {
+    pub(crate) fn resolve(self, selected: LabeledSource) -> Result<BindingDecision, ReducerError> {
+        let Self {
             edge,
-            artifact_id,
             influence,
-        },
-        SourceState::Absent => BindingDecision::Absent {
-            selected_edge: Some(edge),
-            influence,
-        },
-        SourceState::Unavailable(error) => {
-            budget.value(
-                &error
-                    .to_value(limits)
-                    .map_err(|_| ReducerError::InvalidPlan)?,
-                1,
-            )?;
-            BindingDecision::Failed {
-                failures: vec![BindingFailure {
-                    edge,
-                    error: RuntimeFailure::new(FailureCode::Dependency),
-                    source_error: Some(error),
-                    causes: selected.cause.into_iter().collect(),
-                }],
-                influence,
-            }
+            mut budget,
+            limits,
+        } = self;
+        budget.value(&selected.influence.to_value(limits)?, 1)?;
+        if let Some(cause) = &selected.cause {
+            check_causes(std::slice::from_ref(cause), &mut budget)?;
         }
-    })
+        let influence = influence.union(&selected.influence, limits)?;
+        Ok(match selected.state {
+            SourceState::Pending => BindingDecision::Pending {
+                waiting_edges: vec![edge.clone()],
+                selected_edge: Some(edge),
+                guard_failures: vec![],
+                influence,
+            },
+            SourceState::Value(artifact_id) => BindingDecision::Value {
+                edge,
+                artifact_id,
+                influence,
+            },
+            SourceState::Absent => BindingDecision::Absent {
+                selected_edge: Some(edge),
+                influence,
+            },
+            SourceState::Unavailable(error) => {
+                budget.value(
+                    &error
+                        .to_value(limits)
+                        .map_err(|_| ReducerError::InvalidPlan)?,
+                    1,
+                )?;
+                BindingDecision::Failed {
+                    failures: vec![BindingFailure {
+                        edge,
+                        error: RuntimeFailure::new(FailureCode::Dependency),
+                        source_error: Some(error),
+                        causes: selected.cause.into_iter().collect(),
+                    }],
+                    influence,
+                }
+            }
+        })
+    }
 }
 /// Stable per-input failure, sorted by declared decoded UTF-8 port name.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 //! Versioned exact-action approval generations, never graph-visible booleans.
 use super::{
+    checkpoint::NodeCompletion,
     model::*,
     step::{self, ScopeState},
 };
@@ -79,8 +80,7 @@ pub(super) async fn gate(
                     runtime,
                     lease,
                     record,
-                    "failed",
-                    Some(crate::failure::RuntimeFailure::new(
+                    NodeCompletion::Failed(crate::failure::RuntimeFailure::new(
                         FailureCode::ApprovalDenied,
                     )),
                     labels(&record.payload, &runtime.config.limits)?.union(
@@ -133,8 +133,7 @@ pub(super) async fn gate(
             runtime,
             lease,
             record,
-            "failed",
-            Some(crate::failure::RuntimeFailure::new(
+            NodeCompletion::Failed(crate::failure::RuntimeFailure::new(
                 FailureCode::ApprovalDenied,
             )),
             labels(&record.payload, &runtime.config.limits)?,

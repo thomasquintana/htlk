@@ -75,14 +75,27 @@ fn canonical_success_is_exact_enveloped_and_source_free() {
     let output = compiler
         .compile_document(document.clone(), &catalogs())
         .unwrap();
-    assert_eq!(output.canonical_document, document);
+    assert_eq!(output.canonical_document(), &document);
     assert!(output.source_map.is_empty());
     let envelope =
-        ExecutableEnvelope::decode(&output.executable_bytes, &Limits::default()).unwrap();
-    assert_eq!(envelope.fingerprint(), output.fingerprint);
+        ExecutableEnvelope::decode(output.executable_bytes(), &Limits::default()).unwrap();
+    assert_eq!(envelope.fingerprint(), output.fingerprint());
     assert_eq!(
         CanonicalDocument::from_envelope(&envelope, &Limits::default()).unwrap(),
         document
+    );
+    let retained = output.clone();
+    let mut detached = output.into_artifact();
+    detached.executable_bytes.clear();
+    detached.fingerprint = Digest::from_bytes([0; 32]);
+    assert_eq!(retained.fingerprint(), retained.analysis().fingerprint());
+    assert_eq!(
+        retained.canonical_document(),
+        retained.analysis().document()
+    );
+    assert_eq!(
+        retained.executable_bytes(),
+        envelope.encode(&Limits::default()).unwrap()
     );
 }
 
@@ -352,6 +365,7 @@ fn module_negative_cases_and_fresh_interfaces_preserve_verification() {
     let bytes = compiler
         .compile_bundle(&original, &catalogs())
         .unwrap()
+        .into_artifact()
         .executable_bytes;
     let edited = bundle_with_sources(&[
         ("main", main),
@@ -479,6 +493,7 @@ fn pass(compiler: &Compiler, optional: bool) -> CanonicalDocument {
     compiler
         .compile_source(&source, &catalogs())
         .unwrap()
+        .into_artifact()
         .canonical_document
 }
 #[test]
@@ -506,7 +521,7 @@ fn repeated_joins_preserve_operand_definitions_and_are_self_contained() {
             .contains_key(&first.canonical_document.fields().root_scope)
     );
     let analysis = analyzer::analyze_document(
-        second.canonical_document,
+        second.into_artifact().canonical_document,
         NativeSchemaOptions::default(),
         &Limits::default(),
     )
@@ -1265,7 +1280,7 @@ fn linked_generic_callbacks_use_exact_complete_manifests() {
         );
     }
     assert_eq!(
-        base.compile_document(output.canonical_document, &catalogs())
+        base.compile_document(output.into_artifact().canonical_document, &catalogs())
             .unwrap_err()
             .diagnostics[0]
             .code,
@@ -1295,6 +1310,7 @@ fn canonical_schema_revalidation_distinguishes_retrieval_context_from_bytes() {
     let document = compiler
         .compile_source(source, &original)
         .unwrap()
+        .into_artifact()
         .canonical_document;
     compiler
         .compile_document(document.clone(), &original)
@@ -2079,7 +2095,7 @@ fn join_rejects_every_invalid_public_binding_and_preserves_operand_error_context
             "case {kind}"
         );
     }
-    let integer=base.compile_source(r#"ir_version="0.1"graph test.integer{inputs={value=integer}outputs={value=integer}nodes{}edges{edge value{from=inputs.value to=outputs.value}}}"#,&catalogs()).unwrap().canonical_document;
+    let integer=base.compile_source(r#"ir_version="0.1"graph test.integer{inputs={value=integer}outputs={value=integer}nodes{}edges{edge value{from=inputs.value to=outputs.value}}}"#,&catalogs()).unwrap().into_artifact().canonical_document;
     let mut fanout = chain_join();
     fanout.edges.clear();
     fanout.inputs[0].to.push(JoinEndpoint {
@@ -2420,6 +2436,7 @@ fn catalog_ingress_mutations_are_panic_free_and_valid_unused_inventory_preserves
     let expected = compiler
         .compile_source(empty, &original)
         .unwrap()
+        .into_artifact()
         .executable_bytes;
     let mutations = ingress_mutations(valid.value(), 8);
     assert!(mutations.len() > 500);
@@ -2481,6 +2498,7 @@ fn source_bundle_shape_mutations_never_publish_unchecked_implementations() {
     let expected = compiler
         .compile_bundle(&original, &catalog)
         .unwrap()
+        .into_artifact()
         .executable_bytes;
     let mut failed = 0;
     for value in ingress_mutations(valid.value(), 5) {
@@ -2656,7 +2674,7 @@ fn canonical_ingress_rechecks_serialization_catalog_and_diagnostic_allowances() 
     assert_eq!(
         Compiler::new(config)
             .unwrap()
-            .compile_document(output.canonical_document, &catalogs())
+            .compile_document(output.into_artifact().canonical_document, &catalogs())
             .unwrap_err()
             .diagnostics[0]
             .code,

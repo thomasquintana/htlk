@@ -106,6 +106,83 @@ const EFFECT: &str = r#"ir_version="0.1" graph scope.effect {
     nodes{args=eval(json,{query="scoped"}) effect=call(mcp.tool("research","lookup"))}
     edges{edge args{from=args.outputs.value to=effect.inputs.arguments}edge value{from=effect.outputs.value to=outputs.value}}
 }"#;
+#[actix::test]
+async fn duplicate_launch_preserves_command_routing_and_shutdown_allows_replacement() {
+    let (compiler, registry) = support::native_compiler_with_timeouts(60000, 1000);
+    let graph = compiler.compile_source(WAIT, &support::catalogs()).unwrap();
+    let runtime = Arc::new(
+        Runtime::new(
+            SqliteStore::in_memory(StoreConfig::default())
+                .await
+                .unwrap(),
+            Arc::new(registry),
+            Arc::new(Policy {
+                deny_dispatch: AtomicBool::new(false),
+            }),
+            RuntimeConfig::default(),
+        )
+        .unwrap()
+        .with_mcp(adapter(&graph)),
+    );
+    runtime
+        .register_graph(&caller(), &graph.executable_bytes, &[])
+        .await
+        .unwrap();
+    let engine = ExecutionEngine::launch(runtime.clone(), config()).unwrap();
+    assert_eq!(
+        ExecutionEngine::launch(runtime.clone(), config())
+            .err()
+            .unwrap()
+            .code(),
+        FailureCode::Profile
+    );
+    let run = runtime
+        .start_run(
+            &caller(),
+            graph.fingerprint,
+            &BTreeMap::new(),
+            "engine-lifecycle",
+            None,
+        )
+        .await
+        .unwrap()
+        .run_id;
+    engine.attach_run(&run).await.unwrap();
+    let wait = waiting(&runtime, &run).await;
+    runtime
+        .submit_reply(&caller(), wait, Value::Bool(true), "reply")
+        .await
+        .unwrap();
+    assert_eq!(
+        terminal(&runtime, &run).await.header.status,
+        RunStatus::Succeeded
+    );
+    engine.shutdown().await.unwrap();
+    let replacement = ExecutionEngine::launch(runtime.clone(), config()).unwrap();
+    drop(engine);
+    let run = runtime
+        .start_run(
+            &caller(),
+            graph.fingerprint,
+            &BTreeMap::new(),
+            "replacement",
+            None,
+        )
+        .await
+        .unwrap()
+        .run_id;
+    replacement.attach_run(&run).await.unwrap();
+    let wait = waiting(&runtime, &run).await;
+    runtime
+        .submit_reply(&caller(), wait, Value::Bool(false), "reply")
+        .await
+        .unwrap();
+    assert_eq!(
+        terminal(&runtime, &run).await.header.status,
+        RunStatus::Succeeded
+    );
+    replacement.shutdown().await.unwrap();
+}
 const WAIT: &str = r#"ir_version="0.1" graph scope.wait {
     inputs={} outputs={value=boolean}
     nodes{args=eval(json,{query="once"}) effect=call(mcp.tool("research","lookup")) answer=wait(boolean){topic="answer" timeout_ms=5000}}

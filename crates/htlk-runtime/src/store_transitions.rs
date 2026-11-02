@@ -207,56 +207,78 @@ impl SqliteStore {
             .map(|write| Ok(cbor::encode(&write.payload, &limits)?))
             .collect::<Result<Vec<_>, StoreError>>()?;
         let lease = lease.clone();
-        self.connection.call(move |db| -> Result<CommitReceipt,StoreError> {
+        self.connection.call(move |db| -> Result<CommitReceipt, StoreError> {
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let header = load_header(&tx, &lease.run_id)?;
             let now = transition.context.timestamp_ms.max(header.last_time_ms);
             check_authority(&header, &lease, now)?;
-            let old = tx.query_row("SELECT request_digest,sequence FROM commands WHERE run_id=?1 AND command_id=?2",params![lease.run_id.as_str(),transition.context.command_id],|r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).optional()?;
-            if let Some((digest,sequence))=old {
-                if digest != request_digest.to_string() { return Err(StoreError::IdempotencyConflict); }
-                return Ok(CommitReceipt {sequence});
+            let old = tx.query_row(
+                "SELECT request_digest,sequence FROM commands WHERE run_id=?1 AND command_id=?2",
+                params![lease.run_id.as_str(), transition.context.command_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            ).optional()?;
+            if let Some((digest, sequence)) = old {
+                if digest != request_digest.to_string() {
+                    return Err(StoreError::IdempotencyConflict);
+                }
+                return Ok(CommitReceipt { sequence });
             }
-            if header.status.is_terminal() { return Err(StoreError::Terminal); }
-            if transition.expected_fingerprint.is_some_and(|fp|fp!=header.fingerprint) { return Err(StoreError::Conflict); }
-            if transition.next_status.is_some_and(|status|!header.status.can_transition_to(status)) { return Err(StoreError::Terminal); }
+            if header.status.is_terminal() {
+                return Err(StoreError::Terminal);
+            }
+            if transition.expected_fingerprint.is_some_and(|fp| fp != header.fingerprint) {
+                return Err(StoreError::Conflict);
+            }
+            if transition.next_status.is_some_and(|status| !header.status.can_transition_to(status)) {
+                return Err(StoreError::Terminal);
+            }
             // Classification and proposal construction can cross expiry. Check
             // acceptance in the same transaction as the wait, receipt and graph.
             for write in &transition.writes {
-                if matches!(write.key.family, RecordFamily::Scope | RecordFamily::Invocation)
-                    && let Value::Map(record) = &write.payload
-                    && record.get("status") == Some(&Value::Text("succeeded".into()))
-                    && matches!(record.get("deadline_ms"), Some(Value::Integer(expiry)) if now >= *expiry) {
-                    return Err(StoreError::Deadline(FailureCode::Timeout));
-                }
-                if write.key.family != RecordFamily::Wait { continue; }
-                let Value::Map(wait) = &write.payload else { return Err(StoreError::Invalid); };
-                if wait.get("state") != Some(&Value::Text("accepted".into())) { continue; }
-                let Some(Value::Integer(expiry)) = wait.get("expires_at") else { return Err(StoreError::Invalid); };
-                if now >= *expiry {
-                    return Err(StoreError::Deadline(if wait.get("purpose") == Some(&Value::Text("approval".into())) {
-                        FailureCode::ApprovalDenied
-                    } else { FailureCode::WaitExpired }));
-                }
+                check_acceptance_deadline(write, now)?;
             }
-            for (write,payload) in transition.writes.iter().zip(&writes) {
-                artifacts::check_artifact_write(&tx,&lease.run_id,write,&limits)?;
-                let old=tx.query_row("SELECT revision,final FROM records WHERE run_id=?1 AND family=?2 AND record_id=?3",params![lease.run_id.as_str(),write.key.family.as_str(),write.key.id],|r| Ok((r.get::<_,i64>(0)?,r.get::<_,bool>(1)?))).optional()?;
-                if old.is_some_and(|(_,final_record)|final_record) { return Err(StoreError::Terminal); }
-                if old.map(|(revision,_)|revision) != write.expected_revision { return Err(StoreError::Conflict); }
-                let revision=next_revision(write.expected_revision)?;
-                tx.execute("INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(run_id,family,record_id) DO UPDATE SET revision=excluded.revision,final=excluded.final,payload=excluded.payload",params![lease.run_id.as_str(),write.key.family.as_str(),write.key.id,revision,write.final_record,payload])?;
+            for (write, payload) in transition.writes.iter().zip(&writes) {
+                artifacts::check_artifact_write(&tx, &lease.run_id, write, &limits)?;
+                let old = tx.query_row(
+                    "SELECT revision,final FROM records WHERE run_id=?1 AND family=?2 AND record_id=?3",
+                    params![lease.run_id.as_str(), write.key.family.as_str(), write.key.id],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?)),
+                ).optional()?;
+                if old.is_some_and(|(_, final_record)| final_record) {
+                    return Err(StoreError::Terminal);
+                }
+                if old.map(|(revision, _)| revision) != write.expected_revision {
+                    return Err(StoreError::Conflict);
+                }
+                let revision = next_revision(write.expected_revision)?;
+                tx.execute(
+                    "INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,?2,?3,?4,?5,?6)
+                     ON CONFLICT(run_id,family,record_id) DO UPDATE SET revision=excluded.revision,final=excluded.final,payload=excluded.payload",
+                    params![lease.run_id.as_str(), write.key.family.as_str(), write.key.id, revision, write.final_record, payload],
+                )?;
             }
-            retention::check_references(&tx,&transition.writes,&limits)?;
-            artifacts::check_output_publication(&tx,&lease.run_id,&transition.writes,&limits)?;
-            let sequence=header.sequence.checked_add(1).ok_or(StoreError::Invalid)?;
-            let fingerprint=transition.root.as_ref().map_or(header.fingerprint,|r|r.fingerprint);
-            let root=transition.root.as_ref().map_or(header.root_scope,|r|r.root_scope);
-            tx.execute("UPDATE runs SET fingerprint=?2,root_scope=?3,status=?4,sequence=?5,last_time_ms=?6 WHERE run_id=?1",params![lease.run_id.as_str(),fingerprint.to_string(),root.to_string(),transition.next_status.unwrap_or(header.status).as_str(),sequence,now])?;
-            append_event(&tx,lease.run_id.as_str(),sequence,EventMeta {kind:"records_committed",actor:&transition.context.actor,timestamp:now,causation:&transition.context.causation,command:Some(&transition.context.command_id)},&event_payload,&limits)?;
-            tx.execute("INSERT INTO commands(run_id,command_id,request_digest,sequence) VALUES(?1,?2,?3,?4)",params![lease.run_id.as_str(),transition.context.command_id,request_digest.to_string(),sequence])?;
+            retention::check_references(&tx, &transition.writes, &limits)?;
+            artifacts::check_output_publication(&tx, &lease.run_id, &transition.writes, &limits)?;
+            let sequence = header.sequence.checked_add(1).ok_or(StoreError::Invalid)?;
+            let fingerprint = transition.root.as_ref().map_or(header.fingerprint, |root| root.fingerprint);
+            let root = transition.root.as_ref().map_or(header.root_scope, |root| root.root_scope);
+            tx.execute(
+                "UPDATE runs SET fingerprint=?2,root_scope=?3,status=?4,sequence=?5,last_time_ms=?6 WHERE run_id=?1",
+                params![lease.run_id.as_str(), fingerprint.to_string(), root.to_string(), transition.next_status.unwrap_or(header.status).as_str(), sequence, now],
+            )?;
+            append_event(&tx, lease.run_id.as_str(), sequence, EventMeta {
+                kind: "records_committed",
+                actor: &transition.context.actor,
+                timestamp: now,
+                causation: &transition.context.causation,
+                command: Some(&transition.context.command_id),
+            }, &event_payload, &limits)?;
+            tx.execute(
+                "INSERT INTO commands(run_id,command_id,request_digest,sequence) VALUES(?1,?2,?3,?4)",
+                params![lease.run_id.as_str(), transition.context.command_id, request_digest.to_string(), sequence],
+            )?;
             tx.commit()?;
-            Ok(CommitReceipt {sequence})
+            Ok(CommitReceipt { sequence })
         }).await.map_err(StoreError::from_worker)
     }
     /// Reads one authoritative record under the configured representation limits.
@@ -378,6 +400,41 @@ impl SqliteStore {
         }
         i64::try_from(page_size).map_err(|_| StoreError::Invalid)
     }
+}
+
+// Pure acceptance predicates are evaluated at the transaction's authoritative
+// time, even if proposal construction checked an earlier clock observation.
+fn check_acceptance_deadline(write: &RecordWrite, now: i64) -> Result<(), StoreError> {
+    if matches!(
+        write.key.family,
+        RecordFamily::Scope | RecordFamily::Invocation
+    ) && let Value::Map(record) = &write.payload
+        && record.get("status") == Some(&Value::Text("succeeded".into()))
+        && matches!(record.get("deadline_ms"), Some(Value::Integer(expiry)) if now >= *expiry)
+    {
+        return Err(StoreError::Deadline(FailureCode::Timeout));
+    }
+    if write.key.family != RecordFamily::Wait {
+        return Ok(());
+    }
+    let Value::Map(wait) = &write.payload else {
+        return Err(StoreError::Invalid);
+    };
+    if wait.get("state") != Some(&Value::Text("accepted".into())) {
+        return Ok(());
+    }
+    let Some(Value::Integer(expiry)) = wait.get("expires_at") else {
+        return Err(StoreError::Invalid);
+    };
+    if now >= *expiry {
+        let code = if wait.get("purpose") == Some(&Value::Text("approval".into())) {
+            FailureCode::ApprovalDenied
+        } else {
+            FailureCode::WaitExpired
+        };
+        return Err(StoreError::Deadline(code));
+    }
+    Ok(())
 }
 
 // Pages are capped at 4096 rows by StoreConfig validation.
