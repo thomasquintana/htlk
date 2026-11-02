@@ -1,5 +1,7 @@
 //! Ordinary task boundaries and explicit repeat-until checkpoints.
 use super::{
+    boundary::{Boundary, validate_selected},
+    checkpoint::NodeCompletion,
     model::*,
     step::{self, ScopeState},
 };
@@ -123,8 +125,7 @@ pub(super) async fn operate(
                 runtime,
                 lease,
                 record,
-                "failed",
-                Some(error),
+                NodeCompletion::Failed(error),
                 pre.influence,
                 writes,
             )
@@ -396,24 +397,24 @@ pub(super) async fn close_iteration(
         )
         .map_err(|_| err())
     };
-    let (next_manifest, next_error, next_errors) = step::validate_selected(
+    let next_validation = validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
         &relaxed(&scope.definition.fields().carried)?,
         &next,
         &influence,
-        true,
+        Boundary::Output,
     )
     .await?;
-    let (output_manifest, output_error, output_errors) = step::validate_selected(
+    let output_validation = validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
         &relaxed(&scope.definition.fields().outputs)?,
         &outputs,
         &influence,
-        true,
+        Boundary::Output,
     )
     .await?;
     writes.extend(step::validation_diagnostics(
@@ -421,7 +422,10 @@ pub(super) async fn close_iteration(
         scope,
         None,
         "carried",
-        &next_errors,
+        next_validation
+            .as_ref()
+            .err()
+            .map_or(&[], |failure| failure.diagnostics.as_slice()),
         &influence,
     )?);
     writes.extend(step::validation_diagnostics(
@@ -429,13 +433,20 @@ pub(super) async fn close_iteration(
         scope,
         None,
         "outputs",
-        &output_errors,
+        output_validation
+            .as_ref()
+            .err()
+            .map_or(&[], |failure| failure.diagnostics.as_slice()),
         &influence,
     )?);
-    if let Some(error) = next_error.or(output_error) {
-        step::scope_failure_with(runtime, lease, scope, error, influence, writes).await?;
-        return Ok(true);
-    }
+    let (next_manifest, output_manifest) = match (next_validation, output_validation) {
+        (Ok(next), Ok(outputs)) => (next, outputs),
+        (Err(failure), _) | (_, Err(failure)) => {
+            step::scope_failure_with(runtime, lease, scope, failure.primary, influence, writes)
+                .await?;
+            return Ok(true);
+        }
+    };
     for (ports, selected) in [
         (&scope.definition.fields().carried, &next),
         (&scope.definition.fields().outputs, &outputs),
@@ -460,12 +471,8 @@ pub(super) async fn close_iteration(
             }
         }
     }
-    let next = next_manifest
-        .ok_or_else(err)?
-        .to_value(&runtime.config.limits)?;
-    let outputs = output_manifest
-        .ok_or_else(err)?
-        .to_value(&runtime.config.limits)?;
+    let next = next_manifest.to_value(&runtime.config.limits)?;
+    let outputs = output_manifest.to_value(&runtime.config.limits)?;
     let mut frame = step::frame(
         runtime,
         lease,

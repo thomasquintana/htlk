@@ -260,10 +260,17 @@ impl NativeRegistry {
 /// Callback capabilities for one admitted native call. Native functions cannot
 /// replace the frozen data context or redirect dispatch through this interface.
 pub struct NativeCallContext<'a> {
-    boundary: Option<&'a ExpressionCallType>,
-    callback: Option<&'a ExpressionCallbackType>,
+    invocation: NativeInvocation<'a>,
     context: &'a dyn EvaluationContext,
     schemas: Option<&'a NativeSchemas>,
+}
+enum NativeInvocation<'a> {
+    Call(&'a ExpressionCallType),
+    Callback {
+        parameters: &'a [crate::Port],
+        returns: &'a crate::Port,
+        expression_path: &'a [usize],
+    },
 }
 impl NativeCallContext<'_> {
     /// Concrete positional types/presence after rank-one generic inference.
@@ -277,30 +284,27 @@ impl NativeCallContext<'_> {
     }
     /// Canonical origin of this admitted call or static callback reference.
     pub fn expression_path(&self) -> &[usize] {
-        if let Some(boundary) = self.boundary {
-            &boundary.expression_path
-        } else {
-            &self
-                .callback
-                .expect("checked callback context")
-                .expression_path
+        match &self.invocation {
+            NativeInvocation::Call(boundary) => &boundary.expression_path,
+            NativeInvocation::Callback {
+                expression_path, ..
+            } => expression_path,
         }
     }
     fn signature(&self) -> (&[crate::Port], &crate::Port) {
-        if let Some(boundary) = self.boundary {
-            return (&boundary.parameters, &boundary.returns);
-        }
-        match self
-            .callback
-            .expect("checked callback context")
-            .signature
-            .kind()
-        {
-            crate::ValueTypeKind::Function {
+        match &self.invocation {
+            NativeInvocation::Call(boundary) => (&boundary.parameters, &boundary.returns),
+            NativeInvocation::Callback {
                 parameters,
                 returns,
+                ..
             } => (parameters, returns),
-            _ => unreachable!("checked callback signature"),
+        }
+    }
+    fn boundary(&self) -> Result<&ExpressionCallType, EvaluationError> {
+        match self.invocation {
+            NativeInvocation::Call(boundary) => Ok(boundary),
+            NativeInvocation::Callback { .. } => Err(EvaluationError::UnresolvedType),
         }
     }
     /// Forwards ordinary values and statically admitted callback slots to a
@@ -314,8 +318,7 @@ impl NativeCallContext<'_> {
         arguments: &[crate::CallbackArgument<'_>],
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<EvaluationValue, EvaluationError> {
-        self.boundary
-            .ok_or(EvaluationError::UnresolvedType)?
+        self.boundary()?
             .invoke_callback_with(index, arguments, self.context, self.schemas, meter)
     }
     /// Invokes the statically admitted callback at the given argument position.
@@ -328,8 +331,7 @@ impl NativeCallContext<'_> {
         arguments: &[EvaluationValue],
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<EvaluationValue, EvaluationError> {
-        self.boundary
-            .ok_or(EvaluationError::UnresolvedType)?
+        self.boundary()?
             .invoke_callback(index, arguments, self.context, self.schemas, meter)
     }
 }
@@ -366,8 +368,7 @@ impl<C: EvaluationContext> EvaluationContext for RegistryContext<'_, C> {
         (function.implementation)(
             arguments,
             &NativeCallContext {
-                boundary: Some(boundary),
-                callback: None,
+                invocation: NativeInvocation::Call(boundary),
                 context: self,
                 schemas: self.schemas,
             },
@@ -380,14 +381,24 @@ impl<C: EvaluationContext> EvaluationContext for RegistryContext<'_, C> {
         arguments: &[EvaluationArgument],
         meter: &mut EvaluationMeter<'_>,
     ) -> Result<EvaluationValue, EvaluationError> {
+        let crate::ValueTypeKind::Function {
+            parameters,
+            returns,
+        } = callback.signature.kind()
+        else {
+            return Err(EvaluationError::UnresolvedType);
+        };
         let function = self
             .registry
             .function(callback.library, &callback.name, meter)?;
         (function.implementation)(
             arguments,
             &NativeCallContext {
-                boundary: None,
-                callback: Some(callback),
+                invocation: NativeInvocation::Callback {
+                    parameters,
+                    returns,
+                    expression_path: &callback.expression_path,
+                },
                 context: self,
                 schemas: self.schemas,
             },
@@ -407,8 +418,7 @@ impl<C: EvaluationContext> EvaluationContext for RegistryContext<'_, C> {
         (function.implementation)(
             arguments,
             &NativeCallContext {
-                boundary: Some(boundary),
-                callback: Some(callback),
+                invocation: NativeInvocation::Call(boundary),
                 context: self,
                 schemas: self.schemas,
             },

@@ -1,4 +1,5 @@
 //! Source resolution and canonical record construction. Shared analysis owns typing.
+mod budget;
 use crate::executable::{
     cbor::{Limits, Map, Value},
     digest::Digest,
@@ -9,6 +10,7 @@ use crate::{
     diagnostic::{Result, fail},
     executable::*,
 };
+use budget::FrontendBudget;
 use std::collections::{BTreeMap, BTreeSet};
 
 const RESERVED: &[&str] = &[
@@ -99,9 +101,7 @@ pub(crate) struct Session<'a> {
     pub source_map: Vec<SourceMapEntry>,
     pub documentation: BTreeMap<String, String>,
     pub diagnostics: Vec<crate::Diagnostic>,
-    work: usize,
-    depth: usize,
-    intermediate_bytes: usize,
+    budget: FrontendBudget<'a>,
     diagnostic_bytes: usize,
 }
 impl<'a> Session<'a> {
@@ -170,9 +170,7 @@ impl<'a> Session<'a> {
             source_map: vec![],
             documentation: BTreeMap::new(),
             diagnostics: Vec::new(),
-            work: 0,
-            depth: 0,
-            intermediate_bytes: 0,
+            budget: FrontendBudget::new(&compiler.config.frontend),
             diagnostic_bytes: 0,
         })
     }
@@ -183,28 +181,10 @@ impl<'a> Session<'a> {
         self.charge_amount(1)
     }
     fn charge_amount(&mut self, amount: usize) -> Result<()> {
-        self.work = self
-            .work
-            .checked_add(amount)
-            .ok_or_else(|| fail("C_SOURCE_LIMIT", "work overflow"))?;
-        if self.work > self.compiler.config.frontend.max_work {
-            Err(fail("C_SOURCE_LIMIT", "frontend work limit exceeded"))
-        } else {
-            Ok(())
-        }
+        self.budget.charge(amount)
     }
     fn account(&mut self, bytes: usize) -> Result<()> {
-        self.intermediate_bytes = self
-            .intermediate_bytes
-            .checked_add(bytes)
-            .ok_or_else(|| fail("C_SOURCE_LIMIT", "intermediate size overflow"))?;
-        if self.intermediate_bytes > self.compiler.config.frontend.max_intermediate_bytes {
-            return Err(fail(
-                "C_SOURCE_LIMIT",
-                "intermediate construction byte limit exceeded",
-            ));
-        }
-        Ok(())
+        self.budget.account(bytes)
     }
     fn report_limit(&mut self) -> Result<()> {
         self.charge_amount(
@@ -231,13 +211,7 @@ impl<'a> Session<'a> {
         Ok(())
     }
     fn enter(&mut self) -> Result<()> {
-        self.charge()?;
-        self.depth += 1;
-        if self.depth > self.compiler.config.frontend.max_depth {
-            Err(fail("C_SOURCE_LIMIT", "resolution nesting limit exceeded"))
-        } else {
-            Ok(())
-        }
+        self.budget.enter()
     }
     fn resolve(&self, module: usize, name: &str) -> Result<(usize, Decl)> {
         if let Some((alias, rest)) = name.split_once('.')
@@ -347,7 +321,7 @@ impl<'a> Session<'a> {
                 self.make_type(ValueTypeKind::Record(out))
             }
         };
-        self.depth -= 1;
+        self.budget.leave();
         if let Ok(t) = &result {
             self.account(
                 t.encode(TypeContext::Value, self.l())
@@ -486,7 +460,7 @@ impl<'a> Session<'a> {
         let result = self
             .expr_inner(m, e)
             .map_err(|error| located(error, &e.span));
-        self.depth -= 1;
+        self.budget.leave();
         if let Ok(e) = &result {
             self.account(e.encode(self.l()).map_err(expression_error)?.len())?;
         }
@@ -641,7 +615,7 @@ impl<'a> Session<'a> {
     pub fn scope_decl(&mut self, module: usize, name: &str) -> Result<Digest> {
         self.enter()?;
         let result = self.scope_decl_inner(module, name);
-        self.depth -= 1;
+        self.budget.leave();
         result
     }
     fn scope_decl_inner(&mut self, module: usize, name: &str) -> Result<Digest> {
@@ -682,7 +656,7 @@ impl<'a> Session<'a> {
     ) -> Result<Digest> {
         self.enter()?;
         let result = self.scope_inner(m, b, interfaces);
-        self.depth -= 1;
+        self.budget.leave();
         result
     }
     fn scope_inner(
@@ -1398,43 +1372,18 @@ fn expression_dependencies(e: &Expression, out: &mut BTreeSet<Digest>) {
             out.insert(*library);
         }
         ExpressionKind::Call {
-            function,
-            arguments,
+            function: FunctionId::Library { library, .. },
+            ..
         } => {
-            if let FunctionId::Library { library, .. } = function {
-                out.insert(*library);
-            }
-            for e in arguments {
-                expression_dependencies(e, out);
-            }
+            out.insert(*library);
         }
-        ExpressionKind::Render {
-            template,
-            arguments,
-        } => {
+        ExpressionKind::Render { template, .. } => {
             out.insert(*template);
-            for (_, e) in arguments {
-                expression_dependencies(e, out);
-            }
-        }
-        ExpressionKind::Get { value, .. } | ExpressionKind::Not(value) => {
-            expression_dependencies(value, out)
-        }
-        ExpressionKind::Binary { left, right, .. } => {
-            expression_dependencies(left, out);
-            expression_dependencies(right, out);
-        }
-        ExpressionKind::List(values) => {
-            for e in values {
-                expression_dependencies(e, out)
-            }
-        }
-        ExpressionKind::Record(fields) => {
-            for (_, e) in fields {
-                expression_dependencies(e, out)
-            }
         }
         _ => {}
+    }
+    for child in e.children() {
+        expression_dependencies(child, out);
     }
 }
 fn literal_value(e: &Expr) -> Result<Value> {

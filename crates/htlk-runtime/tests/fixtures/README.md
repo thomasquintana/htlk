@@ -186,3 +186,13 @@ remain unchanged.
 Actual-read influence adds `influence.rs` to core coverage and boundary-protected
 root contracts. The profile-source edit refreshes core/regex/URI identities; the
 graph, policy, schema identity and independent runtime domain vectors are unchanged.
+
+The programming-principles refactoring centralizes expression child navigation,
+typed invocation checkpoints, boundary validation, retry decisions and authorized
+artifact access. The core source manifests now also cover `artifact_access.rs`,
+`execution/artifacts.rs`, `execution/boundary.rs`, `execution/checkpoint.rs` and
+`execution/retry.rs`. Model/analyzer changes refresh all four profile identities.
+The reviewed empty envelope fingerprint is
+`sha256:6fa898f0e77e59135e65468427f37ea2325d7ec5358d7c7ebae7bde89bcdb488`;
+its root scope, policy, canonical wire format and runtime identity vectors retain
+their previous values. The generator and independent Node checker agree.

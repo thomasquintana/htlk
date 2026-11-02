@@ -202,17 +202,7 @@ pub(crate) fn expression_location(
         let e = expression.ok_or(LinkageError::MissingRecord("expression"))?;
         path =
             child_path(e, &path, child).ok_or(LinkageError::MissingRecord("expression child"))?;
-        expression = match e.kind() {
-            E::Get { value, .. } | E::Not(value) => Some(value),
-            E::Binary { left, right, .. } => Some(if child == 0 { left } else { right }),
-            E::List(items)
-            | E::Call {
-                arguments: items, ..
-            } => items.get(child),
-            E::Record(fields) => fields.get(child).map(|(_, e)| e),
-            E::Render { arguments, .. } => arguments.get(child).map(|(_, e)| e),
-            _ => None,
-        };
+        expression = e.child(child);
     }
     location(&path, Some(scope_use.clone()), limits)
 }

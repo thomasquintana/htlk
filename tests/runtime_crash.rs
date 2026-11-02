@@ -8,7 +8,7 @@ use htlk::{
     compiler::*,
     runtime::{
         clock::CoordinatorClock,
-        execution::{ExecutionConfig, ExecutionEngine},
+        execution::{ExecutionConfig, ExecutionEngine, ExecutionScope},
         failure::{FailureCode, RuntimeFailure},
         mcp::{McpEndpoint, NativeMcpAdapter},
         records::RunStatus,
@@ -240,7 +240,10 @@ fn killed_workers_resume_real_response_intent_wait_and_loop_checkpoints_without_
             // No adapter is installed in the recovering service: a saved response
             // must be accepted locally and an unsafe intent must remain uncertain.
             let runtime=Arc::new(Runtime::new(store.clone(),Arc::new(registry),Arc::new(e2e::Policy),RuntimeConfig::default()).unwrap().with_clock(Arc::new(Clock(before.expires_at_ms.unwrap()+1))));
-            let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{lease_ms:100,poll_interval:Duration::from_millis(2),..Default::default()}).unwrap();
+            let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{scope:ExecutionScope::Attached,lease_ms:100,poll_interval:Duration::from_millis(2),..Default::default()}).unwrap();
+            actix::clock::sleep(Duration::from_millis(10)).await;
+            assert_eq!(store.run_header(&run).await.unwrap(),before,"opening the recovery engine must not select the killed worker's run");
+            engine.attach_run(&run).await.unwrap();
             if let Some(wait)=wait{
                 loop{match runtime.submit_reply(&e2e::caller(),wait,Value::Bool(true),"recovered-reply").await{Ok(_)=>break,Err(error)if error.code()==FailureCode::Fenced=>{},Err(error)=>panic!("{mode}: {error:?}")}assert!(Instant::now()<deadline);actix::clock::sleep(Duration::from_millis(2)).await;}
             }

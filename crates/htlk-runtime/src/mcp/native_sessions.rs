@@ -36,7 +36,7 @@ pub(super) struct NativeSessions {
     sender: mpsc::Sender<Command>,
 }
 impl NativeSessions {
-    pub fn new(
+    pub fn launch(
         endpoints: BTreeMap<String, McpEndpoint>,
         timeout_ms: u64,
     ) -> Result<Self, RuntimeFailure> {

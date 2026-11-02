@@ -1,5 +1,6 @@
 //! Re-admit exact origins, verify checkpoints/producer links and resume saved states.
 use super::{
+    checkpoint::InvocationCheckpoint,
     control,
     model::*,
     step::{self, Progress},
@@ -229,18 +230,8 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
         {
             return Err(corrupt());
         }
-        let status = string(&node.payload, "status")?;
-        if !matches!(
-            status.as_str(),
-            "pending" | "active" | "succeeded" | "failed" | "cancelled" | "skipped"
-        ) || node.final_record
-            != matches!(
-                status.as_str(),
-                "succeeded" | "failed" | "cancelled" | "skipped"
-            )
-        {
-            return Err(corrupt());
-        }
+        let checkpoint =
+            InvocationCheckpoint::parse(&node, &runtime.config.limits).map_err(|_| corrupt())?;
         if !matches!(field(&node.payload, "input_checkpoint")?, Value::Null) {
             manifest(
                 runtime,
@@ -250,7 +241,7 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
                 &mut artifacts,
             )
             .await?;
-        } else if matches!(status.as_str(), "active" | "succeeded") {
+        } else if checkpoint.is_admitted() {
             return Err(corrupt());
         }
         labels(&node.payload, &runtime.config.limits)?;

@@ -634,6 +634,13 @@ Record externally significant scheduler choices as well, including which eligibl
 
 Recovery loads committed records or replays the journal, verifies referenced artifacts, reacquires coordinator ownership with a higher fence, reconciles ambiguous dispatch, rebuilds indexes, and continues the reducer. Replay never invokes MCP. A missing recorded pure decision may be recomputed using its exact implementation and immutable inputs; already committed decisions are not replaced.
 
+A host may scope one execution service to explicitly selected run IDs. Admission,
+inspection and notifications do not implicitly select a run. Unselected runs are
+excluded before ownership acquisition, recovery, deadline enforcement and work
+dispatch; their persisted state is unchanged by that service. Selection is hosting
+configuration, not graph authority or a reset of admitted deadlines/usage. On later
+selection, the original deadlines, fences and delivery-aware recovery still apply.
+
 Queue deliveries are hints and may duplicate. A duplicate candidate cannot create a second accepted output manifest. The outbox makes notification delivery recoverable after a commit; it does not make remote effects transactional with HTLK.
 
 Retention must preserve active manifests, open waits, committed loop checkpoints, and the audit window promised by the deployment. Retention expiry has a tombstone; it is distinguishable from corrupted content.

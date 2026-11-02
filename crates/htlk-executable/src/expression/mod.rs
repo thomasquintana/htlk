@@ -263,6 +263,56 @@ impl Expression {
     pub fn kind(&self) -> &ExpressionKind {
         &self.kind
     }
+    /// Borrows a direct child by canonical analysis-path index. Unary operands
+    /// use zero, binary operands use left/right order, and collection/call/render
+    /// children use their normalized stored order. Returns `None` out of range.
+    pub fn child(&self, index: usize) -> Option<&Expression> {
+        match self.kind() {
+            ExpressionKind::Get { value, .. } | ExpressionKind::Not(value) => {
+                (index == 0).then_some(value)
+            }
+            ExpressionKind::Binary { left, right, .. } => match index {
+                0 => Some(left),
+                1 => Some(right),
+                _ => None,
+            },
+            ExpressionKind::List(items)
+            | ExpressionKind::Call {
+                arguments: items, ..
+            } => items.get(index),
+            ExpressionKind::Record(fields) => fields.get(index).map(|(_, expression)| expression),
+            ExpressionKind::Render { arguments, .. } => {
+                arguments.get(index).map(|(_, expression)| expression)
+            }
+            ExpressionKind::Literal(_)
+            | ExpressionKind::Regex { .. }
+            | ExpressionKind::Ref { .. }
+            | ExpressionKind::FunctionRef { .. }
+            | ExpressionKind::Status(_)
+            | ExpressionKind::Error(_) => None,
+        }
+    }
+    /// Iterates direct children without allocation in canonical analysis order.
+    /// Structural iteration visits both Boolean operands; evaluation remains lazy.
+    pub fn children(&self) -> impl DoubleEndedIterator<Item = &Expression> + ExactSizeIterator {
+        let count = match self.kind() {
+            ExpressionKind::Get { .. } | ExpressionKind::Not(_) => 1,
+            ExpressionKind::Binary { .. } => 2,
+            ExpressionKind::List(items)
+            | ExpressionKind::Call {
+                arguments: items, ..
+            } => items.len(),
+            ExpressionKind::Record(fields) => fields.len(),
+            ExpressionKind::Render { arguments, .. } => arguments.len(),
+            ExpressionKind::Literal(_)
+            | ExpressionKind::Regex { .. }
+            | ExpressionKind::Ref { .. }
+            | ExpressionKind::FunctionRef { .. }
+            | ExpressionKind::Status(_)
+            | ExpressionKind::Error(_) => 0,
+        };
+        (0..count).map(|index| self.child(index).expect("index within direct child count"))
+    }
     /// Converts to canonical CBOR data, checking size before large allocations.
     ///
     /// # Errors

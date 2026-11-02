@@ -34,3 +34,6 @@ playground/
 
 # Development notes.
 .notes.md
+
+# Local Python acceptance-controller bytecode
+__pycache__/

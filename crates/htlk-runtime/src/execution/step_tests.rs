@@ -263,6 +263,123 @@ async fn accept_reply(runtime: &Runtime, context: &HostContext, lease: &RunLease
     .await
     .unwrap();
 }
+async fn root_state(runtime: &Arc<Runtime>, lease: &RunLease) -> ScopeState {
+    let header = runtime.store.run_header(lease.run_id()).await.unwrap();
+    let record = runtime
+        .store
+        .record(lease.run_id(), &key(RecordFamily::Scope, header.root_scope))
+        .await
+        .unwrap();
+    let executable = runtime.admitted(header.fingerprint).await.unwrap();
+    let definition = executable.document().fields().scopes
+        [&digest(&record.payload, "definition_digest").unwrap()]
+        .clone();
+    let nodes = super::super::control::all(runtime, lease, RecordFamily::Invocation)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|record| {
+            (
+                string(&record.payload, "local_id")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+                record,
+            )
+        })
+        .collect();
+    ScopeState {
+        site: use_site(&record.payload).unwrap(),
+        context: HostContext::new(
+            string(&record.payload, "principal").unwrap(),
+            &runtime.config.limits,
+        )
+        .unwrap(),
+        record,
+        executable,
+        definition,
+        id: header.root_scope,
+        nodes,
+    }
+}
+
+#[actix::test]
+async fn guard_read_failure_is_not_reinterpreted_as_an_unpersisted_guard() {
+    let (runtime, _, lease, _) = waiting_run().await;
+    let scope = root_state(&runtime, &lease).await;
+    runtime.store.clone().close().await.unwrap();
+    let error = guard(
+        &runtime,
+        &lease,
+        &scope,
+        ExpressionSite::NodeGuard("review".parse().unwrap()),
+        format!("{}:node:review", scope.id),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, RuntimeError::Storage(StoreError::Closed)));
+}
+
+#[actix::test]
+async fn unselected_source_checkpoints_are_not_interpreted() {
+    let (runtime, _, lease, _) = waiting_run().await;
+    let mut scope = root_state(&runtime, &lease).await;
+    let edge = scope.definition.fields().edges.iter()
+        .find(|edge| matches!(edge.destination(), EdgeDestination::Input { node, .. } if node.as_str() == "consume"))
+        .unwrap();
+    // The candidate source is deliberately unreadable. A false persisted guard
+    // must make that checkpoint irrelevant to binding reduction.
+    scope.nodes.get_mut("review").unwrap().payload = Value::Null;
+    let false_guard = object([
+        ("value", Value::Bool(false)),
+        ("failure", Value::Null),
+        ("causes", Value::Array(vec![])),
+        (
+            "influence_labels",
+            SecurityLabels::default()
+                .to_value(&runtime.config.limits)
+                .unwrap(),
+        ),
+    ])
+    .unwrap();
+    // Use a fresh guard key by cloning the edge under a new identity.
+    let mut fields = scope.definition.fields().clone();
+    let index = fields
+        .edges
+        .iter()
+        .position(|candidate| candidate.id() == edge.id())
+        .unwrap();
+    fields.edges[index] = Edge::new(
+        "false_source".parse().unwrap(),
+        edge.source().clone(),
+        edge.destination().clone(),
+    );
+    let destination = fields.edges[index].destination().clone();
+    scope.definition = Scope::new(fields, &runtime.config.limits).unwrap();
+    commit(
+        &runtime,
+        &lease,
+        "false-source-guard".into(),
+        vec![insert(
+            RecordFamily::Guard,
+            format!("{}:edge:false_source", scope.id),
+            false_guard,
+            true,
+        )],
+        None,
+    )
+    .await
+    .unwrap();
+    let (selected, _) = bindings(
+        &runtime,
+        &lease,
+        &scope,
+        vec![("answer".parse().unwrap(), destination)],
+    )
+    .await
+    .unwrap();
+    assert!(matches!(selected["answer"], BindingDecision::Absent { .. }));
+}
 async fn assert_replay(runtime: &Runtime, lease: &RunLease) {
     let mut sequence = 0;
     let mut replay = None;

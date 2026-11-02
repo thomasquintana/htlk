@@ -52,6 +52,7 @@ pub fn native_profile(
         include_bytes!("store_execution.rs"),
         include_bytes!("execution/mod.rs"),
         include_bytes!("execution/model.rs"),
+        include_bytes!("execution/checkpoint.rs"),
         include_bytes!("execution/frame.rs"),
         include_bytes!("execution/step.rs"),
         include_bytes!("execution/composite.rs"),
@@ -76,6 +77,10 @@ pub fn native_profile(
         include_bytes!("mcp_extract.rs"),
         include_bytes!("mcp_normalize.rs"),
         include_bytes!("uri_template.rs"),
+        include_bytes!("artifact_access.rs"),
+        include_bytes!("execution/artifacts.rs"),
+        include_bytes!("execution/boundary.rs"),
+        include_bytes!("execution/retry.rs"),
     ]);
     let regex = EngineIdentity::new(
         "htlk.native-regex".into(),

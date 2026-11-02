@@ -84,6 +84,16 @@ fenced run supervision. Durable node/guard/input checkpoints drive native pure
 execution, complete scope boundaries and explicit loop transitions. See
 `docs/runtime-execution.md` for the delivered execution boundary.
 
+Choose `ExecutionScope::Attached` in `ExecutionConfig` for request-scoped hosting.
+The engine starts empty; after durable admission (or loading an exact saved run),
+call `engine.attach_run(&run_id).await?`. Admission and inspection do not implicitly
+select work. Unattached runs acquire no ownership and receive no background
+recovery, deadline mutations or dispatch. The additive set is bounded by
+`max_attached_runs`; `max_runs` separately bounds concurrently coordinated runs.
+Use `ExecutionScope::All` (the default) only for intentional store-wide hosting.
+Selection grants no policy authority and does not reset native deadlines or spent
+usage. Shutdown preserves native state and does not cancel the request.
+
 `binding` supplies canonical all-guard destination selection and guard-first input
 presence/error reduction, retaining protected absence and causal failures. It never
 resolves a source for pending/conflicting/inactive groups. Decisions remain proposals

@@ -549,31 +549,20 @@ fn expression(
     use ExpressionKind as E;
     match e.kind() {
         E::Call {
-            function,
+            function: FunctionId::Library { library, name },
             arguments,
         } => {
-            if let FunctionId::Library { library, name } = function {
-                let lib = f
-                    .libraries
-                    .get(library)
-                    .ok_or(Error::MissingRecord("library"))?;
-                let sig = lib
-                    .function(name.as_str())
-                    .ok_or(Error::MissingRecord("function"))?;
-                if sig.parameters().len() != arguments.len() {
-                    return Err(Error::FunctionArity);
-                }
-                used.libraries.insert(*library);
+            let lib = f
+                .libraries
+                .get(library)
+                .ok_or(Error::MissingRecord("library"))?;
+            let sig = lib
+                .function(name.as_str())
+                .ok_or(Error::MissingRecord("function"))?;
+            if sig.parameters().len() != arguments.len() {
+                return Err(Error::FunctionArity);
             }
-            for (index, child) in arguments.iter().enumerate() {
-                expression(
-                    child,
-                    f,
-                    used,
-                    &crate::diagnostic::child_path(e, base, index).expect("call child"),
-                    path,
-                )?;
-            }
+            used.libraries.insert(*library);
         }
         E::FunctionRef { library, name } => {
             let lib = f
@@ -602,46 +591,17 @@ fn expression(
                 return Err(Error::TemplateArguments);
             }
             used.templates.insert(*template);
-            for (index, (_, child)) in arguments.iter().enumerate() {
-                expression(
-                    child,
-                    f,
-                    used,
-                    &crate::diagnostic::child_path(e, base, index).expect("render child"),
-                    path,
-                )?;
-            }
-        }
-        E::List(items) => {
-            for (index, child) in items.iter().enumerate() {
-                expression(
-                    child,
-                    f,
-                    used,
-                    &crate::diagnostic::child_path(e, base, index).expect("list child"),
-                    path,
-                )?;
-            }
-        }
-        E::Record(fields) => {
-            for (index, (_, child)) in fields.iter().enumerate() {
-                expression(
-                    child,
-                    f,
-                    used,
-                    &crate::diagnostic::child_path(e, base, index).expect("record child"),
-                    path,
-                )?;
-            }
-        }
-        E::Get { value, .. } | E::Not(value) => {
-            expression(value, f, used, &format!("{base}/1"), path)?
-        }
-        E::Binary { left, right, .. } => {
-            expression(left, f, used, &format!("{base}/1"), path)?;
-            expression(right, f, used, &format!("{base}/2"), path)?;
         }
         _ => (),
+    }
+    for (index, child) in e.children().enumerate() {
+        expression(
+            child,
+            f,
+            used,
+            &crate::diagnostic::child_path(e, base, index).expect("direct expression child"),
+            path,
+        )?;
     }
     Ok(())
 }

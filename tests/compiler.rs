@@ -111,7 +111,7 @@ fn owned_admission_retains_registry_and_checked_execution_across_threads() {
 #[test]
 fn compiler_reports_cannot_replace_admission_of_authoritative_bytes() {
     let (compiler, registry) = native_compiler();
-    let mut output = compiler
+    let output = compiler
         .compile_source(
             r#"ir_version="0.1"
       graph test.empty { inputs={} outputs={} nodes{} edges{} }"#,
@@ -119,17 +119,13 @@ fn compiler_reports_cannot_replace_admission_of_authoritative_bytes() {
         )
         .unwrap();
     let original = output.fingerprint;
-    output.executable_bytes = ExecutableEnvelope::new(vec![0xa0], &Limits::default())
+    let changed_bytes = ExecutableEnvelope::new(vec![0xa0], &Limits::default())
         .unwrap()
         .encode(&Limits::default())
         .unwrap();
     assert_eq!(output.analysis().fingerprint(), original);
     assert!(matches!(
-        verify_executable_owned(
-            &output.executable_bytes,
-            Arc::new(registry),
-            &Limits::default()
-        ),
+        verify_executable_owned(&changed_bytes, Arc::new(registry), &Limits::default()),
         Err(ExecutableVerificationError::Document(_))
     ));
 }

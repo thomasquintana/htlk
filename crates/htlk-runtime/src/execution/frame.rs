@@ -1,26 +1,24 @@
 //! Lazy immutable artifact access on calculation workers only.
-use super::model::*;
+use super::{artifacts::WorkerArtifactResolver, checkpoint::InvocationCheckpoint, model::*};
 use crate::{
     EvaluationContext, EvaluationError, EvaluationMeter, EvaluationOutcome, EvaluationValue,
-    HostContext, Runtime,
-    failure::{FailureCode, RuntimeFailure},
+    HostContext, RuntimePolicy,
+    artifact_access::ArtifactReader,
+    failure::RuntimeFailure,
     identity::{ArtifactId, RunId, ScopeInstanceId},
     influence::{
         InfluenceContext, InfluenceEnvironment, InfluencedError, InfluencedEvaluation,
         ReferenceInfluence,
     },
-    records::SecurityLabels,
+    records::{SecurityLabels, SourceState},
     store::StoredRecord,
 };
 use htlk_analyzer::{ExpressionSite, ScopeUse};
-use htlk_executable::{Identifier, PathStep, PortTable, ValueReference, cbor::Value};
-use std::{
-    cell::RefCell,
-    collections::BTreeMap,
-    future::Future,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+use htlk_executable::{
+    Identifier, PathStep, PortTable, ValueReference,
+    cbor::{Limits, Value},
 };
+use std::{cell::RefCell, collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 pub(super) enum Slot {
@@ -31,26 +29,31 @@ pub(super) enum Slot {
     Unavailable,
 }
 pub(super) struct Frame {
-    pub runtime: Arc<Runtime>,
-    pub context: HostContext,
-    pub run: RunId,
-    pub scope: ScopeInstanceId,
-    pub values: BTreeMap<ValueReference, Slot>,
-    pub outcomes: BTreeMap<Identifier, EvaluationOutcome>,
+    policy: Arc<dyn RuntimePolicy>,
+    limits: Limits,
+    context: HostContext,
+    run: RunId,
+    scope: ScopeInstanceId,
+    values: BTreeMap<ValueReference, Slot>,
+    outcomes: BTreeMap<Identifier, EvaluationOutcome>,
     pub influence: InfluenceEnvironment,
-    cache: RefCell<BTreeMap<ArtifactId, Arc<Value>>>,
+    artifacts: WorkerArtifactResolver,
     fault: RefCell<Option<RuntimeFailure>>,
 }
 impl Frame {
     pub fn new(
-        runtime: Arc<Runtime>,
+        reader: ArtifactReader,
+        policy: Arc<dyn RuntimePolicy>,
+        limits: Limits,
         context: HostContext,
         run: RunId,
         scope: ScopeInstanceId,
         base: SecurityLabels,
     ) -> Self {
         Self {
-            runtime,
+            artifacts: WorkerArtifactResolver::new(reader, context.clone()),
+            policy,
+            limits,
             context,
             run,
             scope,
@@ -60,7 +63,6 @@ impl Frame {
                 base,
                 ..Default::default()
             },
-            cache: RefCell::new(BTreeMap::new()),
             fault: RefCell::new(None),
         }
     }
@@ -104,41 +106,11 @@ impl Frame {
             let Some(record) = nodes.get(definition.id()) else {
                 continue;
             };
-            let status = string(&record.payload, "status")?;
-            let influence = labels(&record.payload, &self.runtime.config.limits)?;
-            let cause = if matches!(status.as_str(), "failed" | "cancelled") {
-                Some(crate::failure::FailureCause {
-                    invocation: record.key.id.parse().map_err(|_| err())?,
-                    code: if status == "failed" {
-                        failure(&record.payload, &self.runtime.config.limits)?.code()
-                    } else {
-                        FailureCode::Cancelled
-                    },
-                    location: Some(
-                        htlk_executable::JsonPointer::new(
-                            &format!("/scopes/{scope_definition}/nodes/{index}"),
-                            &self.runtime.config.limits,
-                        )
-                        .map_err(|_| err())?,
-                    ),
-                })
-            } else {
-                None
-            };
-            let outcome = match status.as_str() {
-                "succeeded" => EvaluationOutcome::Succeeded,
-                "skipped" => EvaluationOutcome::Skipped,
-                "cancelled" => EvaluationOutcome::Cancelled,
-                "failed" => {
-                    let f = failure(&record.payload, &self.runtime.config.limits)?;
-                    EvaluationOutcome::Failed {
-                        code: f.code().to_string(),
-                        message: f.message().into(),
-                    }
-                }
-                _ => EvaluationOutcome::Pending,
-            };
-            self.outcomes.insert(definition.id().clone(), outcome);
+            let checkpoint = InvocationCheckpoint::parse(record, &self.limits)?;
+            let influence = checkpoint.influence().clone();
+            let cause = checkpoint.cause(scope_definition, index, &self.limits)?;
+            self.outcomes
+                .insert(definition.id().clone(), checkpoint.outcome());
             self.influence.outcomes.insert(
                 definition.id().clone(),
                 ReferenceInfluence {
@@ -147,16 +119,11 @@ impl Frame {
                 },
             );
             for (port, _) in definition.fields().outputs.iter() {
-                let slot = match status.as_str() {
-                    "succeeded" => entry(
-                        map(field(&record.payload, "outputs")?)?
-                            .get(port.as_str())
-                            .ok_or_else(err)?,
-                    )?
-                    .map_or(Slot::Absent, Slot::Artifact),
-                    "skipped" => Slot::Absent,
-                    "failed" | "cancelled" => Slot::Unavailable,
-                    _ => Slot::Pending,
+                let slot = match checkpoint.output(port)? {
+                    SourceState::Value(id) => Slot::Artifact(id),
+                    SourceState::Absent => Slot::Absent,
+                    SourceState::Unavailable(_) => Slot::Unavailable,
+                    SourceState::Pending => Slot::Pending,
                 };
                 self.bind(
                     ValueReference::Output {
@@ -185,7 +152,7 @@ impl Frame {
         expression: &ExpressionSite,
     ) -> Result<InfluencedEvaluation, crate::RuntimeError> {
         let authorize = |labels: &SecurityLabels| {
-            self.runtime.policy.authorize(
+            self.policy.authorize(
                 &self.context,
                 crate::Authorization::ReadBoundary {
                     run_id: &self.run,
@@ -194,12 +161,7 @@ impl Frame {
                 },
             )
         };
-        let guarded = InfluenceContext::new(
-            self,
-            &self.influence,
-            &authorize,
-            &self.runtime.config.limits,
-        )?;
+        let guarded = InfluenceContext::new(self, &self.influence, &authorize, &self.limits)?;
         let mut result = guarded.evaluate(executable, site, expression)?;
         if let Some(fault) = self.fault.borrow().clone() {
             result.result = Err(InfluencedError::Failure(fault));
@@ -228,25 +190,11 @@ impl EvaluationContext for Frame {
             Slot::Unavailable => Err(EvaluationError::UnavailableSource),
             Slot::Value(value) => Ok(EvaluationValue::Present(meter.copy_value(value)?)),
             Slot::Artifact(id) => {
-                let cached = self.cache.borrow().get(id).cloned();
-                let value = if let Some(value) = cached {
-                    value
-                } else {
-                    match block_on(self.runtime.read_artifact(&self.context, *id)) {
-                        Ok(value) => {
-                            let value = Arc::new(value.value);
-                            self.cache.borrow_mut().insert(*id, value.clone());
-                            value
-                        }
-                        Err(error) => {
-                            let code = if error.code() == FailureCode::Input {
-                                FailureCode::Digest
-                            } else {
-                                error.code()
-                            };
-                            self.fault.replace(Some(RuntimeFailure::new(code)));
-                            return Err(EvaluationError::UnavailableSource);
-                        }
+                let value = match self.artifacts.read_on_worker(*id) {
+                    Ok(value) => value,
+                    Err(failure) => {
+                        self.fault.replace(Some(failure));
+                        return Err(EvaluationError::UnavailableSource);
                     }
                 };
                 Ok(EvaluationValue::Present(meter.copy_value(&value)?))
@@ -261,27 +209,5 @@ impl EvaluationContext for Frame {
         _: &htlk_executable::digest::Digest,
     ) -> Option<&htlk_executable::PromptTemplate> {
         None
-    }
-}
-// SQLite's worker/oneshot futures are safe to poll here; never use this bridge for
-// network/timer work. It runs only inside an execution calculation worker.
-pub(super) fn block_on<F: Future>(future: F) -> F::Output {
-    struct Thread(std::thread::Thread);
-    impl Wake for Thread {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark()
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            self.0.unpark()
-        }
-    }
-    let waker = Waker::from(Arc::new(Thread(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = std::pin::pin!(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::park(),
-        }
     }
 }

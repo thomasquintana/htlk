@@ -43,31 +43,8 @@ pub fn check_expression_context(
             path.pop();
             result
         };
-        match e.kind() {
-            ExpressionKind::Get { value, .. } | ExpressionKind::Not(value) => child(0, value)?,
-            ExpressionKind::Binary { left, right, .. } => {
-                child(0, left)?;
-                child(1, right)?;
-            }
-            ExpressionKind::List(items)
-            | ExpressionKind::Call {
-                arguments: items, ..
-            } => {
-                for (i, e) in items.iter().enumerate() {
-                    child(i, e)?;
-                }
-            }
-            ExpressionKind::Record(fields) => {
-                for (i, (_, e)) in fields.iter().enumerate() {
-                    child(i, e)?;
-                }
-            }
-            ExpressionKind::Render { arguments, .. } => {
-                for (i, (_, e)) in arguments.iter().enumerate() {
-                    child(i, e)?;
-                }
-            }
-            _ => (),
+        for (index, expression) in e.children().enumerate() {
+            child(index, expression)?;
         }
         Ok(())
     }

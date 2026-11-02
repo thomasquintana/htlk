@@ -1,5 +1,8 @@
 //! Actix supervision of fenced durable graph execution.
 mod approval;
+mod artifacts;
+mod boundary;
+mod checkpoint;
 mod composite;
 mod control;
 mod extension;
@@ -12,6 +15,7 @@ pub use mcp_evidence::McpEvidenceView;
 mod mcp_samples;
 pub use mcp_samples::{McpInferenceSelection, ProtectedInferenceRevision};
 mod recovery;
+mod retry;
 pub use inspection::{
     AttemptView, DecisionView, GraphView, HistoryEntry, HistoryPage, NodeView, RunView, ScopeView,
     WaitView,
@@ -30,11 +34,31 @@ use crate::{
 };
 use actix::WeakAddr;
 use actix::prelude::*;
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound,
+    sync::Arc,
+    time::Duration,
+};
+
+/// Host-selected coordination scope, independent of graph authorization.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExecutionScope {
+    /// Coordinate every eligible nonterminal run in the store.
+    #[default]
+    All,
+    /// Start empty and coordinate only runs explicitly attached by the host.
+    /// Admission, inspection and host-command notifications never attach a run.
+    Attached,
+}
 
 /// Finite worker, mailbox, ownership and polling settings.
 #[derive(Clone, Debug)]
 pub struct ExecutionConfig {
+    /// Which runs may acquire ownership, recover, enforce deadlines or execute.
+    pub scope: ExecutionScope,
+    /// Finite lifetime attachment-set bound, separate from concurrent `max_runs`.
+    pub max_attached_runs: usize,
     /// Concurrent calculation workers; network attempts never become pure retries.
     pub workers: usize,
     /// Maximum locally coordinated runs.
@@ -47,6 +71,8 @@ pub struct ExecutionConfig {
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
+            scope: ExecutionScope::All,
+            max_attached_runs: 4096,
             workers: 2,
             max_runs: 64,
             lease_ms: 30000,
@@ -65,16 +91,32 @@ impl ExecutionEngine {
     /// can be used separately; this service consumes durable work and recovery hints.
     ///
     /// # Errors
-    /// Returns missing Actix context or invalid finite configuration.
+    /// Returns missing Actix context, invalid finite configuration, or an already
+    /// running engine attached to this runtime.
     pub fn launch(runtime: Arc<Runtime>, config: ExecutionConfig) -> Result<Self, RuntimeError> {
         if System::try_current().is_none()
             || config.workers == 0
             || config.workers > 64
             || config.max_runs == 0
             || config.max_runs > 4096
+            || config.max_attached_runs == 0
+            || config.max_attached_runs > 4096
             || config.lease_ms < 100
             || config.poll_interval.is_zero()
             || config.poll_interval > Duration::from_secs(10)
+        {
+            return Err(RuntimeError::failure(FailureCode::Profile));
+        }
+        // Reserve routing before starting any workers. Concurrent launches must
+        // never leave two supervisors sharing a single host-command address.
+        let mut execution = runtime
+            .execution
+            .lock()
+            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))?;
+        if execution
+            .as_ref()
+            .and_then(WeakAddr::upgrade)
+            .is_some_and(|address| address.connected())
         {
             return Err(RuntimeError::failure(FailureCode::Profile));
         }
@@ -85,16 +127,29 @@ impl ExecutionEngine {
             config,
             workers,
             active: BTreeMap::new(),
+            attached: BTreeSet::new(),
             polling: false,
             cursor: None,
         }
         .start();
-        *runtime
-            .execution
-            .lock()
-            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))? =
-            Some(address.downgrade());
+        *execution = Some(address.downgrade());
         Ok(Self { address })
+    }
+
+    /// Select an existing run for this engine's lifetime. Repetition is idempotent;
+    /// attaching an already terminal run adds no entry. Prior attachments remain
+    /// in the bounded set even after completion.
+    /// An `Attached` engine does no background run work before this call. Selection
+    /// does not grant policy authority, restart deadlines or create an admission.
+    /// The set is additive: use shutdown/new engine to select a different scope.
+    ///
+    /// # Errors
+    /// Returns an unknown run, exhausted attachment capacity or stopped engine.
+    pub async fn attach_run(&self, run: &RunId) -> Result<(), RuntimeError> {
+        self.address
+            .send(AttachRun(run.clone()))
+            .await
+            .map_err(|_| RuntimeError::failure(FailureCode::Invariant))?
     }
     /// Stops local coordination without changing terminal outcomes or redispatching
     /// effects. Restart reacquires ownership after existing leases expire.
@@ -136,6 +191,7 @@ pub(crate) struct Supervisor {
     config: ExecutionConfig,
     workers: Addr<Worker>,
     active: BTreeMap<RunId, Addr<Coordinator>>,
+    attached: BTreeSet<RunId>,
     polling: bool,
     cursor: Option<RunId>,
 }
@@ -146,10 +202,57 @@ impl Actor for Supervisor {
         ctx.notify(Poll);
         ctx.run_interval(self.config.poll_interval, |_, ctx| ctx.notify(Poll));
     }
+    fn stopped(&mut self, ctx: &mut Self::Context) {
+        self.stop.cancel();
+        // A delayed stop from an earlier engine cannot detach its replacement.
+        if let Ok(mut execution) = self.runtime.execution.lock()
+            && execution
+                .as_ref()
+                .and_then(WeakAddr::upgrade)
+                .is_some_and(|address| address == ctx.address())
+        {
+            *execution = None;
+        }
+    }
 }
 struct Poll;
 impl Message for Poll {
     type Result = ();
+}
+
+struct AttachRun(RunId);
+impl Message for AttachRun {
+    type Result = Result<(), RuntimeError>;
+}
+impl Handler<AttachRun> for Supervisor {
+    type Result = AtomicResponse<Self, Result<(), RuntimeError>>;
+    fn handle(&mut self, msg: AttachRun, _: &mut Self::Context) -> Self::Result {
+        let runtime = self.runtime.clone();
+        AtomicResponse::new(Box::pin(
+            async move {
+                runtime
+                    .store
+                    .run_header(&msg.0)
+                    .await
+                    .map_err(RuntimeError::from)
+            }
+            .into_actor(self)
+            .map(|result, actor, ctx| {
+                let header = result?;
+                if actor.config.scope == ExecutionScope::Attached
+                    && !header.status.is_terminal()
+                    && !actor.attached.contains(&header.run_id)
+                {
+                    if actor.attached.len() >= actor.config.max_attached_runs {
+                        return Err(RuntimeError::failure(FailureCode::Budget));
+                    }
+                    actor.attached.insert(header.run_id);
+                }
+                ctx.notify(Poll);
+                Ok(())
+            }),
+        ))
+    }
 }
 struct Finished(RunId);
 impl Message for Finished {
@@ -170,30 +273,42 @@ impl Handler<Poll> for Supervisor {
         self.polling = true;
         let runtime = self.runtime.clone();
         let cursor = self.cursor.clone();
-        let active = self
-            .active
-            .keys()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
+        let active = self.active.keys().cloned().collect::<BTreeSet<_>>();
         let room = self
             .config
             .max_runs
             .saturating_sub(self.active.len())
             .max(1)
             .min(runtime.store.config().max_page_size);
+        // Page the selected IDs themselves: unrelated store runs cannot starve
+        // an attached run, acquire leases or trigger deadline/recovery mutations.
+        let attached = (self.config.scope == ExecutionScope::Attached).then(|| {
+            let after = cursor.as_ref().map_or(Bound::Unbounded, Bound::Excluded);
+            self.attached
+                .range((after, Bound::Unbounded))
+                .take(room)
+                .cloned()
+                .collect::<Vec<_>>()
+        });
         ctx.spawn(
             async move {
-                let runs = runtime.store.running_runs(cursor.as_ref(), room).await?;
+                let runs = match attached {
+                    Some(runs) => runs,
+                    None => runtime.store.running_runs(cursor.as_ref(), room).await?,
+                };
                 let mut ready = Vec::new();
                 for run in &runs {
                     if active.contains(run) {
+                        continue;
+                    }
+                    let header = runtime.store.run_header(run).await?;
+                    if header.status.is_terminal() {
                         continue;
                     }
                     let now = runtime
                         .store
                         .coordinator_time(runtime.clock.now_ms()?)
                         .await?;
-                    let header = runtime.store.run_header(run).await?;
                     if header.owner.is_some() && header.expires_at_ms.is_some_and(|due| now < due) {
                         continue;
                     }
@@ -222,7 +337,7 @@ impl Handler<Poll> for Supervisor {
                             config: actor.config.clone(),
                             run: run.clone(),
                             owner,
-                            lease: None,
+                            state: CoordinationState::Acquiring,
                             busy: false,
                             renewing: false,
                             workers: actor.workers.clone(),
@@ -230,7 +345,6 @@ impl Handler<Poll> for Supervisor {
                             initial_time: now,
                             renew_after: now.saturating_add(actor.config.lease_ms / 3),
                             checking: false,
-                            recovered: false,
                         }
                         .start();
                         actor.active.insert(run, address);
@@ -256,12 +370,11 @@ impl Handler<Stop> for Supervisor {
 }
 struct Coordinator {
     stop: Arc<crate::mcp::McpCancellation>,
-    recovered: bool,
     runtime: Arc<Runtime>,
     config: ExecutionConfig,
     run: RunId,
     owner: String,
-    lease: Option<RunLease>,
+    state: CoordinationState,
     busy: bool,
     renewing: bool,
     workers: Addr<Worker>,
@@ -269,6 +382,27 @@ struct Coordinator {
     initial_time: i64,
     renew_after: i64,
     checking: bool,
+}
+enum CoordinationState {
+    Acquiring,
+    Recovering(RunLease),
+    Ready(RunLease),
+}
+impl CoordinationState {
+    fn lease(&self) -> Option<&RunLease> {
+        match self {
+            Self::Acquiring => None,
+            Self::Recovering(lease) | Self::Ready(lease) => Some(lease),
+        }
+    }
+    fn is_recovered(&self) -> bool {
+        matches!(self, Self::Ready(_))
+    }
+    fn mark_recovered(&mut self) {
+        if let Self::Recovering(lease) = self {
+            *self = Self::Ready(lease.clone());
+        }
+    }
 }
 impl Actor for Coordinator {
     type Context = Context<Self>;
@@ -293,7 +427,7 @@ impl Actor for Coordinator {
                             ctx.stop();
                             return;
                         }
-                        actor.lease = Some(lease);
+                        actor.state = CoordinationState::Recovering(lease);
                         ctx.notify(Pulse)
                     }
                     Err(_) => ctx.stop(),
@@ -315,7 +449,7 @@ impl Message for Pulse {
 impl Handler<Pulse> for Coordinator {
     type Result = ();
     fn handle(&mut self, _: Pulse, ctx: &mut Self::Context) {
-        let Some(lease) = self.lease.clone() else {
+        let Some(lease) = self.state.lease().cloned() else {
             return;
         };
         if !self.checking {
@@ -376,14 +510,14 @@ impl Handler<Pulse> for Coordinator {
                     stop: self.stop.clone(),
                     runtime: self.runtime.clone(),
                     lease,
-                    recovering: !self.recovered,
+                    recovering: !self.state.is_recovered(),
                 })
                 .into_actor(self)
                 .map(|result, actor, ctx| {
                     actor.busy = false;
                     match result {
                         Ok(Ok(step::Progress::Changed)) => {
-                            actor.recovered = true;
+                            actor.state.mark_recovered();
                             ctx.notify(Pulse)
                         }
                         Ok(Ok(step::Progress::Blocked)) => {}

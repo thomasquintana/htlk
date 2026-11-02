@@ -357,6 +357,7 @@ impl Harness {
                 max_runs: 3,
                 lease_ms: 1000,
                 poll_interval: Duration::from_millis(2),
+                ..Default::default()
             },
         )
         .unwrap();

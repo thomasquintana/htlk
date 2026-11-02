@@ -369,28 +369,8 @@ fn analyze_expression(
     if let Some(port) = expected {
         port.to_value(TypeContext::Value, limits)?;
     }
-    let mut checker = Checker {
-        context,
-        environment,
-        limits,
-        work: 0,
-        bytes: 0,
-        serial: 0,
-        bindings: BTreeMap::new(),
-        mandatory: BTreeSet::new(),
-        holes: BTreeSet::new(),
-        nodes: Vec::new(),
-        checks: Vec::new(),
-        calls: Vec::new(),
-        constraints: Vec::new(),
-        operations: Vec::new(),
-        deferred: Vec::new(),
-        combined_limit: None,
-        schemas: options.schemas,
-        regex: options.regex,
-        regex_literals: BTreeSet::new(),
-        diagnostic,
-    };
+    let mut checker = Checker::new(context, environment, options, limits);
+    checker.diagnostic = diagnostic;
     let result = checker.infer(expression, &[], 0)?;
     if let Some(expected) = expected {
         checker.unify(result.value_type(), expected.value_type(), 0)?;
@@ -593,20 +573,6 @@ fn schema_head(ty: &T) -> bool {
     matches!(ty.kind(), K::Schema(_))
         || matches!(ty.kind(),K::Union(types) if types.iter().any(|ty|matches!(ty.kind(),K::Schema(_))))
 }
-fn syntax_child(expression: &Expression, index: usize) -> Option<&Expression> {
-    match expression.kind() {
-        E::Get { value, .. } | E::Not(value) if index == 0 => Some(value),
-        E::Binary { left, .. } if index == 0 => Some(left),
-        E::Binary { right, .. } if index == 1 => Some(right),
-        E::Record(fields) => fields.get(index).map(|(_, e)| e),
-        E::Render { arguments, .. } => arguments.get(index).map(|(_, e)| e),
-        E::List(items)
-        | E::Call {
-            arguments: items, ..
-        } => items.get(index),
-        _ => None,
-    }
-}
 fn projection_origins(
     expression: &Expression,
     nodes: &[ExpressionNodeType],
@@ -621,7 +587,9 @@ fn projection_origins(
         let mut syntax = expression;
         for &index in &node.expression_path {
             checker.step(0)?;
-            syntax = syntax_child(syntax, index).ok_or(ExpressionTypeError::InvalidProjection)?;
+            syntax = syntax
+                .child(index)
+                .ok_or(ExpressionTypeError::InvalidProjection)?;
         }
         let E::Get { value, .. } = syntax.kind() else {
             continue;
@@ -656,7 +624,9 @@ fn projection_origins(
             };
             for index in 0..count {
                 pending.push((
-                    syntax_child(syntax, index).ok_or(ExpressionTypeError::InvalidProjection)?,
+                    syntax
+                        .child(index)
+                        .ok_or(ExpressionTypeError::InvalidProjection)?,
                     checker.child(&path, index)?,
                 ));
             }
@@ -727,28 +697,13 @@ pub fn callback_compatibility(
         }
     }
     let environment = ExpressionTypeEnvironment::default();
-    let mut checker = Checker {
-        context: ExpressionContext::Eval,
-        environment: &environment,
+    let mut checker = Checker::new(
+        ExpressionContext::Eval,
+        &environment,
+        ExpressionAnalysisOptions::default(),
         limits,
-        work: 0,
-        bytes: 0,
-        serial: 0,
-        bindings: BTreeMap::new(),
-        mandatory: BTreeSet::new(),
-        holes: BTreeSet::new(),
-        nodes: Vec::new(),
-        checks: Vec::new(),
-        calls: Vec::new(),
-        constraints: Vec::new(),
-        operations: Vec::new(),
-        deferred: Vec::new(),
-        combined_limit: Some(usize::try_from(remaining).unwrap_or(usize::MAX)),
-        schemas: None,
-        regex: crate::RegexOptions::default(),
-        regex_literals: BTreeSet::new(),
-        diagnostic: None,
-    };
+    );
+    checker.combined_limit = Some(usize::try_from(remaining).unwrap_or(usize::MAX));
     let result = checker.compatible(actual, expected, 0);
     let used = (checker.work as u64).saturating_add(checker.bytes as u64);
     report.result = match result {
@@ -803,7 +758,36 @@ struct Checker<'a> {
     regex_literals: BTreeSet<(String, String)>,
     diagnostic: Option<&'a mut Option<Vec<usize>>>,
 }
-impl Checker<'_> {
+impl<'a> Checker<'a> {
+    fn new(
+        context: ExpressionContext,
+        environment: &'a ExpressionTypeEnvironment,
+        options: ExpressionAnalysisOptions<'a>,
+        limits: &'a Limits,
+    ) -> Self {
+        Self {
+            context,
+            environment,
+            limits,
+            work: 0,
+            bytes: 0,
+            serial: 0,
+            bindings: BTreeMap::new(),
+            mandatory: BTreeSet::new(),
+            holes: BTreeSet::new(),
+            nodes: Vec::new(),
+            checks: Vec::new(),
+            calls: Vec::new(),
+            constraints: Vec::new(),
+            operations: Vec::new(),
+            deferred: Vec::new(),
+            combined_limit: None,
+            schemas: options.schemas,
+            regex: options.regex,
+            regex_literals: BTreeSet::new(),
+            diagnostic: None,
+        }
+    }
     fn mark_error(&mut self, path: &[usize]) {
         if let Some(slot) = self.diagnostic.as_deref_mut()
             && slot.is_none()

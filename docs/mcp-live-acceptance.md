@@ -1,5 +1,10 @@
 # MCP interoperability acceptance
 
+The subsequent [five-server, 75-tool acceptance campaign](mcp-sibling-acceptance.md)
+extends the Chrome-specific extraction/inference campaign below with real Brave,
+llm, context and sandbox deployments, full Chrome inventory coverage, transport
+checks, provider accounting and cleanup findings.
+
 ## Actual Chrome DevTools campaign
 
 The local campaign on 2026-10-29 passed against the unmodified sibling Chrome

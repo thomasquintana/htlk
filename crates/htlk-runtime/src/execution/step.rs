@@ -1,5 +1,10 @@
 //! One fenced, replayable execution decision. Calculation happens on workers.
-use super::{frame::Frame, model::*};
+use super::{
+    boundary::{Boundary, validate_selected},
+    checkpoint::{InvocationCheckpoint, NodeCompletion},
+    frame::Frame,
+    model::*,
+};
 use crate::{
     EvaluationValue, HostContext, Runtime, RuntimeError,
     artifact::{ArtifactInput, ArtifactProducer, PreparedArtifact},
@@ -8,7 +13,7 @@ use crate::{
     },
     failure::{FailureCode, RuntimeFailure},
     identity::{ArtifactId, InvocationId, ScopeInstanceId},
-    records::{InputManifest, ManifestEntry, RunStatus, SecurityLabels, SourceState},
+    records::{RunStatus, SecurityLabels, SourceState},
     store::{
         RecordFamily, RecordWrite, RunLease, StoreError, StoredRecord, Transition,
         TransitionContext,
@@ -222,11 +227,12 @@ async fn tick_observed(
                 .await?;
                 return Ok(Progress::Changed);
             }
-            let changed = if string(&record.payload, "status")? == "pending" {
-                admit(&runtime, &lease, &scope, definition, record).await?
-            } else {
-                operate(&runtime, &lease, &scope, definition, record).await?
-            };
+            let changed =
+                if InvocationCheckpoint::parse(record, &runtime.config.limits)?.is_pending() {
+                    admit(&runtime, &lease, &scope, definition, record).await?
+                } else {
+                    operate(&runtime, &lease, &scope, definition, record).await?
+                };
             if changed {
                 return Ok(Progress::Changed);
             }
@@ -327,7 +333,9 @@ pub(super) async fn frame(
         labels(&scope.record.payload, &runtime.config.limits)?
     };
     let mut frame = Frame::new(
-        runtime.clone(),
+        runtime.artifact_reader(),
+        Arc::clone(&runtime.policy),
+        runtime.config.limits.clone(),
         scope.context.clone(),
         lease.run_id().clone(),
         scope.id,
@@ -396,24 +404,31 @@ async fn guard(
     site: ExpressionSite,
     id: String,
 ) -> Result<(GuardEvaluation, Option<RecordWrite>), RuntimeError> {
-    if let Ok(record) = runtime
+    match runtime
         .store
         .record(lease.run_id(), &key(RecordFamily::Guard, &id))
         .await
     {
-        let state = match field(&record.payload, "value")? {
-            Value::Bool(v) => GuardState::Value(*v),
-            Value::Null => GuardState::Error(failure(&record.payload, &runtime.config.limits)?),
-            _ => return Err(err()),
-        };
-        return Ok((
-            GuardEvaluation {
-                state,
-                influence: labels(&record.payload, &runtime.config.limits)?,
-                causes: decode_causes(map(&record.payload)?.get("causes"), &runtime.config.limits)?,
-            },
-            None,
-        ));
+        Ok(record) => {
+            let state = match field(&record.payload, "value")? {
+                Value::Bool(v) => GuardState::Value(*v),
+                Value::Null => GuardState::Error(failure(&record.payload, &runtime.config.limits)?),
+                _ => return Err(err()),
+            };
+            return Ok((
+                GuardEvaluation {
+                    state,
+                    influence: labels(&record.payload, &runtime.config.limits)?,
+                    causes: decode_causes(
+                        map(&record.payload)?.get("causes"),
+                        &runtime.config.limits,
+                    )?,
+                },
+                None,
+            ));
+        }
+        Err(StoreError::Missing) => {}
+        Err(error) => return Err(error.into()),
     }
     let frame = frame(runtime, lease, scope, None, None).await?;
     let result = guard_result(frame.evaluate(&scope.executable, &scope.site, &site)?);
@@ -464,63 +479,30 @@ fn source(
             )
         }
         EdgeSource::Output { node, port } => {
-            let node = scope.nodes.get(node).ok_or_else(err)?;
-            let state = match string(&node.payload, "status")?.as_str() {
-                "succeeded" => entry(
-                    map(field(&node.payload, "outputs")?)?
-                        .get(port.as_str())
-                        .ok_or_else(err)?,
-                )?
-                .map_or(SourceState::Absent, SourceState::Value),
-                "skipped" => SourceState::Absent,
-                "failed" => SourceState::Unavailable(failure(&node.payload, limits)?),
-                "cancelled" => {
-                    SourceState::Unavailable(RuntimeFailure::new(FailureCode::Cancelled))
-                }
-                _ => SourceState::Pending,
-            };
-            (state, labels(&node.payload, limits)?)
+            let producer =
+                InvocationCheckpoint::parse(scope.nodes.get(node).ok_or_else(err)?, limits)?;
+            let index = scope
+                .definition
+                .fields()
+                .nodes
+                .iter()
+                .position(|n| n.id() == node)
+                .ok_or_else(err)?;
+            return Ok(LabeledSource {
+                state: producer.output(port)?,
+                influence: producer.influence().clone(),
+                cause: producer.cause(
+                    digest(&scope.record.payload, "definition_digest")?,
+                    index,
+                    limits,
+                )?,
+            });
         }
-    };
-    let cause = match source {
-        EdgeSource::Output { node, .. } => {
-            let producer = scope.nodes.get(node).ok_or_else(err)?;
-            if matches!(state, SourceState::Unavailable(_)) {
-                Some(crate::failure::FailureCause {
-                    invocation: producer.key.id.parse().map_err(|_| err())?,
-                    code: if string(&producer.payload, "status")? == "failed" {
-                        failure(&producer.payload, limits)?.code()
-                    } else {
-                        FailureCode::Cancelled
-                    },
-                    location: Some(
-                        htlk_executable::JsonPointer::new(
-                            &format!(
-                                "/scopes/{}/nodes/{}",
-                                digest(&scope.record.payload, "definition_digest")?,
-                                scope
-                                    .definition
-                                    .fields()
-                                    .nodes
-                                    .iter()
-                                    .position(|n| n.id() == node)
-                                    .ok_or_else(err)?
-                            ),
-                            limits,
-                        )
-                        .map_err(|_| err())?,
-                    ),
-                })
-            } else {
-                None
-            }
-        }
-        _ => None,
     };
     Ok(LabeledSource {
         state,
         influence,
-        cause,
+        cause: None,
     })
 }
 pub(super) async fn bindings(
@@ -554,23 +536,27 @@ pub(super) async fn bindings(
             }
             guards.insert(edge.id().clone(), evaluated);
         }
-        let mut sources = BTreeMap::new();
-        for edge in &edges {
-            sources.insert(
-                edge.id().clone(),
-                source(scope, edge.source(), &runtime.config.limits)?,
-            );
-        }
-        let selected = binding::reduce_binding(
+        let selection = binding::select_binding(
             &edges
                 .iter()
                 .map(|edge| edge.id().clone())
                 .collect::<Vec<_>>(),
             |id| guards[id].clone(),
-            |id| sources[id].clone(),
             &runtime.config.limits,
         )
         .map_err(|_| err())?;
+        let selected = match selection {
+            binding::BindingSelection::Settled(decision) => decision,
+            binding::BindingSelection::Source(selected) => {
+                let edge = edges
+                    .iter()
+                    .find(|edge| edge.id() == selected.edge())
+                    .ok_or_else(err)?;
+                selected
+                    .resolve(source(scope, edge.source(), &runtime.config.limits)?)
+                    .map_err(|_| err())?
+            }
+        };
         result.insert(name, selected);
     }
     Ok((result, writes))
@@ -608,8 +594,7 @@ async fn admit(
                 runtime,
                 lease,
                 record,
-                "skipped",
-                None,
+                NodeCompletion::Skipped,
                 guard.influence,
                 vec![],
             )
@@ -621,8 +606,7 @@ async fn admit(
                 runtime,
                 lease,
                 record,
-                "failed",
-                Some(failure.clone()),
+                NodeCompletion::Failed(failure.clone()),
                 guard.influence,
                 vec![],
             )
@@ -681,8 +665,7 @@ async fn admit(
                 runtime,
                 lease,
                 record,
-                "failed",
-                Some(failures[0].failures[0].error.clone()),
+                NodeCompletion::Failed(failures[0].failures[0].error.clone()),
                 influence,
                 binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
             )
@@ -694,8 +677,7 @@ async fn admit(
                 runtime,
                 lease,
                 record,
-                "skipped",
-                None,
+                NodeCompletion::Skipped,
                 influence,
                 binding_writes(scope.id, node.id().as_str(), &selected, runtime)?,
             )
@@ -705,39 +687,40 @@ async fn admit(
         AdmissionDecision::InputsReady(influence) => influence,
         _ => return Err(err()),
     };
-    let (manifest, first_error, validation_errors) = validate_selected(
+    let validation = validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
         &node.fields().inputs,
         &selected,
         &influence,
-        false,
+        Boundary::Input,
     )
     .await?;
-    if let Some(error) = first_error {
-        let mut writes = binding_writes(scope.id, node.id().as_str(), &selected, runtime)?;
-        writes.extend(validation_diagnostics(
-            runtime,
-            scope,
-            Some(node),
-            "inputs",
-            &validation_errors,
-            &influence,
-        )?);
-        finish_node(
-            runtime,
-            lease,
-            record,
-            "failed",
-            Some(error),
-            influence,
-            writes,
-        )
-        .await?;
-        return Ok(true);
-    }
-    let manifest = manifest.ok_or_else(err)?;
+    let manifest = match validation {
+        Ok(manifest) => manifest,
+        Err(rejected) => {
+            let mut writes = binding_writes(scope.id, node.id().as_str(), &selected, runtime)?;
+            writes.extend(validation_diagnostics(
+                runtime,
+                scope,
+                Some(node),
+                "inputs",
+                &rejected.diagnostics,
+                &influence,
+            )?);
+            finish_node(
+                runtime,
+                lease,
+                record,
+                NodeCompletion::Failed(rejected.primary),
+                influence,
+                writes,
+            )
+            .await?;
+            return Ok(true);
+        }
+    };
     let temporary = replace(
         &record.payload,
         [
@@ -779,8 +762,7 @@ async fn admit(
             runtime,
             lease,
             record,
-            "failed",
-            Some(error),
+            NodeCompletion::Failed(error),
             evaluated.influence,
             writes,
         )
@@ -847,112 +829,6 @@ pub(super) fn condition_error(
         },
     }
 }
-pub(super) async fn validate_selected(
-    runtime: &Runtime,
-    executable: &crate::VerifiedExecutable<'_>,
-    context: &HostContext,
-    ports: &PortTable,
-    selected: &BTreeMap<Identifier, BindingDecision>,
-    influence: &SecurityLabels,
-    public: bool,
-) -> Result<
-    (
-        Option<InputManifest>,
-        Option<RuntimeFailure>,
-        Vec<(Identifier, RuntimeFailure)>,
-    ),
-    RuntimeError,
-> {
-    let mut entries = Vec::new();
-    let mut first = None;
-    let mut extra = Vec::new();
-    let mut errors = Vec::new();
-    for (name, port) in ports.iter() {
-        match &selected[name] {
-            BindingDecision::Value {
-                artifact_id,
-                influence: edge_labels,
-                ..
-            } => match runtime.read_artifact(context, *artifact_id).await {
-                Ok(value) => {
-                    extra.push(value.metadata.security_labels().clone());
-                    if let Err(error) = crate::validate_typed_value(
-                        &value.value,
-                        port.value_type(),
-                        Some(executable.schemas()),
-                        &runtime.config.limits,
-                        &executable.policy().fields().evaluator_limits,
-                    ) {
-                        let failure = RuntimeFailure::new(FailureCode::for_evaluation(
-                            &error,
-                            if public {
-                                crate::failure::FailureBoundary::Output
-                            } else {
-                                crate::failure::FailureBoundary::Input
-                            },
-                        ));
-                        if first.is_none() {
-                            first = Some(failure.clone());
-                        }
-                        errors.push((name.clone(), failure));
-                    }
-                    entries.push((
-                        name.clone(),
-                        ManifestEntry::Value {
-                            artifact_id: *artifact_id,
-                            content_digest: value.metadata.content_digest(),
-                            security_labels: value.metadata.security_labels().clone(),
-                        },
-                    ));
-                    extra.push(edge_labels.clone());
-                }
-                Err(error) => {
-                    errors.push((name.clone(), RuntimeFailure::new(error.code())));
-                    if first.is_none() {
-                        first = Some(RuntimeFailure::new(error.code()))
-                    }
-                }
-            },
-            BindingDecision::Absent { .. } => entries.push((name.clone(), ManifestEntry::Absent)),
-            BindingDecision::Failed { failures, .. } => {
-                if first.is_none() {
-                    first = Some(failures[0].error.clone())
-                }
-            }
-            BindingDecision::Pending { .. } => return Err(err()),
-        }
-    }
-    if first.is_some() {
-        return Ok((None, first, errors));
-    }
-    if public
-        && entries.iter().any(|(name, entry)| {
-            ports.get(name.as_str()).is_some_and(|p| p.required())
-                && matches!(entry, ManifestEntry::Absent)
-        })
-    {
-        return Ok((
-            None,
-            Some(RuntimeFailure::new(FailureCode::OutputMissing)),
-            errors,
-        ));
-    }
-    let labels = SecurityLabels::combine(
-        std::iter::once(influence).chain(extra.iter()),
-        &runtime.config.limits,
-    )?;
-    Ok((
-        Some(InputManifest::freeze(
-            ports,
-            entries,
-            labels,
-            &runtime.config.limits,
-        )?),
-        None,
-        errors,
-    ))
-}
-
 pub(super) fn contract_diagnostic(
     runtime: &Runtime,
     scope: &ScopeState,
@@ -1356,8 +1232,7 @@ pub(super) async fn accept_node(
             runtime,
             lease,
             record,
-            "failed",
-            Some(error),
+            NodeCompletion::Failed(error),
             influence,
             vec![diagnostic],
         )
@@ -1442,8 +1317,7 @@ pub(super) async fn finish_failure(
         runtime,
         lease,
         record,
-        "failed",
-        Some(RuntimeFailure::new(code)),
+        NodeCompletion::Failed(RuntimeFailure::new(code)),
         influence,
         vec![],
     )
@@ -1453,22 +1327,17 @@ pub(super) async fn finish_node(
     runtime: &Runtime,
     lease: &RunLease,
     record: &StoredRecord,
-    status: &str,
-    error: Option<RuntimeFailure>,
+    completion: NodeCompletion,
     influence: SecurityLabels,
     mut writes: Vec<RecordWrite>,
 ) -> Result<(), RuntimeError> {
+    let status = completion.status();
     let payload = replace(
         &record.payload,
         [
             ("status", Value::Text(status.into())),
             ("reason", Value::Null),
-            (
-                "failure",
-                error.map_or(Ok(Value::Null), |e| {
-                    e.to_value(&runtime.config.limits).map_err(|_| err())
-                })?,
-            ),
+            ("failure", completion.failure_value(&runtime.config.limits)?),
             (
                 "influence_labels",
                 influence.to_value(&runtime.config.limits)?,
@@ -1536,29 +1405,39 @@ async fn close_scope(
             ),
         &runtime.config.limits,
     )?;
-    let (manifest, error, validation_errors) = validate_selected(
+    let validation = validate_selected(
         runtime,
         &scope.executable,
         &scope.context,
         &scope.definition.fields().outputs,
         &selected,
         &influence,
-        true,
+        Boundary::Output,
     )
     .await?;
-    boundary_writes.extend(validation_diagnostics(
-        runtime,
-        scope,
-        None,
-        "outputs",
-        &validation_errors,
-        &influence,
-    )?);
-    if let Some(error) = error {
-        scope_failure_with(runtime, lease, scope, error, influence, boundary_writes).await?;
-        return Ok(true);
-    }
-    let manifest = manifest.ok_or_else(err)?;
+    let manifest = match validation {
+        Ok(manifest) => manifest,
+        Err(rejected) => {
+            boundary_writes.extend(validation_diagnostics(
+                runtime,
+                scope,
+                None,
+                "outputs",
+                &rejected.diagnostics,
+                &influence,
+            )?);
+            scope_failure_with(
+                runtime,
+                lease,
+                scope,
+                rejected.primary,
+                influence,
+                boundary_writes,
+            )
+            .await?;
+            return Ok(true);
+        }
+    };
     let frame = frame(
         runtime,
         lease,

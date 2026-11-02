@@ -1,5 +1,6 @@
 //! Durable MCP attempts, intent-before-send, response-before-acceptance and safe retry.
 use super::{
+    checkpoint::NodeCompletion,
     model::*,
     step::{self, OutputProposal, ScopeState},
 };
@@ -1086,10 +1087,8 @@ async fn fail_attempt(
     let Operation::Mcp { retry, .. } = &node.fields().operation else {
         return Err(err());
     };
-    let number = u64::try_from(number(&attempt.payload, "number")?).map_err(|_| err())?;
-    if number == 0 || number > retry.max_attempts() {
-        return Err(err());
-    }
+    let attempt_number = u64::try_from(number(&attempt.payload, "number")?).map_err(|_| err())?;
+    let delay = super::retry::replay_delay(retry, attempt_number, code, policy.replay_safe)?;
     let decision = |disposition: &str| -> Result<crate::store::RecordWrite, RuntimeError> {
         Ok(insert(
             RecordFamily::Observation,
@@ -1109,31 +1108,13 @@ async fn fail_attempt(
             true,
         ))
     };
-    if matches!(
-        code,
-        FailureCode::McpTransport
-            | FailureCode::McpTimeout
-            | FailureCode::McpProtocol
-            | FailureCode::McpToolError
-            | FailureCode::OutputSchema
-            | FailureCode::DeclaredContract
-            | FailureCode::InferredSchema
-            | FailureCode::ApplicationSchema
-            | FailureCode::Postconditions
-    ) && policy.replay_safe
-        && number < retry.max_attempts()
-        && retry.on().iter().any(|c| c == code.as_str())
-    {
+    if let Some(delay) = delay {
         let now = runtime
             .store
             .coordinator_time(runtime.clock.now_ms()?)
             .await?;
-        let delay = *retry
-            .backoff_ms()
-            .get(number as usize - 1)
-            .ok_or_else(err)?;
         let due = now.saturating_add(i64::try_from(delay).map_err(|_| err())?);
-        if due < number_value(&record.payload, "deadline_ms")? {
+        if due < number(&record.payload, "deadline_ms")? {
             let payload = replace(
                 &record.payload,
                 [
@@ -1145,7 +1126,7 @@ async fn fail_attempt(
             step::commit(
                 runtime,
                 lease,
-                format!("retry:{}:{number}", record.key.id),
+                format!("retry:{}:{attempt_number}", record.key.id),
                 vec![update(record, payload, false), decision("retry")?],
                 None,
             )
@@ -1157,16 +1138,12 @@ async fn fail_attempt(
         runtime,
         lease,
         record,
-        "failed",
-        Some(crate::failure::RuntimeFailure::new(code)),
+        NodeCompletion::Failed(crate::failure::RuntimeFailure::new(code)),
         labels(&record.payload, &runtime.config.limits)?,
         vec![decision("failed")?],
     )
     .await?;
     Ok(true)
-}
-fn number_value(v: &Value, name: &str) -> Result<i64, RuntimeError> {
-    number(v, name)
 }
 async fn reserve(
     runtime: &Runtime,

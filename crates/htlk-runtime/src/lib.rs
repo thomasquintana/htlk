@@ -5,6 +5,7 @@ use htlk_analyzer::*;
 use htlk_executable::*;
 
 pub mod artifact;
+mod artifact_access;
 pub mod binding;
 mod checked_evaluate;
 pub mod clock;
