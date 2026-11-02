@@ -55,6 +55,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Fixed
 
+- Pin the third-party notice generator consistently across CI, release validation,
+  and contributor instructions so an upstream tool release cannot silently change
+  the expected license text.
 - Recheck progress after external-work scans to avoid false invariant failures
   when host replies commit concurrently; retain stable impossible-state detection.
 - Make approval denial and deadline acceptance transactional; preserve classified
