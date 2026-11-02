@@ -128,7 +128,9 @@ exact heap limit: value representations and allocator overhead can exceed their
 encoded size. All reservations are fallible, and failed partial
 values are dropped internally.
 
-Registration will need shared accounting across envelope and nested payload decodes.
+Codec limits apply to each bounded decode. Envelope and nested payload validation
+are separate operations in executable admission; this codec alone does not promise
+one cumulative allocation allowance across those operations.
 
 ### Depth assessment
 

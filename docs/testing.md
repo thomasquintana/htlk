@@ -1,4 +1,8 @@
-# Coverage and deep end-to-end testing
+# Testing and fixture maintenance
+
+Use [CONTRIBUTING.md](../CONTRIBUTING.md#development) for the complete required
+repository checks. This guide explains what those checks establish, the behavioral
+coverage map, instrumented measurements, and intentional fixture updates.
 
 ## Goals and measurement
 
@@ -24,25 +28,6 @@ Existing crate-local unit tests share their production source files and appear
 in LLVM's file totals. All tests still execute. No production coverage-skipping
 attributes or coverage-specific behavior are used.
 
-The latest verified Rust 1.98.0 snapshot, including the MCP result redesign,
-is compared with the pre-expansion baseline below:
-
-| Crate | Baseline lines | Current lines | Uncovered lines |
-| --- | --- | --- | --- |
-| `htlk-analyzer` | 89.33% | 92.73% | 505 |
-| `htlk-compiler` | 86.89% | 94.92% | 192 |
-| `htlk-executable` | 95.46% | 98.33% | 99 |
-| `htlk-runtime` | 87.86% | 91.46% | 1,633 |
-| Workspace | 89.30% | 93.21% | 2,429 |
-
-The initial deep-test expansion exercised 1,017 previously uncovered lines. The
-runtime ratchet remains at 1,638 uncovered lines, five above this measurement.
-All previous per-crate floors and uncovered-line budgets remain unchanged. The
-latest complete nightly branch measurement is 82.29% for the analyzer, 87.78% for
-the compiler, 96.30% for executable records and 73.94% for the runtime; every
-unchanged branch ratchet passes. See the [MCP validation handoff](mcp-validation.md)
-for the actual campaign and quality-gate record.
-
 Download the `coverage-line-<SHA>` and `coverage-branch-<SHA>` CI artifacts for
 current exact counts, machine-readable JSON, LCOV and annotated HTML. Open
 `html/index.html` for the source view. Per-crate percentages and uncovered-line
@@ -54,11 +39,12 @@ Install Node.js 24 for the independent local MCP peers. These tests use loopback
 ports, local child processes and isolated temporary SQLite databases; they require
 no service credentials or remote MCP server.
 
-The complete ordinary suite, including every E2E, crash and stress campaign, is:
+The ordinary Rust suite includes every E2E, crash, and stress campaign. The retained
+Node tests independently exercise documentation, coverage, and discovery helpers:
 
 ```console
 cargo test --workspace --all-features --locked
-node --test tools/coverage.test.mjs
+node --test tools/validate-docs.test.mjs tools/coverage.test.mjs tools/discover-mcp.test.mjs
 ```
 
 To reproduce the primary CI coverage measurement:
@@ -92,7 +78,7 @@ it does not instrument doctests.
 
 ## Deep scenarios
 
-[`tests/deep_e2e.rs`](../tests/deep_e2e.rs) runs **113 compiled-graph scenarios**:
+[`tests/deep_e2e.rs`](../tests/deep_e2e.rs) runs compiled-graph scenario matrices:
 
 | Campaign | Evidence |
 | --- | --- |
@@ -117,8 +103,7 @@ Unexpected inspection failures remain failures.
 executes stateful browser and sandbox sequences against session-local stdio/HTTP/
 SSE peers. It verifies concurrent-run isolation, fresh-session negative controls,
 sticky session loss, ownership takeover and terminal/shutdown cleanup. The
-[capability spike report](mcp-capability-spike.md) documents the transport matrix
-and opt-in live-server runner.
+[MCP guide](mcp-guide.md) documents the retained opt-in runners.
 
 [`tests/runtime_crash.rs`](../tests/runtime_crash.rs) kills real worker processes
 at four observed checkpoints: response persistence before acceptance, an unsafe
@@ -157,7 +142,7 @@ Corrupt checkpoints cannot publish output artifacts or authorize redispatch.
   accepted artifact/source metadata, cache configurations, historical reply keys,
   native callback forwarding with one shared meter, and typed failure records.
 
-These supplement the existing [runtime conformance matrix](runtime-conformance.md),
+These supplement the [conformance map](#conformance-map),
 exhaustive binding/cycle oracles, codec vectors and controlled-stack tests.
 
 ## Remaining work toward 99%
@@ -189,15 +174,90 @@ unconfigured production crates, inadequate per-crate percentages, excess uncover
 lines and absent branch instrumentation. Its own Node tests also exercise CLI
 failure statuses and the facade's transition from reexports to executable code.
 
-## Verification record
+## Documentation checks
 
-The expansion passes workspace tests/doctests, both instrumented coverage suites,
-per-crate gates, formatting, warning-free Clippy and rustdoc, specification and
-independent fixture validation, workflow linting, and fresh-target verified
-packaging of all five crates.
+`node tools/validate-docs.mjs` checks local file links and heading anchors across
+tracked/new Markdown, excluding fenced code. Its Node tests cover link resolution,
+duplicate heading slugs, code fences, and missing anchors. It does not fetch external URLs.
 
-The dependency-policy check also passes after updating the TLS dependencies for
-[RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382)
-(`rustls-webpki` 0.103.16) and
-[RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383)
-(`webpki-root-certs` 1.0.10).
+`node specs/validate-specs.mjs` checks the EBNF copy, fenced HTLK syntax, JSON examples,
+diagram captions, standalone/modular correspondence, source-package digests, and
+CDDL reference closure. It does not type-check examples or fully validate CDDL
+instances. `tests/documentation.rs` separately compiles complete guide programs and
+checks their independently observed outputs, parser/grammar ordering, and documented
+failure spellings against the public API. The spec checker also verifies complete
+failure-code table coverage against runtime source. Rustdoc examples run as doctests; the facade includes the
+detailed API reference specifically for that purpose.
+
+## Conformance map
+
+The normative cases are in [runtime §17](../specs/runtime-spec.md#17-required-conformance-scenarios).
+The following suites establish observable invariants with real compiler-produced
+envelopes, independent admission, SQLite, and execution workers where applicable.
+Test-source references describe coverage; CI artifacts establish results for a commit.
+
+| Contract | Regression evidence |
+|---|---|
+| All guards settle before source selection; late conflicts cannot dispatch | `tests/runtime_execution.rs`, `tests/runtime_conformance.rs`; exhaustive independent three-candidate oracle in `crates/htlk-runtime/tests/binding.rs`. |
+| Optional absence, present null, skipped/failed selected sources, zero-input false guards | `tests/runtime_conformance.rs`, `tests/runtime_runs.rs`, crate record/binding tests. |
+| Guarded fallback, required unexported effects, final-next checks and loop bounds | `tests/runtime_execution.rs`, `tests/runtime_conformance.rs`, `tests/runtime_deadlines.rs`. |
+| Standalone/modular equality, scope depth 3, expanded-node bound 34 | `tests/compiler.rs`; package pins, visibility, cycles, and inspection in compiler tests. |
+| Decision-brief acceptance at review one/two/three, rejection fallback, schema/retrieval failure and stop | `tests/runtime_mcp.rs`; native HTTP/SSE standalone/modular cases in `tests/deep_e2e.rs`. |
+| Current policy, labels, protected projection/absence, lazy unused reads | `tests/runtime_boundaries.rs`, `tests/runtime_influence.rs`, `tests/runtime_reply_labels.rs`. |
+| Independent registration, exact profile, producer trust, immutable artifacts | `tests/runtime_registration.rs`, `tests/runtime_artifacts.rs`; crate verified/type tests and independent identity fixtures. |
+| Duplicate replies, terminal no-op receipts, atomic denial and commit-time expiry | `tests/runtime_waits.rs`, `tests/runtime_alignment.rs`, `tests/runtime_deadlines.rs`. |
+| Old approval generations, exact arguments and stable deduplication keys | `tests/runtime_mcp.rs`, `tests/runtime_delivery.rs`, native approvals in `tests/deep_e2e.rs`. |
+| All MCP operation categories, strict hostile ingress, transport/session ownership | `tests/deep_e2e.rs`, `tests/mcp_wire_results.rs`, `tests/runtime_mcp_sessions.rs`, crate transport tests. |
+| Extraction, independent assessments, protected errors, no-call inference, explicit adoption | `tests/runtime_mcp_results.rs`, `tests/runtime_mcp_data.rs`, `tests/mcp_content_library.rs`; crate extraction/normalization/inference tests. |
+| Response-recorded recovery without adapter, unsafe intent ambiguity, preserved waits/loop feedback | `tests/runtime_recovery.rs`, process-kill checkpoints in `tests/runtime_crash.rs`. |
+| Extension during a live call, unchanged identities, adopted reservations and atomic planning reply | `tests/runtime_extension.rs`, repeated joins in `tests/deep_e2e.rs`. |
+| Empty/selected engine scope, unrelated overdue-run exclusion, restart attachment | `tests/runtime_scope.rs`, attached crash recovery in `tests/runtime_crash.rs`. |
+| Protected logical/source/history views, causal diagnostics and synthetic joins | `tests/runtime_inspection.rs`, `tests/runtime_sources.rs`, `tests/runtime_alignment.rs`. |
+| Saved audit promises, immutable tombstones, shared bytes, expired-ID nonrevival | `tests/runtime_retention.rs`. |
+| Transaction rollback, fences, CAS/finality, incompatible schema rejection, bounded replay/outbox | SQLite unit tests in `crates/htlk-runtime/src/store*.rs`; integration replay and stress suites. |
+| Concurrent host reply cannot create false invariant failure; stable impossible states still fail | Deterministic interleavings and deadline negative controls in `crates/htlk-runtime/src/execution/step_tests.rs`. |
+
+## Native identity and fixtures
+
+Native implementation identities hash explicit source contributions, package-owned
+model/analyzer contributions, pinned dependencies, and the MCP schema asset. Review
+the Rust manifests in `crates/htlk-executable/src/implementation.rs`,
+`crates/htlk-analyzer/src/implementation.rs`, and
+`crates/htlk-runtime/src/native_profile.rs` alongside the independent explicit lists
+and hash framing in `tools/validate-executable-fixtures.mjs`.
+
+Adding/removing/relocating a covered Rust module or changing its bytes, including
+inline rustdoc, can change native identities. Markdown content included from an
+unchanged Rust path is not itself an explicit source contribution. Never refresh a
+golden just to conceal an unexplained mismatch.
+
+After reviewing an intentional implementation change:
+
+```console
+cargo run -p htlk-runtime --example native_fixture --locked
+```
+
+Review the printed envelope/profile and update `native-empty.hex` from that output,
+then run:
+
+```console
+node tools/validate-executable-fixtures.mjs
+cargo test -p htlk-runtime --test verified --test identity --locked
+```
+
+Tests consume fixed goldens and must never regenerate them. The independent runtime
+identity vectors remain fixed unless their specified preimages change. The fixture
+[README](../crates/htlk-runtime/tests/fixtures/README.md) describes their formats.
+
+Source package fixtures deliberately contain both files and captured bundle strings.
+After intentionally editing module source, explicitly regenerate snapshots and exact pins:
+
+```console
+node specs/regenerate-module-example.mjs --write
+node specs/validate-specs.mjs
+cargo test --test compiler --locked
+```
+
+Without `--write`, the generator prints the proposed bundle. Tests compare disk
+sources, manifests, bundle contents, digests, and compiled-byte equivalence. They
+never silently repair drift.

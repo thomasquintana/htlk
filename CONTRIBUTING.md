@@ -9,16 +9,16 @@ the required formatting and linting components.
 
 Install Node.js 24 as well: the full compiler/runtime E2E suite launches independent
 local stdio/HTTP/SSE MCP peers. Every E2E, crash/restart and bounded concurrency
-campaign runs on every PR. See [coverage and deep testing](docs/test-coverage.md)
+campaign runs on every PR. See [testing](docs/testing.md)
 for pinned coverage toolchains, reports, per-crate ratchets and focused commands.
 
 Before opening a pull request, run:
 
 ```console
+node tools/validate-docs.mjs
 node specs/validate-specs.mjs
 node tools/validate-executable-fixtures.mjs
-node --test tools/coverage.test.mjs
-python3 -B -m unittest discover -s tools -p live_tools_test.py -v
+node --test tools/validate-docs.test.mjs tools/coverage.test.mjs tools/discover-mcp.test.mjs
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
@@ -47,7 +47,7 @@ and an entry under the `Unreleased` section of `CHANGELOG.md`.
 Native profiles include explicit source contributions. When adding implementation
 modules, update both the Rust identity manifest and the independent fixture checker,
 then deliberately regenerate and review affected fixtures as described in
-`crates/htlk-runtime/tests/fixtures/README.md`.
+[native identity and fixtures](docs/testing.md#native-identity-and-fixtures).
 
 Package all workspace crates together: Cargo stages local packages so dependent
 crates can be verified before their new versions are published. For a local
@@ -113,7 +113,7 @@ downloadable CI documentation; no GitHub Pages setup is required.
 
 All five crates share one version. To release:
 
-1. Replace `TBD` in `CHANGELOG.md` with the release date.
+1. Move the changes being released from `Unreleased` into a dated version section in `CHANGELOG.md`.
 2. Update every workspace dependency version when changing the workspace version.
 3. Commit and push the release contents; run the complete local and CI validation suite.
 4. Create and push an annotated tag matching the package version, such as `v0.1.0`:

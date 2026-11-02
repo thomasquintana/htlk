@@ -24,7 +24,7 @@ Each lesson uses the actual compiler or runtime and explains its results.
 
 Controls: Enter accepts [the default]. m = menu. q = quit (also Ctrl-D / EOF).
 Your lesson data lives in memory and is discarded when you leave the lesson.
-Rust/setup help: docs/interactive-guide.md
+Rust/setup help: docs/user-guide.md
 
 Setting up the native compiler and local tutorial policy...",
     )?;
@@ -72,7 +72,7 @@ Cargo compiles this Rust example and then runs it. The guide compiles HTLK graph
                     terminal.say("\nYou've completed all six lessons!
 You have compiled graphs, run workflows, inspected artifacts, handled errors,
 answered a wait, and made an approval decision.
-Continue with docs/interactive-guide.md#where-to-go-next or revisit a lesson.")?;
+Continue with docs/user-guide.md#where-to-go-next or revisit a lesson.")?;
                 } else {
                     terminal.say("\nYou've reached the end of the lesson list. Choose any unfinished lessons below.")?;
                 }
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
             Ok(())
         }),
         [flag] if flag == "--help" || flag == "-h" => {
-            println!("Usage: cargo run --example interactive_guide --locked -- [--check | --help]\n\nWithout arguments: interactive lessons.\n--check: run and verify a credential-free scripted walkthrough.\nSetup and lesson notes: docs/interactive-guide.md");
+            println!("Usage: cargo run --example interactive_guide --locked -- [--check | --help]\n\nWithout arguments: interactive lessons.\n--check: run and verify a credential-free scripted walkthrough.\nSetup and lesson notes: docs/user-guide.md");
             Ok(())
         },
         _ => Err("unknown arguments; use --help for usage".into()),

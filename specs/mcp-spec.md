@@ -1,10 +1,11 @@
-# Unified MCP tool results: implementation contract
+# MCP result, extraction, and inference specification
 
-This document fixes the semantics for the general MCP interoperability redesign.
-It describes the target implementation; the task checkpoint and acceptance report
-identify which parts have actually shipped and which checks have actually run.
-The redesign is a first-version breaking change, with no legacy wire decoder,
-binding variant, compatibility mode, or automatic development-state migration.
+**Status:** Draft 0.1
+
+This normative companion to the [compiler](compiler-spec.md) and
+[runtime](runtime-spec.md) specifications defines tool-result representation,
+policy selection, bounded extraction, and explicit schema inference/adoption.
+For integration instructions and examples, read the [MCP guide](../docs/mcp-guide.md).
 
 ## Boundaries
 
@@ -315,25 +316,15 @@ revision. Adopting another revision requires recompilation and a new executable
 identity. Existing schemas generally accept added fields already; explicitly
 defining even an optional property's type can change accepted values.
 
-## Durability, first-version reset, and delivery
+## Durability
 
 Persist exact received bounded responses and original labels before local
 assessment. Persist/reconstruct normalization decisions under pinned implementations
 without provider recall. Atomic artifact publication remains conditional on node
-contracts, current authorization, and all mandatory checks. Preserve run/server
-session ownership across local waits, cancellation, and explicit resource cleanup.
+contracts, current authorization, and all mandatory checks. Sessions remain bound
+to run/server ownership while locally waiting. Cancellation tears down transport;
+remote application objects require explicit service-supported cleanup operations.
 
-Advance storage interpretation/version and reject old stores without migration,
-relabeling, deletion, or unsafe run resumption. Regenerate reviewed executable
-fixtures with new implementation identities. The user authorizes an explicit
-inventory and removal of obsolete disposable HTLK development artifacts; stop
-owners and name exact paths before removal. Credentials, sibling application data,
-personal browser profiles, and unrelated external resources are not reset targets.
-
-Acceptance must use actual unchanged sibling Chrome DevTools MCP, controlled page
-markers, real text/image/error responses, exact descriptors and same-session calls.
-There is no separate Browser MCP/extension requirement. Independent stdio/HTTP
-JSON/SSE peers prove guaranteed adversarial/recovery cases separately. Record
-actual revisions, fingerprint, run/call counts, checks, cleanup and blockers;
-fixture success is not product evidence. Full repository quality, implementation
-identity, coverage, packaging and license gates remain unchanged.
+Changed interpretation requires new implementation identities and reviewed fixtures.
+The current private store rejects incompatible versions; its operational contract
+is documented in [runtime internals](../docs/runtime-internals.md).

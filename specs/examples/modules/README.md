@@ -20,7 +20,7 @@ An ordinary nested directory can contain several modules inside one package. A s
 
 ## Compiler and run inputs
 
-Use this bundle as the first argument to `compile_ir`, with the existing [three catalogs](../decision_brief.catalogs.json) as the second argument. The existing [tagged input map](../decision_brief.inputs.json) supplies the question when the resulting executable is started. These are logical API instructions, not a claim that a compiler SDK or command-line application is installed.
+Load the bundle with `SourceBundle::from_json`, then pass `&bundle` and the [three catalogs](../decision_brief.catalogs.json) to `Compiler::compile_ir`. The [tagged input map](../decision_brief.inputs.json) describes the question supplied through the runtime's typed input API. See the [compiler API](../../../crates/htlk-compiler/README.md) and [runtime guide](../../../docs/runtime-guide.md) for Rust integration.
 
 For inspection, request the `find_evidence` export from the research package's `search` module using `inspect_module`. Take its exact `package_digest` from the app manifest. The interface describes ports, contracts, and implementation identity without including the task body. Give that report and the caller module to an LLM when composing a caller; provide the body only when editing or investigating the research task itself.
 
@@ -34,7 +34,7 @@ The documentation checker parses all five files, checks imports/exports in this 
 
 The bundle is a captured copy of the source, not a live filesystem view. After editing a file, rebuild its source package snapshot and digest. If a dependency changed, update its exact pin in the app manifest and rebuild the app snapshot too. A changed comment can change source digests without changing the executable's meaning.
 
-Keep the checked-in files, manifests, and bundle synchronized. The document checker intentionally fails if they diverge. The [module specification](../../htlk-modules-spec.md) defines the precise collection, digest, visibility, and version rules. No edit automatically changes an existing runtime execution.
+Keep the checked-in files, manifests, and bundle synchronized. The document checker intentionally fails if they diverge. The [compiler specification](../../compiler-spec.md#11-source-packages-and-module-interfaces) defines collection, digest, visibility, and version rules. No edit automatically changes an existing runtime execution.
 
 Regenerate this fixture explicitly with
 `node specs/regenerate-module-example.mjs --write`, then run

@@ -1,8 +1,8 @@
 # HTLK Runtime Specification
 
 **Status:** Draft 0.1\
-**Execution core and record format:** 0.1, the unified HTLK baseline. Source modules/packages are resolved by the compiler; see [Modules](htlk-modules-spec.md).
-**Companions:** [Language](htlk-grammar-spec.md) · [Syntax](htlk-ir-syntax-reference.md) · [Compiler](compiler-spec.md) · [Changes](CHANGELOG.md)
+**Execution core and record format:** 0.1, the unified HTLK baseline. Source modules/packages are resolved by the [compiler](compiler-spec.md#11-source-packages-and-module-interfaces).
+**Companions:** [Language](htlk-ir-syntax-reference.md) · [Compiler](compiler-spec.md) · [MCP results](mcp-spec.md) · [Host guide](../docs/runtime-guide.md)
 
 ## 1. Minimal execution model
 
@@ -77,7 +77,7 @@ flowchart TB
     Coordinator <-->|"save and recover progress"| DB["Durable storage"]
 ```
 
-**Diagram 12 — The runtime carries out the plan and remembers its progress.** Computations and external replies propose values. The runtime checks them and saves accepted results before making them available to dependent work. Groups of steps and loop repetitions use these same execution and recording rules.
+**Diagram 1 — The runtime carries out the plan and remembers its progress.** Computations and external replies propose values. The runtime checks them and saves accepted results before making them available to dependent work. Groups of steps and loop repetitions use these same execution and recording rules.
 
 ### 1.5 A small implementation is sufficient
 
@@ -204,7 +204,7 @@ stateDiagram-v2
     active --> cancelled: cancellation or enclosing scope stop
 ```
 
-**Diagram 13 — Invocation outcomes stay immutable.** Retrying an MCP request occurs inside active; it does not turn a terminal failed invocation back into running.
+**Diagram 2 — Invocation outcomes stay immutable.** Retrying an MCP request occurs inside active; it does not turn a terminal failed invocation back into running.
 
 A saved **reason field** explains why a pending or active invocation has not finished: for example, waiting for a worker, awaiting approval, delaying a retry, or checking a proposed result. These reasons do not require separate node lifecycle states. A **lease** is a temporary permission for a worker to own a piece of work. **Dispatch ambiguity** means the runtime does not yet know whether an external request took effect. MCP attempt records track delivery, leases, and dispatch ambiguity independently.
 
@@ -262,7 +262,7 @@ flowchart TD
     Pre -->|"fail"| Fail
 ```
 
-**Diagram 14 — Uniform admission.** A node guard can suppress zero-input work. Once active, all inputs use the same deterministic binding reducer before any effect is dispatched.
+**Diagram 3 — Uniform admission.** A node guard can suppress zero-input work. Once active, all inputs use the same deterministic binding reducer before any effect is dispatched.
 
 ## 6. Evaluator and pure nodes
 
@@ -296,7 +296,7 @@ Before sending each request, the coordinator or adapter:
 
 Descriptor verification detects advertised drift. It cannot prove that a remote implementation has not changed between listing and invocation. A stronger deployment can attest server images or enforce a versioned endpoint. The runtime always validates the returned data; it never claims that a schema digest proves implementation behavior.
 
-Tool success requires a valid bounded MCP result with `isError` false or absent, and satisfaction of all enforced declared/inferred/application constraints. Every successful tool publishes one `McpToolResult` envelope, including original protocol content, bounded literal-JSON extraction evidence, optional unambiguously selected data, and independent schema assessments. Schema-less text/multimodal/empty results are valid generic successes even with no JSON. Advertised output contracts assess original `structuredContent`; text recovery cannot establish declared compliance. Trusted host-selected Report may retain violations but never bypass application checks. Tool errors publish no successful output even when literal JSON is recoverable. Raw responses are durable before local normalization; recovery uses the frozen interpretation without provider recall. See the [complete result and extraction rules](../docs/mcp-result-design.md).
+Tool success requires a valid bounded MCP result with `isError` false or absent, and satisfaction of all enforced declared/inferred/application constraints. Every successful tool publishes one `McpToolResult` envelope, including original protocol content, bounded literal-JSON extraction evidence, optional unambiguously selected data, and independent schema assessments. Schema-less text/multimodal/empty results are valid generic successes even with no JSON. Advertised output contracts assess original `structuredContent`; text recovery cannot establish declared compliance. Trusted host-selected Report may retain violations but never bypass application checks. Tool errors publish no successful output even when literal JSON is recoverable. Raw responses are durable before local normalization; recovery uses the frozen interpretation without provider recall. See the [complete result and extraction rules](mcp-spec.md).
 
 A **resource** is retrievable material, such as a document or image. Resource reads validate the reply's ordered text/blob entries. **Base64** represents arbitrary bytes using text characters for transmission; a blob's base64 text is decoded back to bytes. A response may contain several URIs; every returned URI is checked under the principal and requested resource policy before the snapshot is accepted. There is no blanket equality test against the requested URI. Mixed text/blob results remain a tagged collection.
 
@@ -349,7 +349,7 @@ flowchart LR
     Validate -.-> Error["Structured failure"]
 ```
 
-**Diagram 15 — Acceptance is the publication point.** A returned result becomes visible only after all value checks and the atomic success commit.
+**Diagram 4 — Acceptance is the publication point.** A returned result becomes visible only after all value checks and the atomic success commit.
 
 An artifact keeps the accepted value's identity separate from **provenance**, meaning where it came from and which inputs contributed to it. **Lineage** is the chain of those producer/input relationships. A storage reference says where its bytes can be retrieved; it is not the value's meaning.
 
@@ -397,7 +397,7 @@ flowchart TB
     B -->|"ordinary parent edge"| Consumer["Parent consumer input"]
 ```
 
-**Diagram 16 — Scope boundaries preserve values without inventing a producer.** An input-to-output edge can reuse artifact A in the scope's result manifest. A containing `use` node publishes B with its own invocation identity and lineage to A; the value bytes may be shared. Boundary and artifact access checks remain in force at both steps.
+**Diagram 5 — Scope boundaries preserve values without inventing a producer.** An input-to-output edge can reuse artifact A in the scope's result manifest. A containing `use` node publishes B with its own invocation identity and lineage to A; the value bytes may be shared. Boundary and artifact access checks remain in force at both steps.
 
 ## 9. Composite scopes and completion
 
@@ -491,7 +491,7 @@ sequenceDiagram
     R->>M: Recheck authority, then dispatch frozen arguments
 ```
 
-**Diagram 17 — Renewing approval does not revive old authority.** A retry of an already accepted approval can return its historical receipt without authorizing the replacement request. Each generation has a different wait ID, while the invocation and its arguments remain unchanged.
+**Diagram 6 — Renewing approval does not revive old authority.** A retry of an already accepted approval can return its historical receipt without authorizing the replacement request. Each generation has a different wait ID, while the invocation and its arguments remain unchanged.
 
 Resource notifications start new runs through trusted trigger configuration by default. An authorized integration can submit such an event to an explicit matching wait in the same run. Raw MCP notifications need not contain a stable event ID; the host must define its deduplication contract, and cannot claim exactly-once triggering from URI plus timestamp alone.
 
@@ -536,7 +536,7 @@ flowchart LR
     Added --> Output["New public outputs"]
 ```
 
-**Diagram 18 — Extending a run preserves identity.** The existing scope instance is mounted under a new parent. Its workers and artifacts remain associated with their original invocation IDs.
+**Diagram 7 — Extending a run preserves identity.** The existing scope instance is mounted under a new parent. Its workers and artifacts remain associated with their original invocation IDs.
 
 The preserved-input mapping is explicit in the composed interface: an unconditional
 edge from a composed public input to a preserved-operand input may supply that
@@ -598,7 +598,7 @@ sequenceDiagram
     R->>R: Finish preserved operand and run added scope
 ```
 
-**Diagram 19 — A durable compiler-in-the-loop window.** Planning data is carried by an explicit wait request. Installation commits before that wait can release the old root's completion path.
+**Diagram 8 — A durable compiler-in-the-loop window.** Planning data is carried by an explicit wait request. Installation commits before that wait can release the old root's completion path.
 
 ## 13. Limits, authorization, and cancellation
 
@@ -729,9 +729,13 @@ An **error code** is a stable machine-readable name for a kind of failure. Appli
 | `MCP_IDENTITY`, `MCP_DESCRIPTOR` | Live advertised identity/descriptor differs from compiled pin. |
 | `MCP_TRANSPORT`, `MCP_TIMEOUT` | Transport failure or attempt deadline. |
 | `MCP_PROTOCOL`, `MCP_TOOL_ERROR` | Invalid protocol response or explicit tool error. |
+| `MCP_DECLARED_CONTRACT` | Original structured content is missing or violates an enforced advertised output schema. |
+| `MCP_INFERRED_SCHEMA` | Selected data is missing or violates an enforced adopted inferred schema. |
+| `MCP_APPLICATION_SCHEMA` | Selected data is missing or violates a required application schema. |
 | `E_OUTPUT_SCHEMA` | Candidate output violates its declared type/schema. |
 | `E_EFFECT_UNCERTAIN` | Remote outcome ambiguous and replay is not authorized. |
 | `E_WAIT_EXPIRED` | Typed external input did not arrive before the deadline. |
+| `E_RETENTION_EXPIRED` | An accepted artifact has an explicit immutable retention tombstone. |
 | `E_APPROVAL_DENIED` | Exact-action approval denied or expired. |
 | `E_POLICY` | Principal or data-transfer authorization denied. |
 | `E_BUDGET`, `E_BUDGET_UNSUPPORTED` | Capacity exhausted or requested hard enforcement unavailable. |

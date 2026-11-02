@@ -1,131 +1,66 @@
 # htlk-runtime
 
-Runtime components for the [Harness Toolkit](https://crates.io/crates/htlk).
+Execute checked HTLK Draft 0.1 workflows with durable SQLite state, fenced Actix
+supervision, explicit host policy, and bounded MCP connections over stdio and
+Streamable HTTP JSON/SSE. Pure expressions and prompt rendering use native Rust;
+the runtime embeds no scripting engine.
 
-This crate executes Draft 0.1 Harness Toolkit graphs using fenced Actix supervision,
-durable SQLite records/journal/outbox, explicit trusted host policy, and bounded
-local/remote MCP connections over stdio and Streamable HTTP JSON/SSE. Conditions and pure calculations use
-HTLK's typed expression records and a native Rust evaluator; prompt rendering uses
-the canonical prompt-template model. No scripting runtime is embedded.
+## Host lifecycle
 
-`htlk-executable` supplies the canonical model and public `cbor` adapter, and
-`htlk-analyzer` supplies shared semantic analysis and offline schema preparation.
-This crate owns `verify_executable`, `NativeRegistry`, native expression evaluation,
-callback dispatch, actual-value checks, runtime schema projections and enforcement
-of analyzer obligations. The `store` module supplies SQLite schema/ownership
-foundations with fenced leases, atomic record transitions, internal command receipts,
-bounded journal/outbox delivery and capability-free replay. `Runtime` supplies
-policy-gated immutable graph registration, independent admitted reload and atomic
-typed run admission with authenticated host receipts.
-Explicit Actix execution now drives pure/task/loop graphs. Typed input waits,
-replies, cancellation and authorized inspections are integrated.
-Exact-action approvals and live MCP execution record intent before send, observed
-delivery and raw proposals before acceptance, safe retry and irreversible spent usage.
-Compiler-backed additive extension mounts existing work unchanged; recovery checks
-original implementations/checkpoints/producer links and resumes recorded responses
-without recalling MCP. Protected inspection/source metadata and retention tombstones
-remain separate from executable meaning and accepted values.
-`htlk-executable::digest` supplies typed SHA-256 digests and hashing for
-fingerprint checks and runtime identities, using consumer-defined preimages.
-Its `ExecutableEnvelope` API validates version-0.1 envelope fields, format,
-version, and fingerprint before later registration checks interpret the payload.
+1. Build a `NativeRegistry`, link your policy and required pure libraries, and
+   compile with the same profile, policy, manifests, and default native schema options.
+2. Construct `Runtime` from a `SqliteStore`, immutable registry, `RuntimePolicy`,
+   finite codec limits, and admitted-cache capacity.
+3. Supply authenticated `HostContext` and call `register_graph` with executable
+   bytes. Runtime independently verifies authoritative bytes and producer trust.
+4. Call `start_run` with explicit inline/artifact inputs and an idempotency key.
+5. Launch `ExecutionEngine` inside an Actix system and select the intended runs.
+6. Inspect progress, answer waits/approvals, and read accepted output artifacts.
 
-The `identity` module implements Draft 0.1 run/scope/invocation/attempt/wait and
-artifact naming. Typed value content digests are separate from artifact provenance;
-hashing checks complete preimage bounds without cloning the value tree. IDs do
-not establish acceptance, authorization or external replay safety.
+Choose `ExecutionScope::Attached` for request-scoped hosting, then call
+`engine.attach_run(&run_id).await?` after durable admission or loading the saved run.
+It starts empty and leaves unrelated runs untouched. `ExecutionScope::All` is the
+default for intentional store-wide hosting. Attachment grants no authority and
+resets no deadlines or usage. `max_attached_runs` bounds lifetime selection;
+`max_runs` independently bounds concurrent coordination.
 
-`records` supplies immutable complete input manifests, canonical trusted label
-sets, explicit host input variants and lifecycle/source states. Manifest checkpoints
-are versioned and recheck frozen hashes against authoritative port declarations.
-`failure` supplies stable redacted error values and separate protected causes.
-The repository's `docs/runtime-records.md` defines private hash/checkpoint contracts.
-Uniform binding and scope-boundary enforcement preserve actual-read/control labels.
+Only one engine may attach to a runtime at a time. Shutdown stops supervision while
+preserving durable state; cancellation is a separate authenticated operation.
+Historical identical commands return immutable receipts, not repeated effects.
+Native hard external token/cost budgets are unsupported and rejected before affected
+work starts. Cross-process active-command forwarding belongs to the host.
 
-`SqliteStore` is trusted infrastructure rather than the logical authenticated host
-API. File stores use WAL/FULL synchronization, reject incompatible databases, and
-commit run ownership with journal/outbox evidence. See `docs/runtime-storage.md`
-for the transactional storage boundary and versioned private event schemas.
+The repository's `docs/runtime-guide.md` provides the complete host lifecycle;
+`examples/runtime_workflow.rs` is runnable without credentials. `docs/mcp-guide.md`
+covers adapters, sessions, results, evidence, and explicit schema adoption.
 
-Construct `Runtime` with an explicit `RuntimePolicy` and authenticated `HostContext`
-to call `register_graph` or inspect an admitted `executable`. Registration verifies
-bytes independently of compiler reports and stores detached provenance separately;
-inspection rechecks current authorization even on cache hits. Fresh services re-admit
-saved envelopes against actual native implementations. See
-`docs/runtime-registration.md` for configuration and trust contracts.
+## Admission and enforcement
 
-`artifact` provides type-checked `PreparedArtifact` proposals and immutable metadata.
-Staged value bytes are invisible until final metadata/output records commit.
-`Runtime::read_artifact` authorizes metadata before loading and verifying original
-typed native bytes. Producer-slot uniqueness and complete successful-node output
-crosschecks protect transactional publication. See `docs/runtime-artifacts.md`.
+`verify_executable` decodes the canonical envelope/document, matches host-selected
+policy and complete library manifests, and recomputes semantic analysis. It does
+not trust serialized compiler reports. `verify_executable_owned` retains an
+`Arc<NativeRegistry>` and returns a `Send + Sync` owned verified handle for actors
+and caches. Both prepare schemas using `NativeSchemaOptions::default()`.
 
-`Runtime::start_run` validates explicit typed/absent inputs and artifact references,
-preserves source IDs and protection, checks root preconditions, and commits initial
-root/input/usage/timer state with principal/method/target idempotency. False/error
-root contracts create failed runs without children. Durable ID/time allocation and
-receipt retention handle concurrency, restart and clock rollback; host clocks can
-be injected through `with_clock`. `docs/runtime-runs.md` documents the admission
-boundary. `docs/runtime-execution.md`, `runtime-mcp.md`, `runtime-waits.md`,
-`runtime-extension.md` and `runtime-recovery.md` describe their execution consumers.
+`VerifiedExecutable::evaluate` selects an authored expression by `ScopeUse` and
+`ExpressionSite`, enforcing retained inferred boundaries and actual-value checks.
+Binding reducers are pure proposals; the coordinator applies authorization,
+contracts, frozen manifests, and transactional publication. Actual-read influence
+preserves labels through values, absence, outcomes, and lazy branches.
 
-The host also has `submit_reply`, `submit_approval`, `extend_run`, `cancel_run`,
-run/node/graph/source/history inspection, artifact reads and explicit protected
-retention/collection APIs. Exact grants and labels come from trusted policy, never
-ordinary JSON authority-like fields. Native external hard token/cost enforcement is
-unsupported and rejected before starting/installing affected work; compiler capability
-flags and estimates cannot manufacture a hard bound. Use default native schema options
-on both compiler and runtime. See `docs/runtime-conformance.md` for scenario evidence.
+`SqliteStore` is trusted infrastructure, not the authenticated host API. File stores
+use WAL/FULL synchronization and reject incompatible schemas without migration or
+deletion. Accepted artifacts preserve typed content identity separately from producer
+provenance; staged bytes become readable only after atomic metadata/output acceptance.
+`read_artifact` authorizes metadata before loading and checking bytes.
 
-## Admission and checked execution
+Recovery verifies exact origins and checkpoints, resumes recorded responses without
+MCP recall, and rejects unsafe ambiguous replay. Additive extension preserves old
+work and adopts usage/reservations. Protected source reports and retention tombstones
+remain separate from executable meaning. `docs/runtime-internals.md` records private
+checkpoint/storage invariants; `docs/testing.md` maps contracts to regression suites.
 
-`execution::ExecutionEngine::launch(Arc<Runtime>, ExecutionConfig)` starts bounded
-fenced run supervision. Durable node/guard/input checkpoints drive native pure
-execution, complete scope boundaries and explicit loop transitions. See
-`docs/runtime-execution.md` for the delivered execution boundary.
-
-Choose `ExecutionScope::Attached` in `ExecutionConfig` for request-scoped hosting.
-The engine starts empty; after durable admission (or loading an exact saved run),
-call `engine.attach_run(&run_id).await?`. Admission and inspection do not implicitly
-select work. Unattached runs acquire no ownership and receive no background
-recovery, deadline mutations or dispatch. The additive set is bounded by
-`max_attached_runs`; `max_runs` separately bounds concurrently coordinated runs.
-Use `ExecutionScope::All` (the default) only for intentional store-wide hosting.
-Selection grants no policy authority and does not reset native deadlines or spent
-usage. Shutdown preserves native state and does not cancel the request.
-
-`binding` supplies canonical all-guard destination selection and guard-first input
-presence/error reduction, retaining protected absence and causal failures. It never
-resolves a source for pending/conflicting/inactive groups. Decisions remain proposals
-until coordinator authorization, type/contracts and transactional publication;
-`docs/runtime-binding.md` documents the boundary.
-
-`influence::InfluenceContext` traces actual value/outcome reads around checked
-evaluation, retains base/control/absence protection, authorizes boundaries lazily,
-and preserves native/callback/schema behavior. Root contracts use it now; denied
-reads are errors, never logical false. See `docs/runtime-influence.md`.
-
-`verify_executable` decodes authoritative canonical envelope bytes, checks the
-exact host-linked policy and library manifests, and recomputes whole-document
-semantic analysis. `VerifiedExecutable` retains that immutable analyzer result
-and borrows the registry, which cannot be mutated while admitted execution uses it.
-Serialized compiler analysis is never treated as proof of host admission.
-
-`verify_executable_owned(bytes, Arc<NativeRegistry>, limits)` performs the same
-verification and returns `VerifiedExecutable<'static>`, retaining shared immutable
-registry ownership for actors and caches. The handle is `Send + Sync`; compiled
-source and bundle outputs can be admitted without borrowing application state.
-Both entry points prepare schemas using `NativeSchemaOptions::default()`. Native
-compiler integrations should use those options and the same host-selected policy,
-profile and complete library manifests. Compiler hard-budget capability flags are
-host declarations; actual dispatch enforcement remains a runtime responsibility.
-
-`VerifiedExecutable::evaluate` selects an authored expression by scope use and
-expression site, then enforces the retained inferred boundaries and runtime checks.
-`validate_edge_value` enforces destination value constraints; scheduling and
-conditional binding selection remain coordinator responsibilities.
-
-For focused expression execution:
+## Focused evaluation
 
 ```rust
 use htlk_executable::{Expression, ExpressionContext, ScalarLiteral, EvaluatorLimits,
@@ -148,23 +83,13 @@ assert_eq!(result.value, EvaluationValue::Present(Value::Integer(42)));
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## Native callbacks and schemas
+Native callbacks remain static capabilities rather than application values.
+`NativeCallContext` routes checked callbacks through the linked registry and shared
+meter. Schema validation retains the backend's actual supported limits; static
+analysis does not manufacture a whole-validation fuel or deadline guarantee.
 
-Instantiated `ExpressionCallType` and `ExpressionCallbackType` data belong to the
-analyzer. The runtime `CallbackInvocation` extension trait provides invocation;
-`NativeCallContext` routes admitted callbacks through the linked registry. Forwarded
-callables remain statically identified capabilities, not ordinary application values.
-The shared meter charges ordered type preparation, compatibility work, dispatch,
-argument/result checks and callback depth.
-
-Offline validators are prepared by the analyzer. Runtime owns conversion and
-metering of actual values, schema-origin retention and projection enforcement.
-Unknown schema relationships retain runtime obligations. Native backend validation
-does not acquire an unsupported fuel/deadline guarantee from static analysis.
-
-Native identities compose package-owned model/analyzer source contributions with
-runtime adapters. Relocation or import changes require regenerating the native
-fixture and running the independent Node checker. The repository's
-`docs/executable-api.md` contains the detailed cross-crate contracts and examples.
+The repository's `docs/executable-api.md` contains detailed doctested cross-crate
+examples. Source-derived implementation identity and fixture maintenance are
+documented in `docs/testing.md`.
 
 Licensed under the Apache License, Version 2.0.

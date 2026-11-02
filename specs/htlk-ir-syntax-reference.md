@@ -1,8 +1,8 @@
-# HTLK IR Syntax Reference
+# HTLK IR Language Reference
 
 **Project:** HTLK (Harness Toolkit)\
 **Status:** Draft 0.1\
-**Companions:** [Language semantics](htlk-grammar-spec.md) · [Compiler](compiler-spec.md) · [Runtime](runtime-spec.md) · [Migration](CHANGELOG.md)
+**Companions:** [User guide](../docs/user-guide.md) · [Compiler](compiler-spec.md) · [Runtime](runtime-spec.md) · [MCP results](mcp-spec.md)
 
 ## 1. Reading this reference
 
@@ -12,9 +12,9 @@ A **graph** is a plan of connected work steps. A **node** is one named step. An 
 
 The **compiler** reads and checks the source text. The **runtime** carries out the checked graph. One execution is a **run**. A **scope** is a group with its own names and ports, such as a task body. A **value** is data; a **type** describes which data is allowed. For example, `inputs = { question = string }` declares an input named `question` that must contain text. It does not supply the question's value.
 
-This document defines source syntax. [htlk-ir.ebnf](htlk-ir.ebnf) is the machine-readable copy of the consolidated grammar below; both copies MUST match. Additional rules state how many declarations are allowed (cardinality), what data fits each port (types), and which names are visible in each group (scope). All examples labeled complete programs contain one `ir_version = "0.1"` header and exactly one entry graph. Other examples are fragments.
+This is the normative reference for source syntax and language semantics. MUST and MUST NOT are requirements; SHOULD is a recommendation; MAY permits a choice. [htlk-ir.ebnf](htlk-ir.ebnf) is the machine-readable copy of the consolidated grammar below; both copies MUST match. Additional rules state cardinality, types, and scope. The compiler specification owns canonical representation and static verification; the runtime specification owns execution and persistence. Complete programs have one `ir_version = "0.1"` header and exactly one entry graph. Other examples are fragments.
 
-The source does not contain arbitrary executable code such as Lua or expand author-defined text macros. Draft 0.1 adds static imports resolved exclusively within a host-supplied source bundle; the compiler and runtime do not fetch source files. It cannot assign new values to already accepted inputs. Connections must be explicit edges rather than inferred relationships. [Modules and source packages](htlk-modules-spec.md) defines directory mapping, exact dependency pins, and generated interfaces.
+The source does not contain arbitrary executable code or expand author-defined text macros. Static imports resolve exclusively within a host-supplied source bundle; the compiler and runtime do not fetch source files. Accepted inputs cannot be reassigned. Connections are explicit edges. [Source packages](compiler-spec.md#11-source-packages-and-module-interfaces) defines snapshots, dependency pins, visibility, and generated interfaces.
 
 **MCP**, the *Model Context Protocol*, is the request-and-response interface used to ask connected services for work or material. A **catalog** lists the available operations; the compiler selects them before execution. Source cannot calculate an MCP operation name from a model's answer.
 
@@ -98,7 +98,7 @@ The manifest above illustrates spelling, not a shipped implementation digest. On
 | Library manifest | `version`, `digest` | None |
 | Retry policy | `max_attempts`, `on`, `backoff_ms` | None |
 
-Empty input, output, node, and edge blocks are legal. Every required node input, scope output, and carried successor has at least one candidate edge. Unbound optional destinations settle absent. A child with no dependency path to public outputs or a completion postcondition is rejected.
+Empty input, output, node, and edge blocks are legal. Every required node input, scope output, and carried successor has at least one candidate edge. Unbound optional destinations settle absent. A child must have a dependency path to a public output or completion postcondition; loop-body children may also contribute to `next` bindings or `until`. Loop bodies contain exactly one `nodes` and one `edges` block, in either order.
 
 Graph/task `preconditions` and `postconditions` are each a single Boolean expression. Use `and` or `or` and parentheses to combine checks.
 
@@ -254,7 +254,7 @@ flowchart LR
     Binding --> D["node input, public output or next port"]
 ```
 
-**Diagram 7 — One reducer for every destination.** Conditions select zero or one complete source value. The destination role determines whether settled absence is permitted, skips a consumer, or fails a scope.
+**Diagram 1 — One reducer for every destination.** Conditions select zero or one complete source value. The destination role determines whether settled absence is permitted, skips a consumer, or fails a scope.
 
 ## 7. Expressions and scope checks
 
@@ -268,7 +268,7 @@ Arguments are positional; record arguments provide explicit named structures whe
 
 Explicit prompt parameters must exactly equal the distinct placeholder names and must have type string, integer, float, or boolean after alias normalization. Unions and other built-in or complex types are not supported. The short form infers string parameters. Template references are legal only as the first operand of `render`, whose second operand must be a record literal of argument expressions; library function references are legal only where a linked function signature accepts them. Render argument expressions evaluate in decoded key UTF-8 order, independently of map storage order.
 
-Floats render using the JCS/ECMAScript shortest round-trip convention specified in the [grammar specification](htlk-grammar-spec.md#44-dynamic-prompts): `1.0` becomes `1`, zero becomes `0`, and `1e-7` becomes `1e-7`. This does not coerce float argument types or apply JSON numeric-admission restrictions. Absent arguments remain invalid; presentation-specific formatting requires an explicit string.
+Floats render using locale-independent JCS/ECMAScript shortest round-trip binary64 text: nonzero magnitudes in `[1e-6, 1e21)` use fixed notation; others use lowercase `e`, an explicit `+` for positive exponents, and no exponent zero padding. Thus `1.0` becomes `1`, zero becomes `0`, and `1e-7` becomes `1e-7`. All finite native binary64 values are supported, including integral floats outside JSON's safe-integer range. This does not coerce argument types: integers and strings do not satisfy float parameters. Absent arguments remain invalid. `{{` and `}}` emit literal braces; inserted text is never parsed again. Rendering preserves decoded template whitespace and is bounded by output/work limits.
 
 | Expression location | Allowed roots |
 |---|---|
@@ -432,7 +432,7 @@ loop_member = description | inputs | outputs | when | preconditions | postcondit
             | carried | body | "until", "=", expression | "max_iterations", "=", integer ;
 carried = "carried", "=", "{", [ initializer, { ",", initializer }, [ "," ] ], "}" ;
 initializer = identifier, "=", "inputs", ".", identifier ;
-body = "body", "{", nodes, edges, "}" ;
+body = "body", "{", ( nodes, edges | edges, nodes ), "}" ;
 
 expression = disjunction ;
 disjunction = conjunction, { "or", conjunction } ;
@@ -467,6 +467,32 @@ The source grammar describes authored IR. Compiled executables use the versioned
 
 Binary joins are host API records, not a second source language. The compiler accepts two documents plus named public-output-to-public-input edges and explicit result-interface maps. Joined graphs lower to ordinary scope instances. The runtime has no special graph-join execution opcode.
 
-Source 0.1 imports and exports are resolved away before serialization. The canonical execution vocabulary, envelope, and runtime records also use version 0.1. Contract record keys are `preconditions` and `postconditions`, matching the source fields. Source package pins, module names, and interface reports are compiler input/report metadata, not new runtime records. See the [version table](htlk-modules-spec.md#11-version-boundary).
+Source imports and exports resolve away before serialization. All HTLK-owned format versions use `0.1`; external protocol, schema, and implementation versions retain their actual identities. Matching version strings alone do not establish compatibility. Source package pins, module names, and interface reports are compiler input/report metadata, not runtime records. See the [baseline](README.md#version-baseline).
 
-The [change log](CHANGELOG.md) describes the unified 0.1 baseline, contract keyword changes, and migration of source and content identifiers.
+## 11. Values, completion, and effects
+
+Inputs are read-only. An invocation freezes its complete input manifest once, including optional absence. Accepted artifacts, public outputs, loop feedback, and terminal outcomes are immutable. A successful node atomically publishes its complete output inventory and success; a failed node publishes no ordinary outputs. A scope may alias accepted artifacts while preserving their source types and provenance.
+
+All relevant candidate guards settle before source selection. Pending guards keep a destination pending even if another guard has failed. Once settled, guard errors take precedence, then multiple true guards cause `E_BINDING_CONFLICT`, then zero true guards yield absence. Exactly one true guard selects exactly one complete source. False edges never read their source. A selected failed or cancelled source yields dependency failure, including at optional destinations; a skipped source supplies absence. Required node-input absence skips the node; required public-output or `next` absence fails the scope. Null remains a present value.
+
+A node's own guard is evaluated before its input inventory. A false guard skips even a zero-input operation. Once the guard is true, all input bindings settle before selecting errors ahead of required absence. Types and preconditions are checked before work starts. Public-output and loop-next boundaries apply their required-value/type checks before completion contracts. Arbitrary conditional exclusivity is not assumed: the analyzer recognizes simple complements and distinct literal equalities, and the runtime always enforces actual uniqueness.
+
+Every instantiated child settles before its containing scope completes. A failed child need not fail its scope if ordinary guards and output bindings provide a valid fallback. To require an effect whose value is not exported, declare a completion postcondition such as `status(@save) == "succeeded"`. A postcondition can reject a proposed result but cannot undo an external action.
+
+Expressions distinguish value, legitimate absence, pending, and error. Pending and unavailable results are not application values. Boolean operators evaluate left to right and lazily; if the left operand is pending, evaluation waits. Projection cannot remove protection labels. Pure functions receive supplied values and fixed static function references; they have no ambient clock, randomness, filesystem, network, credentials, or mutable state. Extra functions require an exact linked library manifest. A source library declaration grants no execution authority.
+
+## 12. Tool results, waits, and bounded iteration
+
+Every tool call receives one complete schema-constrained `arguments` object, including an explicit empty object for zero-argument tools. It returns `McpToolResult`, preserving original protocol content and separate extraction and validation assessments. `outputSchema` is optional for selected and unselected tools. Graphs explicitly select and validate optional `data`; a result envelope is not its application payload. The [MCP result specification](mcp-spec.md) owns the exact contract. Resources preserve ordered text/byte entries and their returned URIs; every returned URI is authorized separately. Prompt results are data and do not invoke a model.
+
+`wait(T)` requires a `request: json`, topic, and positive timeout. The runtime assigns its addressed wait ID and the host authenticates replies. A topic routes a request; it does not authorize a response. Duplicate identical accepted replies return receipts; conflicting, ill-typed, unauthorized, expired, or closed-wait replies cannot change the result. Exact-action approval uses separate trusted policy and `submit_approval`; a graph-visible Boolean or model output grants no authority. Renewal creates a fresh generation without changing frozen operation inputs.
+
+Loops execute at least once, with zero-based iterations and positive `max_iterations`. Each iteration settles its body, validates both proposed public outputs and `next` values, then evaluates `until`. Required next values are checked even on the last iteration. True succeeds after the loop postcondition; false advances if capacity remains, otherwise fails `E_LOOP_LIMIT`. Committed feedback alone initializes the next iteration. MCP retry repeats frozen arguments within one invocation; revision uses explicit new nodes or iterations. Token/cost/call budgets do not replace the iteration bound.
+
+## 13. Composition and guarantees
+
+Task use creates an independent occurrence; importing a definition creates no work or shared mutable state. Parent and child scopes cannot address each other's internals. Binary joins connect only public whole ports and lower to ordinary scopes. Live extension additionally preserves existing work, frozen inputs, deadlines, attempts, approvals, and identities. A terminal run cannot resume; use a typed planning wait to keep an installation window open. Changed computations start new runs with explicitly selected prior artifacts.
+
+Ordinary siblings use AND-style settlement. First-result races, early quorums, and automatic competitor cancellation require an explicit external arbiter or host service. Search and repair are bounded graph applications using tools, pure selection, loops, and compiler joins.
+
+Verification establishes legal structure, resolved operations, and enforceable value boundaries. It does not prove an answer true, a service available, or a plan effective. Deterministic encoding establishes stable content identity, not trusted authorship, identical remote responses, or timing-independent execution. Required effect order belongs in explicit dependencies; replay reconstructs recorded decisions rather than repeating effects.

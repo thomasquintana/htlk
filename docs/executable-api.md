@@ -1056,8 +1056,10 @@ clone, and failure cleanup have depth-128 tests on 512 KiB and 2 MiB stacks.
 Defaults must supply positive timeout, attempt timeout, and concurrency. All
 seven evaluator ceilings and both structural ceilings must be positive safe
 JSON integers. Local execution limits still allow signed-i64 values; the tighter
-range applies when included in external JSON. Canonical-document assembly enforces
-the two structural ceilings; runtime metering and evaluator limits are subsequent work.
+range applies when included in external JSON. `CanonicalDocument` checks bounded
+representation and record-key integrity. Analyzer linkage enforces the structural
+ceilings; runtime admission recomputes that analysis and execution applies metering
+and actual-value checks. Constructing the model alone does not establish semantics.
 
 ## JSON Pointer locations
 
@@ -1097,8 +1099,8 @@ including at the supported depth ceiling of 128.
 `JsonPointerError` reports syntax/fragment byte offsets or the failing zero-based
 token index, without retaining submitted keys. A missing target differs from a
 present null; traversing a scalar is another explicit failure. Named anchors such
-as `#Name` are not pointers. This API is a location primitive for the forthcoming
-offline schema resolver: it does not select nested `$id` resources, resolve
+as `#Name` are not pointers. This API is a location primitive used by offline schema
+resolution: it does not itself select nested `$id` resources, resolve
 anchors, fetch documents, or establish that a target is a schema-bearing location.
 
 ## JSON Schema location discovery
@@ -1208,9 +1210,9 @@ This is a **single-document resource index**, not full executable verification.
 Missing external resources return an error without I/O. `resolve` returns the
 initial target for either static or dynamic references; evaluation-time dynamic
 rebinding remains validator work. Cross-document merging is provided by the catalog
-below. Graph-specific reference closure, embedded-tool base selection,
-vocabulary/keyword validation, and integration with
-the pinned validator and canonical-document verifier remain subsequent steps.
+below. Graph-specific reference closure and embedded-tool base selection belong to
+analyzer linkage; `NativeSchemas` supplies vocabulary/keyword validation and the
+pinned backend. Runtime admission composes these checks over authoritative bytes.
 
 ## Cross-document schema catalog
 
@@ -1351,10 +1353,12 @@ an HTTP catalog alias cannot repair an embedded schema lacking that base.
 After record assembly or decoding, import the analyzer's `DocumentAnalysis` trait
 and call `document.schema_catalog(&Limits)`
 to perform the explicit offline schema stage and obtain a reusable `SchemaCatalog`.
-It requires every tool input/output schema at its prescribed base in `schema_uris`,
+It requires every tool input schema, declared output schema when present, and adopted
+result/selection schema at its prescribed base in `schema_uris`,
 with the correct document digest. It then traverses reference closure from those
 roots, requires every supplied schema retrieval context to be reached, and rejects
-JSON documents outside the policy, descriptor, and reached-schema roles.
+JSON documents outside the policy, descriptor, reached-schema, and pinned
+inference-evidence roles.
 Entries are checked as assertions, never silently pruned or rekeyed.
 
 The stage rechecks whole-document limits and preflights the aggregate URI/snapshot
@@ -1367,8 +1371,9 @@ entries use `UnreachableRecord`.
 This schema-catalog stage remains explicit rather than being implied by successful
 record decoding. `verify_executable` composes callable object-root admission,
 keyword/vocabulary validation, dynamic validation support, linked-profile checks,
-and graph semantics. Runtime registration remains consumer work. Closure follows all standard schema locations
-in reached complete documents, as described above.
+and graph semantics. `Runtime::register_graph` surrounds admission with current
+authorization and immutable persistence. Closure follows all standard schema
+locations in reached complete documents, as described above.
 
 ## Canonical document assembly
 
@@ -1603,7 +1608,7 @@ task invocations or loop iterations. `envelope()` packages the canonical payload
 composes name/type, wait-dependency, observability, linked-profile, complete MCP,
 object-root and offline schema-closure checks. Record assembly accepts extra
 external documents/URI roots; the explicit `schema_catalog` stage rejects those
-outside its rooted schema closure and policy/descriptor roles.
+outside its rooted schema closure and policy/descriptor/inference-evidence roles.
 Registration and authorization remain runtime work. `DocumentError` and `LinkageError` preserve
 structured causes and static diagnostics without retaining submitted values.
 
@@ -1694,11 +1699,10 @@ operation processes the prefix and payload without concatenating or copying
 them. Codec encoding allocates bounded temporary output; fixed-size metadata
 and hash state are additional overhead, not exact heap accounting.
 
-Every codec operation has fresh accounting. No `RegistrationLimits` type or
-shared registration allowance is introduced. A valid outer envelope can contain
-malformed CBOR or an invalid graph;
-payload interpretation and aggregate registration accounting belong to later
-registration stages.
+Every codec operation has fresh accounting. A valid outer envelope can contain
+malformed CBOR or an invalid graph. Runtime admission separately decodes the payload
+and applies complete document/analysis limits; the envelope codec alone establishes
+neither graph validity nor one cumulative allocation allowance across stages.
 
 ## Digest API
 

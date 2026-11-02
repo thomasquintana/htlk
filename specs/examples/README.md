@@ -1,84 +1,68 @@
 # Decision-brief example
 
-This directory accompanies the [HTLK IR user guide](../htlk-ir-user-guide.md) and targets **HTLK IR Draft 0.1**.
-
-## What this example package is
-
-A **fixture** is prepared example data used to explain or test a program; it is not a report from a live service. The IR file describes the work. The catalogs describe which external operations the compiler is allowed to resolve. The input file supplies the initial question for one run.
-
-**JSON** is a text format for named fields and lists. A **schema** describes which JSON values an operation accepts or returns. **MCP** means Model Context Protocol, the interface used to request work from connected services. A **descriptor** is a catalog entry describing one such operation. The **host** is the application that submits inputs to the runtime.
-
-The [user guide](../htlk-ir-user-guide.md) introduces nodes, tasks, ports, and conditions before walking through this example.
-
-## Files
+This advanced workflow accompanies the [user guide](../../docs/user-guide.md#study-the-decision-brief-workflow)
+and targets HTLK IR Draft 0.1. It researches opportunities and risks, then drafts
+and reviews a brief in a bounded loop.
 
 | File | Purpose |
 |---|---|
-| [decision_brief.htlk](decision_brief.htlk) | Complete source document with all type, prompt, task, and graph declarations. |
-| [decision_brief.catalogs.json](decision_brief.catalogs.json) | Illustrative three-catalog compiler input with exact tool schemas. |
-| [decision_brief.inputs.json](decision_brief.inputs.json) | Tagged host input map for `start_run`. |
+| [decision_brief.htlk](decision_brief.htlk) | Complete source: types, prompts, tasks, and entry graph. |
+| [decision_brief.catalogs.json](decision_brief.catalogs.json) | Three compiler catalogs with illustrative tool descriptors. |
+| [decision_brief.inputs.json](decision_brief.inputs.json) | Tagged host input map containing the question. |
+| [modules/](modules/README.md) | Equivalent five-file, three-package source bundle. |
 
-The catalogs are fixtures, not discovery results from live servers. They contain no endpoints, credentials, model configuration, or implementation of the tools. To execute the graph, provide a conforming compiler/runtime and services matching the descriptors, or replace the fixture catalogs with actual discovered descriptors and adapt/recompile the IR.
+The catalogs contain no service implementations, endpoints, credentials, or model
+configuration. Tests provide controlled tools matching these contracts. For real
+services, discover actual descriptors, adapt the source/policy, and recompile.
+HTLK's [Rust host APIs](../../docs/runtime-guide.md) execute the result; there is no
+general `htlk run` command.
 
-There is no assumed `htlk run` command or released SDK. Use the logical host interfaces in the [runtime specification](../runtime-spec.md).
+## Read the workflow
 
-## Multi-file version
+`research.find_evidence` accepts a query and returns checked nonempty evidence.
+`brief.refine` carries the prior draft and review feedback through at most three
+iterations. A valid negative review is a successful response and permits revision;
+an explicit tool error or enforced output-contract violation is an operational
+failure. The final graph selects an accepted brief or an explicit needs-attention
+result through ordinary guarded edges.
 
-The [modular example](modules/README.md) divides this same workflow into five source files and three source packages. It uses these same tool catalogs and run inputs. All HTLK-owned formats in both examples use the unified 0.1 baseline.
+Every tool returns `McpToolResult`. These fixtures advertise output schemas, so
+default Enforce checks original `structuredContent`. The source explicitly reads
+and narrows selected `data`; recovered text does not establish declared compliance.
+Schemas check representation, not factual correctness or usefulness of feedback.
 
-## Tool behavior required by the example
+## Bounds and behavioral evidence
 
-The research tool receives a query and returns nonempty evidence text. Its implementation should identify sources and uncertainty. The schemas check representation, not the existence or reliability of those sources.
+There are two research calls and at most three draft/review pairs, with no authored
+MCP retries. Acceptance on review one/two/three uses 4/6/8 calls; all-rejected fallback
+uses 8. The root ceiling is eight calls, the refinement ceiling six. Tighter host
+limits and deadlines can stop execution earlier. Maximum scope depth is three;
+the expanded invocation bound is 34, including all guarded branches and iterations.
 
-The revision tool receives question, evidence, prior draft, and feedback. An empty prior draft means create the first draft. Subsequent calls should use the previous draft and review feedback.
+| Scenario | Expected result | Test source |
+|---|---|---|
+| Accept at review one, two, or three | Accepted reviewed draft; exact call bound | `tests/runtime_mcp.rs` |
+| Reject all three | `E_LOOP_LIMIT` in refinement; successful root `needs_attention` | `tests/runtime_mcp.rs` |
+| Retrieval or structured-schema failure | Ordinary failed dependency/fallback path | `tests/runtime_mcp.rs` |
+| Empty question | Root precondition failure before child work | `tests/runtime_mcp.rs` |
+| Host cancellation | Fenced cancellation, without promised fallback | `tests/runtime_mcp.rs` |
+| Standalone and modular native HTTP JSON/SSE | Same outputs and exact call bounds | `tests/deep_e2e.rs` |
+| Standalone/modular compilation | Equal canonical/envelope bytes; depth 3 and bound 34 | `tests/compiler.rs` |
 
-The review tool receives question, evidence, and draft. It should assess the rubric described in the user guide. A valid response with `accepted: false` is a successful tool response and permits another iteration. A response with `isError: true`, missing structured content, or invalid output data is an operational failure instead.
+These are controlled runtime regressions, not claims about live model quality.
+Run the focused suite from the repository root:
 
-These fixture tools advertise output schemas, so default Enforce requires their successful original `structuredContent` to match. HTLK also accepts schema-less tools and preserves text/multimodal results in the same `McpToolResult` envelope. The examples explicitly read/narrow `data`; recovered text JSON never substitutes for declared compliance.
+```console
+cargo test --test runtime_mcp decision_brief_ --locked
+cargo test --test compiler --locked
+```
 
-## Bounds and assumptions
+Enclosing deadlines/budget stops need not produce fallback. A successful
+`needs_attention` report is not an accepted recommendation. General response recovery,
+unsafe delivery, extension, and retained-artifact cases use the shared engine suites
+listed in [testing](../../docs/testing.md#conformance-map).
 
-There are two research calls, then at most three pairs of revision and review calls. The source contains no automatic MCP retries.
-
-| Case | MCP dispatches if all required operations complete normally |
-|---|---|
-| First review accepts | 4 |
-| Second review accepts | 6 |
-| Third review accepts or rejects | 8 |
-
-The root permits at most eight calls; the refinement loop permits six. These are ceilings, not promises of available capacity. Tighter ancestor or deployment limits can stop work earlier. The selected policy must provide finite deadlines, adequate value/expression limits, and supported execution capabilities.
-
-The graph has a maximum nesting depth of three scopes and an upper bound of 34 invocation occurrences, counting all guarded branches and three loop iterations under the compiler specification's counting rules. The configured structural limits must accommodate that bound. The Rust compiler integration tests confirm these counts using shared semantic analysis.
-
-Model selection and sampling settings are deployment details of these illustrative tools. They are not special IR node options in this example.
-
-## Expected behavior tests
-
-These are integration-test requirements, not claims of executed runtime tests. Use controlled tool responses before testing with a live model.
-
-| Scenario | Expected behavior |
-|---|---|
-| Research succeeds; first review accepts | Root succeeds with `result.status = "accepted"` and the reviewed draft. |
-| First review rejects; second accepts | The second revision receives the first draft and feedback; only the accepted final draft becomes the loop's public output. |
-| All three reviews reject | Loop fails with `E_LOOP_LIMIT`; the root normally succeeds with `result.status = "needs_attention"` and `brief = null`. |
-| One retrieval fails | No valid combined evidence is produced; refinement fails its dependency path; the attention branch can complete. The other research branch is still settled. |
-| Revision returns malformed structured output | Tool output validation fails; the ordinary failure path reaches the attention branch. |
-| Review returns malformed structured output | It is not treated as a negative editorial review; the refinement path fails. |
-| Review returns valid `accepted: false` with feedback | The loop advances if another iteration is allowed. |
-| Review repeatedly rejects with unhelpful or empty feedback | The schema alone cannot guarantee improvement; the explicit loop bound still prevents unlimited attempts. |
-| Root question is empty | Root precondition fails before child execution; no attention result is promised. |
-| Host cancels during a model call | Cancellation follows runtime fencing rules; no successful fallback completion is promised. |
-| Enclosing deadline or hard budget is exhausted | Runtime stop rules apply; a needs-attention result is not guaranteed after the enclosing scope has stopped. |
-| Crash after a response is durably recorded | Recovery resumes local validation/acceptance without redispatching that recorded response. |
-| Remote delivery is uncertain and replay is unsafe | Preserve uncertainty; do not blindly repeat the operation. |
-| Repeated attempts to extend a terminal run | Reject live extension; start a new run with explicitly authorized artifact reuse if needed. |
-
-Test the distinction between runtime success and application success: a successfully reported `needs_attention` outcome is not a successful recommendation.
-
-## Validation provided here
-
-The checker is a small JavaScript program. **Node.js** is the program used to execute it; the following command assumes Node.js is already installed. A **terminal** is an application where such commands are entered. Checking the documents does not run the HTLK workflow.
-
-Run `node ../validate-specs.mjs` from this directory, or `node validate-specs.mjs` from the release directory.
-
-The document checker parses the guide's HTLK blocks and this complete source against the EBNF, checks that the complete source matches the guide excerpts, verifies local links and diagram captions, parses JSON examples, and checks fixture tool references. It does not compile/type-check HTLK, contact MCP servers, execute the workflow, or prove behavioral conformance.
+`node specs/validate-specs.mjs` checks source syntax, referenced tool fixtures,
+module snapshots/digests, and standalone/modular correspondence. Compilation and
+execution are separate Rust checks. The source file is the example authority;
+the guide links to it instead of maintaining a second full copy.
