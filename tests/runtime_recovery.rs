@@ -162,13 +162,16 @@ fn reopened_loop_resumes_committed_feedback_and_the_same_open_wait() {
         let graph=compiler.compile_source(r#"
             ir_version="0.1" graph test.loop_recovery {
                 inputs={seed=boolean} outputs={value=boolean}
-                nodes{repeat=loop{
+                nodes{
+                    inactive=eval(boolean,true){when=false}
+                    repeat=loop{
                     inputs={seed=boolean} outputs={value=boolean} carried={done=inputs.seed}
                     body{nodes{question=eval(json,{}) reply=wait(boolean){topic="iteration" timeout_ms=5000}}
                         edges{edge question{from=question.outputs.value to=reply.inputs.request}edge next{from=reply.outputs.value to=next.done}edge value{from=reply.outputs.value to=outputs.value}}}
                     until=next.done max_iterations=3
                 }}
                 edges{edge seed{from=inputs.seed to=repeat.inputs.seed}edge value{from=repeat.outputs.value to=outputs.value}}
+                postconditions=status(@inactive)=="skipped"
             }
         "#,&support::catalogs()).unwrap();
         let clock=Arc::new(Clock(AtomicI64::new(1000)));let store=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();let runtime=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock.clone()));runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();
@@ -176,7 +179,11 @@ fn reopened_loop_resumes_committed_feedback_and_the_same_open_wait() {
         // Freeze this checkpoint only after feedback and the next wait have both
         // settled; merely observing the wait row can precede scheduler quiescence.
         let first=open_wait(&runtime,&caller,&run.run_id,None).await;runtime.submit_reply(&caller,first,Value::Bool(false),"first").await.unwrap();let second=open_wait(&runtime,&caller,&run.run_id,Some(first)).await;assert_ne!(first,second);
-        let before=store.records(&run.run_id,RecordFamily::Invocation,None,100).await.unwrap();engine.shutdown().await.unwrap();store.close().await.unwrap();drop(runtime);
+        let before=store.records(&run.run_id,RecordFamily::Invocation,None,100).await.unwrap();
+        let skipped=before.iter().find(|record|matches!(&record.payload,Value::Map(fields)if fields.get("local_id")==Some(&Value::Text("inactive".into())))).unwrap().clone();
+        let Value::Map(fields)=&skipped.payload else{panic!()};
+        assert!(skipped.final_record);assert_eq!(fields.get("status"),Some(&Value::Text("skipped".into())));assert_eq!(fields.get("input_checkpoint"),Some(&Value::Null));
+        engine.shutdown().await.unwrap();store.close().await.unwrap();drop(runtime);
         clock.0.store(1200,Ordering::SeqCst);let store=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();let runtime=Arc::new(Runtime::new(store.clone(),registry,Arc::new(Policy),RuntimeConfig::default()).unwrap().with_clock(clock));let engine=ExecutionEngine::launch(runtime.clone(),config).unwrap();assert_eq!(open_wait(&runtime,&caller,&run.run_id,Some(first)).await,second);
         let mut submitted=false;
         for _ in 0..2000{
@@ -187,6 +194,9 @@ fn reopened_loop_resumes_committed_feedback_and_the_same_open_wait() {
         }
         assert!(submitted);let view=terminal(&runtime,&caller,&run.run_id).await;assert_eq!(view.header.status,RunStatus::Succeeded,"reopened loop failed: {view:#?}");
         assert_eq!(store.records(&run.run_id,RecordFamily::Wait,None,100).await.unwrap().len(),2);
+        // A terminal skipped child was never admitted. Recovery must accept its
+        // absent checkpoint and preserve the complete immutable record.
+        assert_eq!(store.record(&run.run_id,&skipped.key).await.unwrap(),skipped);
         for record in before{let after=store.record(&run.run_id,&record.key).await.unwrap();let (Value::Map(before),Value::Map(after))=(&record.payload,&after.payload)else{panic!()};assert_eq!(before.get("input_hash"),after.get("input_hash"));}
         runtime.submit_reply(&caller,first,Value::Bool(false),"first").await.unwrap();engine.shutdown().await.unwrap();store.close().await.unwrap();std::fs::remove_file(&path).unwrap();
     })

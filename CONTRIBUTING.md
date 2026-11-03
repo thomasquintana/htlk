@@ -57,13 +57,17 @@ Cargo can otherwise reuse a cached same-version staged dependency from a previou
 package check. Archives are written below the chosen target's `package/` directory.
 CI and release validation use commit-specific temporary target directories.
 
-When `Cargo.lock` changes, install `cargo-about` and regenerate third-party
-notices:
+When `Cargo.lock` changes, install the same `cargo-about` version pinned in CI and
+release validation, then regenerate third-party notices:
 
 ```console
-cargo install cargo-about --locked --features cli
+cargo install cargo-about --version 0.9.2 --locked --features cli
 cargo about generate about.hbs --workspace --locked --fail --output-file THIRD_PARTY_LICENSES
 ```
+
+Generator upgrades can change selected license text even when `Cargo.lock` is
+unchanged. Review their notice output and update both workflow pins and this
+installation command together.
 
 ## Releases
 

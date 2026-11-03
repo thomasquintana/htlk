@@ -215,19 +215,26 @@ fn killed_workers_resume_real_response_intent_wait_and_loop_checkpoints_without_
             let mut worker=launch(&path,&marker,mode,&peer);
             let deadline=Instant::now()+Duration::from_secs(30);
             // Open only after the worker has initialized the database, so the
-            // parent never wins a concurrent schema migration by accident.
+            // parent never wins concurrent schema initialization by accident.
             while !marker.with_extension("started").exists(){assert!(worker.0.try_wait().unwrap().is_none(),"worker exited during startup");assert!(Instant::now()<deadline);actix::clock::sleep(Duration::from_millis(2)).await;}
             let store=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();
-            let (run,before,wait)=loop{
+            let run=loop{
                 assert!(worker.0.try_wait().unwrap().is_none(),"{mode} worker exited before checkpoint");assert!(Instant::now()<deadline,"{mode} checkpoint not reached; requests={:?}",peer.requests());
                 let runs=store.running_runs(None,10).await.unwrap();
                 if let Some(run)=runs.first(){
-                    let header=store.run_header(run).await.unwrap();let waits=store.records(run,RecordFamily::Wait,None,10).await.unwrap();let responses=store.records(run,RecordFamily::Response,None,10).await.unwrap();
+                    let waits=store.records(run,RecordFamily::Wait,None,10).await.unwrap();let responses=store.records(run,RecordFamily::Response,None,10).await.unwrap();
                     let ready=match mode{"response"=>marker.exists()&&responses.len()==1,"intent"=>peer.calls().len()==1,"wait"=>waits.len()==1,"loop"=>waits.len()==2,_=>unreachable!()};
-                    if ready{let wait=waits.iter().find_map(|record|matches!(&record.payload,Value::Map(fields)if fields.get("state")==Some(&Value::Text("open".into()))).then(||record.key.id.parse::<identity::WaitId>().unwrap()));break(run.clone(),header,wait);}
+                    if ready{break run.clone();}
                 }
                 actix::clock::sleep(Duration::from_millis(2)).await;
             };
+            worker.0.kill().unwrap();let status=worker.0.wait().unwrap();assert!(!status.success());
+            // Snapshot only after the old process has exited. Between checkpoint
+            // observation and kill it may still commit progress or renew its lease;
+            // those writes must not be attributed to the unattached recovery engine.
+            let before=store.run_header(&run).await.unwrap();
+            let waits=store.records(&run,RecordFamily::Wait,None,10).await.unwrap();
+            let wait=waits.iter().find_map(|record|matches!(&record.payload,Value::Map(fields)if fields.get("state")==Some(&Value::Text("open".into()))).then(||record.key.id.parse::<identity::WaitId>().unwrap()));
             let invocations=store.records(&run,RecordFamily::Invocation,None,100).await.unwrap();
             let normalization = if mode == "response" {
                 let records = store.records(&run, RecordFamily::Observation, None, 100).await.unwrap();
@@ -235,7 +242,6 @@ fn killed_workers_resume_real_response_intent_wait_and_loop_checkpoints_without_
                 assert!(saved.final_record);
                 Some(saved)
             } else { None };
-            worker.0.kill().unwrap();let status=worker.0.wait().unwrap();assert!(!status.success());
             let (compiler,registry)=configuration(marker.clone(),false);let graph=compiler.compile_source(&source(mode),&e2e::catalogs("streamable_http")).unwrap();assert_eq!(graph.fingerprint,before.fingerprint);
             // No adapter is installed in the recovering service: a saved response
             // must be accepted locally and an unsafe intent must remain uncertain.
