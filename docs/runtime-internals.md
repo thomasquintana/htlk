@@ -7,8 +7,8 @@ records are not an additional supported wire format.
 
 ## Storage compatibility
 
-The SQLite application ID is `0x48544c4b`; the private schema version is **7**.
-An empty database initializes in one immediate transaction. Versions 1–6, future
+The SQLite application ID is `0x48544c4b`; the private schema version is **8**.
+An empty database initializes in one immediate transaction. Versions 1–7, future
 versions, foreign application IDs, and nonempty unrecognized databases fail without
 relabeling or deletion. There is no automatic migration or legacy binding decoder.
 Matching `0.1` format labels do not permit changed interpretation of saved effects.
@@ -25,6 +25,23 @@ maintenance is described in [testing](testing.md#native-identity-and-fixtures).
 authentication, value checks, and application authorization. `StoreConfig` bounds
 codec metadata, page sizes, and busy timeout. Structured errors omit database paths,
 submitted values, and raw SQLite diagnostics.
+
+### Host MCP interaction storage
+
+Schema 8 adds owner-scoped MCP leases, epochs, interactions, receipts, journal
+facts, and a bounded late-reply inbox. Host sessions use their own namespace rather
+than synthetic graph runs. Immediate transactions arbitrate duplicate work claims
+across connections. Only a newly committed `McpWorkClaim::Started` permits dispatch;
+an existing intent remains uncertain, and a saved reply is reusable without recall.
+Lease takeover does not reset spent calls or outstanding reservations. Reply bytes
+and protection are recorded before delivery facts, and transport acceptance is
+distinct from application consumption.
+
+Late replies cannot publish outputs or release reservations. Explicit settlement
+against an exact retained reply may release cancelled work's concurrency while
+preserving cancellation and spent calls. These store APIs are trusted infrastructure;
+native callback admission and authenticated frontend APIs require their separate
+runtime integration described in the [client contract](../specs/mcp-client-spec.md).
 
 ## Ownership and atomic transitions
 

@@ -394,7 +394,7 @@ impl SqliteStore {
             .await
             .map_err(StoreError::from_worker)
     }
-    fn page_size(&self, page_size: usize) -> Result<i64, StoreError> {
+    pub(super) fn page_size(&self, page_size: usize) -> Result<i64, StoreError> {
         if page_size == 0 || page_size > self.config.max_page_size {
             return Err(StoreError::Invalid);
         }

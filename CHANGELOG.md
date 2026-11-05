@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Transactional host MCP ownership, persistent session epochs, callback work intent,
+  saved replies and receipts, delivery facts, cumulative usage, and bounded late
+  evidence storage. Private SQLite schema 8 deliberately rejects earlier stores.
 - Protected MCP evidence inspection now includes prompt, resource, and template
   attempts, with explicit operation kind, bounded original bytes, and delivery
   evidence; tool-only normalization and inference remain independently restricted.
