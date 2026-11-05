@@ -2,7 +2,10 @@
 use super::*;
 use crate::mcp::{as_map, as_text, get};
 use htlk_executable::McpTransport;
-use std::{process::Stdio, sync::OnceLock};
+use std::{
+    process::Stdio,
+    sync::{OnceLock, atomic::AtomicBool},
+};
 
 mod http;
 mod sse;
@@ -15,7 +18,12 @@ enum Transport {
     Http(http::Http),
 }
 
-type Pending = BTreeMap<McpRequestId, oneshot::Sender<McpClientReply>>;
+struct PendingRequest {
+    reply: oneshot::Sender<McpClientReply>,
+    limits: Limits,
+    sent: Arc<AtomicBool>,
+}
+type Pending = BTreeMap<McpRequestId, PendingRequest>;
 type QueuedEvent = (String, JsonDocument, tokio::sync::OwnedSemaphorePermit);
 
 pub(super) struct Wire {
@@ -36,6 +44,7 @@ pub(super) struct Wire {
     event_sequence: AtomicU64,
     received: AtomicU64,
     memory: Arc<tokio::sync::Semaphore>,
+    cleanup: tokio::sync::Mutex<()>,
 }
 
 impl Wire {
@@ -112,12 +121,17 @@ impl Wire {
             events,
             event_sequence: AtomicU64::new(1),
             received: AtomicU64::new(0),
+            cleanup: tokio::sync::Mutex::new(()),
         });
         let reader = wire.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
                 biased;
-                _ = reader.stop.cancelled() => Err(fail(FailureCode::Cancelled)),
+                _ = async {
+                    reader.stop.cancelled().await;
+                    let active = reader.pending.lock().is_ok_and(|pending| !pending.is_empty());
+                    if active { tokio::time::sleep(Duration::from_millis(reader.config.limits.cancellation_grace_ms)).await; }
+                } => Err(fail(FailureCode::Cancelled)),
                 result = async {
                     if let Some(output) = output { reader.read(output).await }
                     else { std::future::pending().await }
@@ -153,12 +167,7 @@ impl Wire {
             ),
         ])?;
         let reply = self
-            .request(
-                "initialize",
-                JsonDocument::from_value(&params, &self.limits)
-                    .map_err(|_| fail(FailureCode::Profile))?,
-                self.stop.clone(),
-            )
+            .invoke(self.default_request("initialize", params, self.stop.clone()))
             .await;
         let result = reply.result?.map_err(|_| fail(FailureCode::McpProtocol))?;
         let fields = as_map(result.value())?;
@@ -180,7 +189,7 @@ impl Wire {
         self.initialization
             .set(result)
             .map_err(|_| fail(FailureCode::Invariant))?;
-        if matches!(self.transport, Transport::Http(_)) {
+        if matches!(self.transport, Transport::Http(_)) && self.config.listen_for_events {
             let wire = self.clone();
             tokio::spawn(async move {
                 let Transport::Http(http) = &wire.transport else {
@@ -203,16 +212,46 @@ impl Wire {
         Ok(())
     }
 
-    pub async fn request(
-        self: &Arc<Self>,
+    pub fn default_request(
+        &self,
         method: &str,
-        params: JsonDocument,
+        params: Value,
         cancellation: Arc<McpCancellation>,
-    ) -> McpClientReply {
+    ) -> McpRequest {
+        McpRequest {
+            response_limits: self.limits.clone(),
+            cancellation,
+            cancellation_grace_ms: self.config.limits.cancellation_grace_ms,
+            method: method.into(),
+            params,
+            timeout_ms: self.config.limits.timeout_ms,
+            max_response_bytes: self.limits.max_document_bytes,
+            idempotency_key: None,
+        }
+    }
+
+    pub async fn invoke(self: &Arc<Self>, request: McpRequest) -> McpClientReply {
+        let cancellation = &request.cancellation;
+        let method = request.method.as_str();
         if cancellation.is_cancelled() || self.stop.is_cancelled() {
             return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Cancelled);
         }
-        if method.is_empty() || !matches!(params.value(), Value::Map(_)) {
+        let mut limits = request.response_limits.clone();
+        limits.max_document_bytes = limits.max_document_bytes.min(request.max_response_bytes);
+        if request.response_limits.validate().is_err()
+            || [request.timeout_ms, request.cancellation_grace_ms]
+                .into_iter()
+                .any(|ms| {
+                    ms == 0
+                        || ms > i64::MAX as u64
+                        || std::time::Instant::now()
+                            .checked_add(Duration::from_millis(ms))
+                            .is_none()
+                })
+        {
+            return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Profile);
+        }
+        if method.is_empty() || !matches!(request.params, Value::Map(_)) {
             return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Input);
         }
         if self.initialization.get().is_some() && method == "initialize"
@@ -229,10 +268,10 @@ impl Wire {
             ("jsonrpc", Value::Text("2.0".into())),
             ("id", key.to_value()),
             ("method", Value::Text(method.into())),
-            ("params", params.value().clone()),
+            ("params", request.params.clone()),
         ]);
         let bytes = match message.and_then(|v| {
-            JsonDocument::from_value(&v, &self.limits).map_err(|_| fail(FailureCode::Input))
+            JsonDocument::from_value(&v, &limits).map_err(|_| fail(FailureCode::Input))
         }) {
             Ok(doc) => doc.as_bytes().to_vec(),
             Err(error) => {
@@ -243,6 +282,7 @@ impl Wire {
             }
         };
         let (reply, mut receive) = oneshot::channel();
+        let sent_state = Arc::new(AtomicBool::new(false));
         {
             let Ok(mut pending) = self.pending.lock() else {
                 return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Invariant);
@@ -250,15 +290,21 @@ impl Wire {
             if pending.len() >= self.config.limits.pending_requests {
                 return McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTransport);
             }
-            pending.insert(key.clone(), reply);
+            pending.insert(
+                key.clone(),
+                PendingRequest {
+                    reply,
+                    limits,
+                    sent: sent_state.clone(),
+                },
+            );
         }
-        let deadline =
-            tokio::time::Instant::now() + Duration::from_millis(self.config.limits.timeout_ms);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(request.timeout_ms);
         let result = tokio::time::timeout_at(deadline, async {
             let exchange = async {
                 match &self.transport {
-                    Transport::Stdio { .. } => self.send_bytes(&bytes).await,
-                    Transport::Http(http) => http.exchange(&bytes, &key, self).await,
+                    Transport::Stdio { .. } => self.send_bytes(&bytes, Some(&sent_state)).await,
+                    Transport::Http(http) => http.exchange(&bytes, &key, self, request.idempotency_key.as_deref(), &sent_state).await,
                 }
             };
             tokio::pin!(exchange);
@@ -266,6 +312,7 @@ impl Wire {
                 let mut sent = false;
                 loop {
                     tokio::select! {
+                        biased;
                         result = &mut receive => return result.map_err(|_| fail(FailureCode::McpTransport)),
                         result = exchange.as_mut(), if !sent => { result?; sent = true; },
                     }
@@ -274,15 +321,16 @@ impl Wire {
             tokio::pin!(completion);
             tokio::select! {
                 biased;
-                _ = self.stop.cancelled() => Err(fail(FailureCode::McpTransport)),
                 result = completion.as_mut() => result,
-                _ = cancellation.cancelled() => {
+                _ = async {
+                    tokio::select! { _ = self.stop.cancelled() => {}, _ = cancellation.cancelled() => {} }
+                } => {
                     let cancel = obj([
                         ("jsonrpc", Value::Text("2.0".into())),
                         ("method", Value::Text("notifications/cancelled".into())),
                         ("params", obj([("requestId", key.to_value())])?),
                     ])?;
-                    let grace = tokio::time::Instant::now() + Duration::from_millis(self.config.limits.cancellation_grace_ms);
+                    let grace = tokio::time::Instant::now() + Duration::from_millis(request.cancellation_grace_ms);
                     tokio::time::timeout_at(grace.min(deadline), async {
                         let notification = self.send(cancel);
                         tokio::pin!(notification);
@@ -304,7 +352,11 @@ impl Wire {
         match result {
             Ok(reply) => reply,
             Err(error) => McpClientReply {
-                delivery: McpDelivery::PossiblySent,
+                delivery: if sent_state.load(Ordering::Acquire) {
+                    McpDelivery::PossiblySent
+                } else {
+                    McpDelivery::NotSent
+                },
                 result: Err(error),
             },
         }
@@ -312,13 +364,18 @@ impl Wire {
 
     pub fn reserve_request(
         &self,
-        method: &str,
-        params: &JsonDocument,
+        request: &McpRequest,
     ) -> Result<tokio::sync::OwnedSemaphorePermit, RuntimeFailure> {
+        request
+            .response_limits
+            .validate()
+            .map_err(|_| fail(FailureCode::Profile))?;
+        let params = JsonDocument::from_value(&request.params, &self.limits)
+            .map_err(|_| fail(FailureCode::Input))?;
         let bytes = params
             .as_bytes()
             .len()
-            .checked_add(method.len())
+            .checked_add(request.method.len())
             .and_then(|n| n.checked_add(256))
             .filter(|n| *n <= self.limits.max_document_bytes)
             .ok_or_else(|| fail(FailureCode::Input))?;
@@ -348,9 +405,13 @@ impl Wire {
     async fn send(&self, message: Value) -> Result<(), RuntimeFailure> {
         let message = JsonDocument::from_value(&message, &self.limits)
             .map_err(|_| fail(FailureCode::McpProtocol))?;
-        self.send_bytes(message.as_bytes()).await
+        self.send_bytes(message.as_bytes(), None).await
     }
-    async fn send_bytes(&self, bytes: &[u8]) -> Result<(), RuntimeFailure> {
+    async fn send_bytes(
+        &self,
+        bytes: &[u8],
+        sent: Option<&AtomicBool>,
+    ) -> Result<(), RuntimeFailure> {
         tokio::time::timeout(
             Duration::from_millis(self.config.limits.timeout_ms),
             async {
@@ -361,6 +422,12 @@ impl Wire {
                     return http.control(bytes, self).await;
                 };
                 let mut input = input.lock().await;
+                if let Some(sent) = sent {
+                    if self.stop.is_cancelled() {
+                        return Err(fail(FailureCode::Cancelled));
+                    }
+                    sent.store(true, Ordering::Release);
+                }
                 input
                     .write_all(bytes)
                     .await
@@ -410,8 +477,9 @@ impl Wire {
         associated: Option<&McpRequestId>,
         allow_response: bool,
     ) -> Result<(), RuntimeFailure> {
-        if self.received.fetch_add(1, Ordering::Relaxed)
-            >= self.config.limits.messages_per_session as u64
+        let received = self.received.fetch_add(1, Ordering::Relaxed);
+        if received >= self.config.limits.messages_per_session as u64
+            || (self.initialization.get().is_none() && received >= 1024)
         {
             return Err(fail(FailureCode::McpProtocol));
         }
@@ -491,10 +559,25 @@ impl Wire {
             let pending = self
                 .pending
                 .lock()
+                .map_err(|_| fail(FailureCode::Invariant))?;
+            if let Some(request) = pending.get(&id) {
+                JsonDocument::new(bytes, &request.limits)
+                    .map_err(|_| fail(FailureCode::McpProtocol))?;
+                if !request.sent.load(Ordering::Acquire) {
+                    return Err(fail(FailureCode::McpProtocol));
+                }
+            } else if !matches!(&id, McpRequestId::Integer(id) if *id > 0 && (*id as u64) < self.next.load(Ordering::Relaxed))
+            {
+                return Err(fail(FailureCode::McpProtocol));
+            }
+            drop(pending);
+            if let Some(request) = self
+                .pending
+                .lock()
                 .map_err(|_| fail(FailureCode::Invariant))?
-                .remove(&id);
-            if let Some(reply) = pending {
-                let _ = reply.send(McpClientReply {
+                .remove(&id)
+            {
+                let _ = request.reply.send(McpClientReply {
                     delivery: McpDelivery::ResponseReceived,
                     result: Ok(result),
                 });
@@ -547,12 +630,21 @@ impl Wire {
     }
     fn fail_pending(&self, code: FailureCode) {
         if let Ok(mut pending) = self.pending.lock() {
-            for (_, reply) in std::mem::take(&mut *pending) {
-                let _ = reply.send(McpClientReply::failed(McpDelivery::PossiblySent, code));
+            for (_, request) in std::mem::take(&mut *pending) {
+                let delivery = if request.sent.load(Ordering::Acquire) {
+                    McpDelivery::PossiblySent
+                } else {
+                    McpDelivery::NotSent
+                };
+                let _ = request.reply.send(McpClientReply::failed(delivery, code));
             }
         }
     }
     pub async fn close(&self) {
+        let _cleanup = self.cleanup.lock().await;
+        if *self.closed.borrow() {
+            return;
+        }
         self.end(McpSessionEnd::Cancelled);
         self.fail_pending(FailureCode::McpTransport);
         let _ = tokio::time::timeout(Duration::from_millis(500), async {

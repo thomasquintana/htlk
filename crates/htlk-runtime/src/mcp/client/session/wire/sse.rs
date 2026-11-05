@@ -17,6 +17,13 @@ pub(super) struct Decoder {
     first: bool,
 }
 impl Decoder {
+    pub fn finish(self) -> Result<(), RuntimeFailure> {
+        if std::str::from_utf8(&self.line).is_err_and(|error| error.error_len().is_some()) {
+            Err(fail(FailureCode::McpProtocol))
+        } else {
+            Ok(())
+        }
+    }
     pub fn new(maximum: usize) -> Self {
         Self {
             line: vec![],

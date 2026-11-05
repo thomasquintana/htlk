@@ -1,254 +1,191 @@
-//! Transport I/O lives here, never on a short-lived execution worker reactor.
+//! Graph operation handles over the common bidirectional client; no reader lease
+//! is retained across external work. Runtime authorization and intent remain separate.
 use super::*;
-use htlk_executable::digest::Digest;
-use std::sync::Mutex;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot};
-
-type Key = (RunId, String, i64, Digest);
-type Lease = OwnedMutexGuard<RunSession>;
-type Slot = Arc<tokio::sync::Mutex<RunSession>>;
-type Registry = Arc<Mutex<BTreeMap<Key, (Slot, Arc<McpCancellation>)>>>;
-
-#[derive(Default)]
-struct RunSession {
-    connection: Option<NativeConnection>,
-    // Set before any fallible I/O. Incomplete/ambiguous exchanges cannot be reused.
-    broken: bool,
-    lifetime: Arc<McpCancellation>,
-}
-
-enum Command {
-    Shutdown(oneshot::Sender<()>),
-    Connect {
-        binding: McpBinding,
-        context: McpRunContext,
-        limits: Limits,
-        reply: oneshot::Sender<Result<(Lease, JsonDocument), RuntimeFailure>>,
-    },
-    Invoke {
-        lease: Lease,
-        request: McpRequest,
-        reply: oneshot::Sender<(Lease, McpOutcome)>,
-    },
-}
+use client::{
+    McpClientConfig, McpClientLimits, McpClientSession, McpOwner, McpOwnerScope, NativeMcpClient,
+};
 
 pub(super) struct NativeSessions {
-    sender: mpsc::Sender<Command>,
+    client: NativeMcpClient,
+    endpoints: BTreeMap<String, McpEndpoint>,
+    timeout_ms: u64,
 }
 impl NativeSessions {
     pub fn launch(
         endpoints: BTreeMap<String, McpEndpoint>,
         timeout_ms: u64,
     ) -> Result<Self, RuntimeFailure> {
-        let (sender, mut receiver) = mpsc::channel::<Command>(64);
-        std::thread::Builder::new()
-            .name("htlk-mcp-io".into())
-            .spawn(move || {
-                actix::System::new().block_on(async move {
-                    let registry = Registry::default();
-                    let stop = Arc::new(McpCancellation::new());
-                    let endpoints = Arc::new(endpoints);
-                    let mut jobs = tokio::task::JoinSet::new();
-                    let finished = loop {
-                        tokio::select! {
-                            command = receiver.recv() => {
-                                let Some(command) = command else { break None };
-                                match command {
-                                    Command::Shutdown(reply) => break Some(reply),
-                                    Command::Connect { binding, context, limits, reply } => {
-                                        let registry = registry.clone();
-                                        let endpoints = endpoints.clone();
-                                        let stop = stop.clone();
-                                        jobs.spawn(async move {
-                                            let result = tokio::time::timeout(
-                                                Duration::from_millis(timeout_ms),
-                                                connect(registry, endpoints, stop, binding, context, limits),
-                                            ).await.unwrap_or_else(|_| Err(fail(FailureCode::McpTimeout)));
-                                            let _ = reply.send(result);
-                                        });
-                                    }
-                                    Command::Invoke { mut lease, request, reply } => {
-                                        jobs.spawn(async move {
-                                            lease.broken = true;
-                                            let outcome = match lease.connection.as_mut() {
-                                                Some(connection) => connection.invoke(request).await,
-                                                None => McpOutcome {
-                                                    delivery: McpDelivery::NotSent,
-                                                    result: Err(fail(FailureCode::McpTransport)),
-                                                },
-                                            };
-                                            // Correlated JSON-RPC errors end an exchange too.
-                                            lease.broken = outcome.delivery != McpDelivery::ResponseReceived;
-                                            let _ = reply.send((lease, outcome));
-                                        });
-                                    }
-                                }
-                            }
-                            _ = jobs.join_next(), if !jobs.is_empty() => {}
-                        }
-                    };
-                    receiver.close();
-                    stop.cancel();
-                    let slots: Vec<_> = registry.lock().map(|entries|
-                        entries.values().map(|(slot, _)| slot.clone()).collect()
-                    ).unwrap_or_default();
-                    for slot in slots {
-                        jobs.spawn(async move { cleanup(slot).await });
-                    }
-                    // Session lifetime watchers finish bounded cleanup on this reactor.
-                    let _ = tokio::time::timeout(Duration::from_millis(1100), async {
-                        while jobs.join_next().await.is_some() {}
-                    }).await;
-                    jobs.abort_all();
-                    if let Some(finished) = finished { let _ = finished.send(()); }
-                });
-            })
-            .map_err(|_| fail(FailureCode::McpTransport))?;
-        Ok(Self { sender })
+        let config = McpClientConfig::new(
+            McpClientLimits {
+                timeout_ms,
+                cancellation_grace_ms: 100.min(timeout_ms),
+                messages_per_session: 1024 * 1024,
+                ..Default::default()
+            },
+            BTreeMap::new(),
+            None,
+        )?
+        .with_server_event_stream(false);
+        Self::configured(endpoints, config)
     }
-
-    pub async fn shutdown(&self) -> Result<(), RuntimeFailure> {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            let (reply, receive) = oneshot::channel();
-            if self.sender.send(Command::Shutdown(reply)).await.is_err() {
-                return Ok(());
-            }
-            receive.await.map_err(|_| fail(FailureCode::McpTransport))
+    pub fn configured(
+        endpoints: BTreeMap<String, McpEndpoint>,
+        config: McpClientConfig,
+    ) -> Result<Self, RuntimeFailure> {
+        let timeout_ms = config.limits().timeout_ms;
+        Ok(Self {
+            client: NativeMcpClient::new(config)?,
+            endpoints,
+            timeout_ms,
         })
-        .await
-        .map_err(|_| fail(FailureCode::McpTimeout))?
     }
-
+    pub async fn shutdown(&self) -> Result<(), RuntimeFailure> {
+        self.client.shutdown().await
+    }
     pub async fn connect(
         &self,
         binding: &McpBinding,
         context: &McpRunContext,
         limits: &Limits,
     ) -> Result<NativeLease, RuntimeFailure> {
-        let (reply, receive) = oneshot::channel();
-        self.sender
-            .send(Command::Connect {
-                binding: binding.clone(),
-                context: context.clone(),
-                limits: limits.clone(),
-                reply,
-            })
+        if context.cancellation.is_cancelled() || context.fence <= 0 {
+            return Err(fail(FailureCode::Cancelled));
+        }
+        limits.validate().map_err(|_| fail(FailureCode::Profile))?;
+        let endpoint = self
+            .endpoints
+            .get(binding.server().deployment_id())
+            .ok_or_else(|| fail(FailureCode::McpIdentity))?;
+        let owner = McpOwner::new(
+            context.host.clone(),
+            McpOwnerScope::Run(context.run_id.clone()),
+            context.fence,
+            limits,
+        )?;
+        let session = self
+            .client
+            .open(
+                owner,
+                binding.server().clone(),
+                endpoint.clone(),
+                Limits::default(),
+                context.cancellation.clone(),
+            )
             .await
-            .map_err(|_| fail(FailureCode::McpTransport))?;
-        let (lease, descriptor) = receive
-            .await
-            .map_err(|_| fail(FailureCode::McpTransport))??;
-        let lifetime = lease.lifetime.clone();
-        Ok(NativeLease {
-            sender: self.sender.clone(),
-            lease: Some(lease),
-            descriptor,
-            lifetime,
-        })
-    }
-}
-
-async fn connect(
-    registry: Registry,
-    endpoints: Arc<BTreeMap<String, McpEndpoint>>,
-    stop: Arc<McpCancellation>,
-    binding: McpBinding,
-    context: McpRunContext,
-    limits: Limits,
-) -> Result<(Lease, JsonDocument), RuntimeFailure> {
-    if context.cancellation.is_cancelled() || context.fence <= 0 {
-        return Err(fail(FailureCode::Cancelled));
-    }
-    limits.validate().map_err(|_| fail(FailureCode::Profile))?;
-    let key = (
-        context.run_id.clone(),
-        context.host.principal().into(),
-        context.fence,
-        binding
-            .server()
-            .digest(&limits)
-            .map_err(|_| fail(FailureCode::McpIdentity))?,
-    );
-    let (slot, created) = {
-        let mut entries = registry.lock().map_err(|_| fail(FailureCode::Invariant))?;
-        for ((run, principal, fence, _), (_, lifetime)) in entries.iter() {
-            if run == &context.run_id && principal == context.host.principal() {
-                if *fence > context.fence {
-                    return Err(fail(FailureCode::Cancelled));
+            .map_err(|error| match error.code() {
+                FailureCode::Cancelled if !context.cancellation.is_cancelled() => {
+                    fail(FailureCode::McpTransport)
                 }
-                if *fence < context.fence {
-                    lifetime.cancel();
+                FailureCode::Fenced => fail(FailureCode::Cancelled),
+                _ => error,
+            })?;
+        let prepared = self.prepare(&session, binding, context, limits).await;
+        match prepared {
+            Ok(descriptor) => Ok(NativeLease {
+                session,
+                descriptor,
+                lifetime: context.cancellation.clone(),
+                closed: false,
+            }),
+            Err(error) => {
+                let _ = session.close().await;
+                Err(error)
+            }
+        }
+    }
+    async fn prepare(
+        &self,
+        session: &McpClientSession,
+        binding: &McpBinding,
+        context: &McpRunContext,
+        limits: &Limits,
+    ) -> Result<JsonDocument, RuntimeFailure> {
+        let capabilities = get(as_map(session.initialization().value())?, "capabilities")?;
+        let category = match binding.kind() {
+            McpBindingKind::Tool { .. } => "tools",
+            McpBindingKind::Prompt { .. } => "prompts",
+            _ => "resources",
+        };
+        if !matches!(as_map(capabilities)?.get(category), Some(Value::Map(_))) {
+            return Err(fail(FailureCode::McpDescriptor));
+        }
+        let (method, collection, key, name) = match binding.kind() {
+            McpBindingKind::Tool { name, .. } => ("tools/list", "tools", "name", name),
+            McpBindingKind::Prompt { name } => ("prompts/list", "prompts", "name", name),
+            McpBindingKind::Resource { uri } => ("resources/list", "resources", "uri", uri),
+            McpBindingKind::Template { uri_template } => (
+                "resources/templates/list",
+                "resourceTemplates",
+                "uriTemplate",
+                uri_template,
+            ),
+        };
+        let mut cursor = None;
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..1024 {
+            let params = cursor.as_ref().map_or_else(
+                || obj([]),
+                |cursor: &String| obj([("cursor", Value::Text(cursor.clone()))]),
+            )?;
+            let reply = session
+                .invoke(McpRequest {
+                    response_limits: limits.clone(),
+                    cancellation: context.cancellation.clone(),
+                    cancellation_grace_ms: 100,
+                    method: method.into(),
+                    params,
+                    timeout_ms: self.timeout_ms,
+                    max_response_bytes: limits.max_document_bytes,
+                    idempotency_key: None,
+                })
+                .await;
+            let result = reply.result?.map_err(|_| fail(FailureCode::McpProtocol))?;
+            let fields = as_map(result.value())?;
+            let Value::Array(entries) = get(fields, collection)? else {
+                return Err(fail(FailureCode::McpProtocol));
+            };
+            for descriptor in entries {
+                if as_map(descriptor)?.get(key) == Some(&Value::Text(name.clone())) {
+                    let descriptor = JsonDocument::from_value(descriptor, limits)
+                        .map_err(|_| fail(FailureCode::McpDescriptor))?;
+                    let task_calls = as_map(capabilities)?
+                        .get("tasks")
+                        .and_then(|v| as_map(v).ok()?.get("requests"))
+                        .and_then(|v| as_map(v).ok()?.get("tools"))
+                        .and_then(|v| as_map(v).ok()?.get("call"))
+                        .is_some();
+                    let task_required = as_map(descriptor.value())?
+                        .get("execution")
+                        .and_then(|v| as_map(v).ok()?.get("taskSupport"))
+                        == Some(&Value::Text("required".into()));
+                    if matches!(binding.kind(), McpBindingKind::Tool { .. })
+                        && task_calls
+                        && task_required
+                    {
+                        return Err(fail(FailureCode::McpDescriptor));
+                    }
+                    return Ok(descriptor);
                 }
             }
+            cursor = match fields.get("nextCursor") {
+                None => return Err(fail(FailureCode::McpDescriptor)),
+                Some(Value::Text(cursor))
+                    if seen.insert(htlk_executable::digest::hash_bytes(cursor.as_bytes())) =>
+                {
+                    Some(cursor.clone())
+                }
+                _ => return Err(fail(FailureCode::McpProtocol)),
+            };
         }
-        match entries.get(&key) {
-            Some((slot, _)) => (slot.clone(), false),
-            None => {
-                let mut lifetime = McpCancellation::linked(&context.cancellation);
-                lifetime.parents.push(stop.state.clone());
-                let slot = Arc::new(tokio::sync::Mutex::new(RunSession {
-                    lifetime: Arc::new(lifetime),
-                    ..Default::default()
-                }));
-                entries.insert(key.clone(), (slot.clone(), context.cancellation.clone()));
-                (slot, true)
-            }
-        }
-    };
-    if created {
-        let slot = slot.clone();
-        let lifetime = context.cancellation.clone();
-        tokio::spawn(async move {
-            tokio::select! { _ = lifetime.cancelled() => {}, _ = stop.cancelled() => {} }
-            if let Ok(mut entries) = registry.lock() {
-                entries.remove(&key);
-            }
-            cleanup(slot).await;
-        });
+        Err(fail(FailureCode::McpProtocol))
     }
-    tokio::select! {
-        biased;
-        _ = context.cancellation.cancelled() => Err(fail(FailureCode::Cancelled)),
-        result = async {
-            let mut lease = slot.lock_owned().await;
-            if lease.broken { return Err(fail(FailureCode::McpTransport)); }
-            lease.broken = true;
-            if lease.connection.is_none() {
-                let endpoint = endpoints.get(binding.server().deployment_id())
-                    .ok_or_else(|| fail(FailureCode::McpIdentity))?;
-                let session = Session::new(endpoint, binding.server(), limits.clone()).await?;
-                // Store transport before preparation so timeout still leaves a broken slot.
-                lease.connection = Some(NativeConnection {
-                    session, descriptor: JsonDocument::new(b"{}", &limits)
-                        .map_err(|_| fail(FailureCode::Profile))?,
-                });
-            }
-            let connection = lease.connection.as_mut().ok_or_else(|| fail(FailureCode::Invariant))?;
-            connection.session.limits = limits;
-            let descriptor = connection.session.prepare(&binding).await?;
-            connection.descriptor = descriptor.clone();
-            lease.broken = false;
-            Ok((lease, descriptor))
-        } => result,
-    }
-}
-
-async fn cleanup(slot: Slot) {
-    let _ = tokio::time::timeout(Duration::from_secs(1), async {
-        let mut lease = slot.lock().await;
-        lease.broken = true;
-        if let Some(mut connection) = lease.connection.take() {
-            let _ = connection.close().await;
-        }
-    })
-    .await;
 }
 
 pub(super) struct NativeLease {
-    sender: mpsc::Sender<Command>,
-    lease: Option<Lease>,
+    session: McpClientSession,
     descriptor: JsonDocument,
     lifetime: Arc<McpCancellation>,
+    closed: bool,
 }
 impl McpConnection for NativeLease {
     fn descriptor(&self) -> &JsonDocument {
@@ -256,18 +193,17 @@ impl McpConnection for NativeLease {
     }
     fn invoke<'a>(&'a mut self, mut request: McpRequest) -> McpAttemptFuture<'a> {
         Box::pin(async move {
-            let unsent = |code| McpOutcome {
-                delivery: McpDelivery::NotSent,
-                result: Err(fail(code)),
-            };
             if self.lifetime.is_cancelled() {
-                return unsent(FailureCode::Cancelled);
+                return McpOutcome {
+                    delivery: McpDelivery::NotSent,
+                    result: Err(fail(FailureCode::Cancelled)),
+                };
             }
-            let Some(lease) = self.lease.take() else {
-                return unsent(FailureCode::McpTransport);
-            };
-            if lease.broken {
-                return unsent(FailureCode::McpTransport);
+            if self.closed || self.session.ended().is_some() {
+                return McpOutcome {
+                    delivery: McpDelivery::NotSent,
+                    result: Err(fail(FailureCode::McpTransport)),
+                };
             }
             let mut signal = McpCancellation::linked(&self.lifetime);
             signal.parents.push(request.cancellation.state.clone());
@@ -275,33 +211,23 @@ impl McpConnection for NativeLease {
                 .parents
                 .extend(request.cancellation.parents.iter().cloned());
             request.cancellation = Arc::new(signal);
-            let (reply, receive) = oneshot::channel();
-            if self
-                .sender
-                .send(Command::Invoke {
-                    lease,
-                    request,
-                    reply,
-                })
-                .await
-                .is_err()
-            {
-                return unsent(FailureCode::McpTransport);
+            let reply = self.session.invoke(request).await;
+            if reply.delivery != McpDelivery::ResponseReceived {
+                self.closed = true;
+                let _ = self.session.close().await;
             }
-            match receive.await {
-                Ok((lease, outcome)) => {
-                    self.lease = Some(lease);
-                    outcome
-                }
-                Err(_) => McpOutcome {
-                    delivery: McpDelivery::PossiblySent,
-                    result: Err(fail(FailureCode::McpTransport)),
-                },
+            McpOutcome {
+                delivery: reply.delivery,
+                result: reply.result.and_then(|result| {
+                    result
+                        .map(|result| result.as_bytes().to_vec())
+                        .map_err(|_| fail(FailureCode::McpProtocol))
+                }),
             }
         })
     }
     fn close(&mut self) -> McpFuture<'_, ()> {
-        self.lease.take();
+        self.closed = true;
         Box::pin(async { Ok(()) })
     }
 }

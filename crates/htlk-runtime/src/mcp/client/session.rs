@@ -1,6 +1,6 @@
 //! Long-lived transport ownership, independent of caller execution reactors.
 use super::*;
-use crate::mcp::{McpDelivery, McpEndpoint};
+use crate::mcp::{McpDelivery, McpEndpoint, McpRequest};
 use std::sync::{
     Mutex,
     atomic::{AtomicU64, Ordering},
@@ -40,7 +40,8 @@ impl McpClientReply {
 
 type Slot = Arc<tokio::sync::OnceCell<Result<Arc<Wire>, RuntimeFailure>>>;
 type SessionKey = (Digest, i64, Digest);
-type Registry = Arc<Mutex<BTreeMap<SessionKey, (Slot, Arc<McpCancellation>)>>>;
+type Registry =
+    Arc<Mutex<BTreeMap<SessionKey, (Slot, Arc<McpCancellation>, Arc<McpCancellation>)>>>;
 
 enum Command {
     Open {
@@ -53,9 +54,7 @@ enum Command {
     },
     Request {
         wire: Arc<Wire>,
-        method: String,
-        params: JsonDocument,
-        cancellation: Arc<McpCancellation>,
+        request: McpRequest,
         reply: oneshot::Sender<McpClientReply>,
         reservation: tokio::sync::OwnedSemaphorePermit,
     },
@@ -112,14 +111,14 @@ impl NativeMcpClient {
                                     let _ = reply.send(result);
                                 });
                             }
-                            Some(Command::Request { wire, method, params, cancellation, reply, reservation }) => {
+                            Some(Command::Request { wire, request, reply, reservation }) => {
                                 if jobs.len() >= config.limits.pending_requests {
                                     let _ = reply.send(McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTransport));
                                     continue;
                                 }
                                 jobs.spawn(async move {
                                     let _reservation = reservation;
-                                    let _ = reply.send(wire.request(&method, params, cancellation).await);
+                                    let _ = reply.send(wire.invoke(request).await);
                                 });
                             }
                             None => break,
@@ -129,7 +128,7 @@ impl NativeMcpClient {
                 receiver.close();
                 stop.cancel();
                 let wires: Vec<_> = registry.lock().map(|entries| entries.values()
-                    .filter_map(|(slot, _)| slot.get().and_then(|v| v.as_ref().ok()).cloned())
+                    .filter_map(|(slot, _, _)| slot.get().and_then(|v| v.as_ref().ok()).cloned())
                     .collect()).unwrap_or_default();
                 for wire in wires { jobs.spawn(async move { wire.close().await; }); }
                 let _ = tokio::time::timeout(Duration::from_secs(1), async {
@@ -252,11 +251,22 @@ impl McpClientSession {
         params: JsonDocument,
         cancellation: Arc<McpCancellation>,
     ) -> McpClientReply {
+        self.invoke(
+            self.wire
+                .default_request(method, params.value().clone(), cancellation),
+        )
+        .await
+    }
+
+    /// Sends a request with explicit per-operation bounds and optional verified
+    /// protocol deduplication key. Per-call limits never shrink later requests.
+    pub async fn invoke(&self, request: McpRequest) -> McpClientReply {
         let (reply, receive) = oneshot::channel();
+        let cancellation = request.cancellation.clone();
         if cancellation.is_cancelled() || self.wire.stop.is_cancelled() {
             return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Cancelled);
         }
-        let reservation = match self.wire.reserve_request(method, &params) {
+        let reservation = match self.wire.reserve_request(&request) {
             Ok(reservation) => reservation,
             Err(error) => {
                 return McpClientReply {
@@ -267,9 +277,7 @@ impl McpClientSession {
         };
         let send = self.sender.send(Command::Request {
             wire: self.wire.clone(),
-            method: method.into(),
-            params,
-            cancellation: cancellation.clone(),
+            request,
             reply,
             reservation,
         });
@@ -319,15 +327,18 @@ async fn open(
             .digest(&limits)
             .map_err(|_| fail(FailureCode::McpIdentity))?,
     );
-    let (slot, token) = {
+    let (slot, token, _) = {
         let mut entries = registry.lock().map_err(|_| fail(FailureCode::Invariant))?;
-        for ((id, generation, _), (_, token)) in entries.iter() {
+        for ((id, generation, _), (_, token, lifetime)) in entries.iter() {
             if *id == owner.key() {
                 if *generation > owner.generation() {
                     return Err(fail(FailureCode::Fenced));
                 }
                 if *generation < owner.generation() {
                     token.cancel();
+                    if matches!(owner.scope(), McpOwnerScope::Run(_)) {
+                        lifetime.cancel();
+                    }
                 }
             }
         }
@@ -336,7 +347,7 @@ async fn open(
         if matches!(owner.scope(), McpOwnerScope::Host(_))
             && entries
                 .get(&key)
-                .is_some_and(|(_, token)| token.is_cancelled())
+                .is_some_and(|(_, token, _)| token.is_cancelled())
         {
             entries.remove(&key);
         }
@@ -349,7 +360,11 @@ async fn open(
                 let mut token = McpCancellation::linked(&stop);
                 token.parents.push(lifetime.state.clone());
                 token.parents.extend(lifetime.parents.iter().cloned());
-                (Arc::new(tokio::sync::OnceCell::new()), Arc::new(token))
+                (
+                    Arc::new(tokio::sync::OnceCell::new()),
+                    Arc::new(token),
+                    lifetime.clone(),
+                )
             })
             .clone()
     };
@@ -376,7 +391,7 @@ async fn open(
         })
         .await
         .clone();
-    if token.is_cancelled() {
+    if token.is_cancelled() && result.is_ok() {
         return Err(fail(FailureCode::Cancelled));
     }
     result

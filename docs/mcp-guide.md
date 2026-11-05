@@ -21,22 +21,25 @@ different runs, including those by the same principal, remain isolated. A dedica
 I/O thread retains transport resources across the execution workers' temporary
 reactors. One session negotiates MCP 2025-11-25 once and checks implementation
 name/version; every attempt checks the selected capability and live descriptor
-through bounded pagination. `McpConnection` leases that checked session exclusively:
-no renegotiation remains after the final policy/approval decision and intent.
+through bounded pagination. `McpConnection` retains a checked operation handle;
+the common bidirectional dispatcher owns the reader independently. No session mutex
+is held across invocation, and no renegotiation remains after final policy/approval
+and intent.
 Failed negotiation cannot turn into a tool send.
 HTTP redirects and automatic decompression are disabled. HTTP JSON/SSE and newline-
 framed stdio responses are bounded before strict JSON parsing, preserving duplicate-
 key, depth, Unicode and numeric-token rejection. Complete `Limits` reach the parser;
 RPC matching and session/content-type checks precede completion claims. Native
 clients answer reverse `ping` and reject unadvertised sampling instead of invoking
-a model. Native processes are killed on drop; HTTP cleanup is best-effort.
+a model. Native processes are killed on shutdown; HTTP cleanup is best-effort.
 
-Closing an attempt's connection releases its lease. Sessions remain live between
+Closing an attempt's connection releases its operation handle. Sessions remain live between
 nodes and while a locally owned run waits. Run completion, failure, cancellation,
 shutdown or ownership loss cancels their lifetime and triggers bounded transport
 cleanup. A higher ownership fence cancels the old local execution; old cleanup is
-keyed to its own generation and cannot close a new owner's session. Requests on one
-session serialize; separate sessions can progress concurrently. The host can call
+keyed to its own generation and cannot close a new owner's session. The dispatcher
+correlates concurrent requests independently and continues receiving while idle.
+The host can call
 `NativeMcpAdapter::shutdown().await` after stopping execution to acknowledge cleanup
 before process exit (two-second caller bound). This permanently stops that adapter.
 
@@ -48,6 +51,29 @@ response limits are reset for each request rather than shrinking future calls.
 Sessions are process-local: durable graph recovery does not reconstruct browser
 pages or sandbox handles after restart or ownership transfer. Reconciliation and
 recreation belong in explicit graph operations supported by the external service.
+
+For host-owned discovery/monitoring, `mcp::client::NativeMcpClient` provides explicit
+open, inspection, close, and shutdown. `McpOwner` distinguishes host and run
+namespaces and principal/generation identity. Explicitly reopening a closed host
+session creates a new epoch; old handles stay closed. These ownership registries
+are currently process-local; see the [conformance inventory](mcp-conformance.md)
+for durable-interaction implementation status.
+
+`McpClientConfig` derives client capabilities from installed services and validates
+queue, byte, frame, cumulative-message, and timeout bounds. Native transport startup
+currently rejects effectful handlers until durable admission is available. Hosts
+can install an `McpEventHandler` and use `NativeMcpAdapter::with_client_config` for
+run-owned events. Event handling neither reads resources nor mutates workflows.
+`McpClientSession::ended` reports overflow or consumer failure even when its event
+queue cannot accept another event.
+
+Streamable HTTP supports optional idle GET SSE, incremental bounded framing, and
+GET resumption using the failed stream's event cursor. Resumption never repeats
+the original operation POST. A GET 405 reports lack of idle-stream support while
+ordinary POST requests remain available. `with_server_event_stream(false)` disables
+the optional GET; the default graph adapter uses this setting when no host event
+consumer is configured. Structured RPC errors remain available through the client
+session API; graph-visible failures retain redacted runtime classifications.
 
 `McpAdapter` is a trusted integration contract. Its connection resolver receives the
 `McpRunContext`, containing the actual run ID, host principal, ownership fence and

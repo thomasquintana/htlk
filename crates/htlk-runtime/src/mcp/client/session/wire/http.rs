@@ -127,13 +127,29 @@ impl Http {
         bytes: &[u8],
         id: &McpRequestId,
         wire: &Wire,
+        idempotency_key: Option<&str>,
+        sent: &AtomicBool,
     ) -> Result<(), RuntimeFailure> {
-        let response = self
+        let mut request = self
             .request(reqwest::Method::POST)?
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
-            .body(bytes.to_vec())
-            .send()
+            .body(bytes.to_vec());
+        if let Some(key) = idempotency_key {
+            let value = reqwest::header::HeaderValue::from_str(key)
+                .map_err(|_| fail(FailureCode::Input))?;
+            request = request.header("idempotency-key", value);
+        }
+        let request = request
+            .build()
+            .map_err(|_| fail(FailureCode::McpTransport))?;
+        if wire.stop.is_cancelled() {
+            return Err(fail(FailureCode::Cancelled));
+        }
+        sent.store(true, Ordering::Release);
+        let response = self
+            .client
+            .execute(request)
             .await
             .map_err(|_| fail(FailureCode::McpTransport))?;
         self.check(&response, wire, wire.initialization.get().is_none())?;
@@ -150,7 +166,7 @@ impl Http {
             .contains_key(id)
         {
             let Some(last) = cursor.as_deref().filter(|s: &&str| !s.is_empty()) else {
-                return Err(fail(FailureCode::McpTransport));
+                return Err(fail(FailureCode::McpProtocol));
             };
             tokio::time::sleep(Duration::from_millis(retry)).await;
             let response = self.get(Some(last), wire).await?;
@@ -275,7 +291,7 @@ impl Http {
                 }
             }
         }
-        Ok(())
+        decoder.finish()
     }
     pub async fn close(&self) {
         if self.session.lock().is_ok_and(|session| session.is_some())

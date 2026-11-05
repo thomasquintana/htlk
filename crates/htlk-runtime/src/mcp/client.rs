@@ -406,6 +406,7 @@ pub struct McpClientConfig {
     handlers: BTreeMap<McpClientService, Arc<dyn McpClientHandler>>,
     events: Option<Arc<dyn McpEventHandler>>,
     capabilities: JsonDocument,
+    listen_for_events: bool,
 }
 impl McpClientConfig {
     /// Freezes a checked service registry and derives its protocol capabilities.
@@ -470,6 +471,7 @@ impl McpClientConfig {
             handlers,
             events,
             capabilities,
+            listen_for_events: true,
         })
     }
     /// Checked immutable resource bounds.
@@ -487,5 +489,12 @@ impl McpClientConfig {
     /// Borrows the host event consumer, when installed.
     pub fn event_handler(&self) -> Option<&Arc<dyn McpEventHandler>> {
         self.events.as_ref()
+    }
+    /// Selects whether to open the optional idle HTTP GET stream. This does not
+    /// disable reception on request-associated streams or on stdio. Hosts that
+    /// subscribe to idle events must leave this enabled.
+    pub fn with_server_event_stream(mut self, enabled: bool) -> Self {
+        self.listen_for_events = enabled;
+        self
     }
 }

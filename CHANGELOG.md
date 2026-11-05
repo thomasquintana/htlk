@@ -8,6 +8,10 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Run-owned native MCP operations use the same persistent dispatcher as host-owned
+  sessions, without exclusive reader leases. Per-attempt ingress limits, exact
+  deduplication keys, cooperative stop hints, and sticky ambiguous-session failures
+  remain independently enforced.
 - Persistent native MCP client sessions with bounded idle event delivery, reverse
   ping, concurrent request correlation, cooperative cancellation, stdio/Streamable
   HTTP transports, SSE resumption, explicit session epochs, and observable overflow.
