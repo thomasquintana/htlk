@@ -101,6 +101,12 @@ model. Request IDs, outboxes, and transport acknowledgements do not establish
 global exactly-once external execution. Ownership transfer preserves stable work
 identity while changing authority. Report unknown usage as unknown, not zero.
 
+Underlying host/model work delivery is distinct from callback response delivery.
+Recording or acknowledging a JSON-RPC timeout error does not establish that a model
+operation ended. Its unresolved reservation remains charged until explicit trusted
+completion/no-start reconciliation. Reconciliation cannot replace the callback reply
+already recorded or sent. Known pre-dispatch refusals spend no host-work call.
+
 Protected evidence covers tools, prompts, resources, templates, interactions and
 structured protocol errors. Inspection checks current authority and unioned labels,
 returns bounded original bytes/digests and explicit truncation, and never dispatches.

@@ -152,6 +152,8 @@ pub struct McpOperationOrigin {
 /// handler dispatch; possession of a copied context grants no acceptance authority.
 #[derive(Clone)]
 pub struct McpInteractionContext {
+    /// Frozen minimum protection of the request, parent work, and host policy.
+    pub labels: crate::records::SecurityLabels,
     /// Authenticated durable owner and generation.
     pub owner: McpOwner,
     /// Exact compound server identity.
@@ -383,9 +385,151 @@ pub enum McpClientService {
     RootsChanged,
 }
 
-/// A protected service result, kept separate from operational runtime failures.
-pub type McpServiceFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<JsonDocument, McpRpcError>> + Send + 'a>>;
+/// Delivery of the underlying host/model operation, distinct from sending a
+/// JSON-RPC callback response. Returning a timeout error does not prove work ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpWorkDelivery {
+    /// No underlying operation was started.
+    NotStarted,
+    /// Work may have started; its completion is unknown.
+    Uncertain,
+    /// The underlying operation completed, successfully or with a known error.
+    Completed,
+}
+impl McpWorkDelivery {
+    /// Stable private journal spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::Uncertain => "uncertain",
+            Self::Completed => "completed",
+        }
+    }
+    /// Reads a known spelling without granting meaning to unknown states.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "not_started" => Some(Self::NotStarted),
+            "uncertain" => Some(Self::Uncertain),
+            "completed" => Some(Self::Completed),
+            _ => None,
+        }
+    }
+}
+
+/// Observed host cost in an explicitly named integral unit, never an implicit
+/// currency conversion or proof of hard budget enforcement.
+#[derive(Clone)]
+pub struct McpCost {
+    /// Observed number of host-selected cost units.
+    pub amount: u64,
+    /// Exact unit, for example provider-defined microcredits.
+    pub unit: String,
+}
+
+/// Optional trusted host usage observations. Unknown values remain absent rather
+/// than becoming zero. Provider-operation identity supports explicit reconciliation.
+#[derive(Clone, Default)]
+pub struct McpUsage {
+    /// Observed input token count, if actually metered.
+    pub input_tokens: Option<u64>,
+    /// Observed generated token count, if actually metered.
+    pub output_tokens: Option<u64>,
+    /// Observed cost in a named integral unit.
+    pub cost: Option<McpCost>,
+    /// Protected provider operation identifier, if known.
+    pub provider_operation_id: Option<String>,
+}
+impl McpUsage {
+    /// Checks and encodes a bounded private usage receipt. This does not advertise
+    /// hard token/cost enforcement or turn provider hints into trusted metering.
+    ///
+    /// # Errors
+    /// Returns out-of-range counters, an unnamed cost unit, or representation limits.
+    pub fn to_value(&self, limits: &Limits) -> Result<Value, RuntimeFailure> {
+        let counter = |value: Option<u64>| {
+            value
+                .map(|n| {
+                    i64::try_from(n)
+                        .map(Value::Integer)
+                        .map_err(|_| fail(FailureCode::Profile))
+                })
+                .transpose()
+                .map(|v| v.unwrap_or(Value::Null))
+        };
+        let cost = if let Some(cost) = &self.cost {
+            if cost.unit.is_empty() {
+                return Err(fail(FailureCode::Profile));
+            }
+            obj([
+                ("amount", counter(Some(cost.amount))?),
+                ("unit", Value::Text(cost.unit.clone())),
+            ])?
+        } else {
+            Value::Null
+        };
+        let value = obj([
+            ("input_tokens", counter(self.input_tokens)?),
+            ("output_tokens", counter(self.output_tokens)?),
+            ("cost", cost),
+            (
+                "provider_operation_id",
+                self.provider_operation_id
+                    .as_ref()
+                    .map_or(Value::Null, |id| Value::Text(id.clone())),
+            ),
+        ])?;
+        htlk_executable::cbor::encode(&value, limits).map_err(|_| fail(FailureCode::Profile))?;
+        Ok(value)
+    }
+}
+
+/// Protected host work outcome. An uncertain operation can produce a JSON-RPC
+/// error reply while its reservation remains outstanding. A successful result
+/// requires completed work; protocol reply acceptance is a separate later fact.
+pub struct McpServiceOutcome {
+    /// Actual underlying work delivery/completion evidence.
+    pub delivery: McpWorkDelivery,
+    /// Complete protocol result or an error approved for disclosure to the server.
+    pub result: Result<JsonDocument, McpRpcError>,
+    /// Actual usage observations, independent of result success or failure.
+    pub usage: Option<McpUsage>,
+    /// Additional trusted protection from actual host inputs/results. The broker
+    /// unions this with the original context; a handler cannot remove protection.
+    pub labels: crate::records::SecurityLabels,
+}
+impl McpServiceOutcome {
+    /// Reports known completed work with a protocol-success result.
+    pub fn completed(result: JsonDocument) -> Self {
+        Self {
+            delivery: McpWorkDelivery::Completed,
+            result: Ok(result),
+            usage: None,
+            labels: Default::default(),
+        }
+    }
+    /// Reports an error and explicit underlying work delivery evidence.
+    pub fn failure(delivery: McpWorkDelivery, error: McpRpcError) -> Self {
+        Self {
+            delivery,
+            result: Err(error),
+            usage: None,
+            labels: Default::default(),
+        }
+    }
+}
+impl fmt::Debug for McpServiceOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpServiceOutcome")
+            .field("delivery", &self.delivery)
+            .field("success", &self.result.is_ok())
+            .field("has_usage", &self.usage.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A delivery-aware host work future. Underlying work and RPC reply delivery are
+/// intentionally represented separately.
+pub type McpServiceFuture<'a> = Pin<Box<dyn Future<Output = McpServiceOutcome> + Send + 'a>>;
 
 /// Installed host implementation. The client admits and validates a complete
 /// protocol request before calling this handler, and independently validates its

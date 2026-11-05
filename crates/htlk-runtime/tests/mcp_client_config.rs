@@ -155,3 +155,45 @@ fn protocol_ids_never_coerce_and_url_required_errors_preserve_protected_data() {
         );
     }
 }
+
+#[test]
+fn usage_keeps_unknown_distinct_from_zero_and_requires_explicit_cost_units() {
+    let limits = Limits::default();
+    let unknown = McpUsage::default().to_value(&limits).unwrap();
+    let zero = McpUsage {
+        input_tokens: Some(0),
+        output_tokens: Some(0),
+        cost: Some(McpCost {
+            amount: 0,
+            unit: "microcredits".into(),
+        }),
+        provider_operation_id: Some("provider-operation".into()),
+    }
+    .to_value(&limits)
+    .unwrap();
+    assert_ne!(unknown, zero);
+    assert!(
+        McpUsage {
+            input_tokens: Some(u64::MAX),
+            ..Default::default()
+        }
+        .to_value(&limits)
+        .is_err()
+    );
+    assert!(
+        McpUsage {
+            cost: Some(McpCost {
+                amount: 1,
+                unit: String::new()
+            }),
+            ..Default::default()
+        }
+        .to_value(&limits)
+        .is_err()
+    );
+    let Value::Map(fields) = unknown else {
+        panic!()
+    };
+    assert_eq!(fields.get("input_tokens"), Some(&Value::Null));
+    assert_eq!(fields.get("cost"), Some(&Value::Null));
+}

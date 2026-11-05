@@ -6,6 +6,7 @@ use htlk_executable::{
 use htlk_runtime::{
     HostContext,
     failure::FailureCode,
+    mcp::client::McpWorkDelivery,
     records::SecurityLabels,
     store::{McpOwnerUsage, McpWorkClaim, McpWorkState, SqliteStore, StoreConfig, StoreError},
 };
@@ -138,6 +139,7 @@ fn competing_claims_and_lost_reply_acknowledgements_never_authorize_duplicate_wo
                 response.clone(),
                 labels("result"),
                 Some(Value::Integer(7)),
+                McpWorkDelivery::Completed,
                 50,
             )
             .await
@@ -151,6 +153,7 @@ fn competing_claims_and_lost_reply_acknowledgements_never_authorize_duplicate_wo
                 response.clone(),
                 labels("result"),
                 Some(Value::Integer(7)),
+                McpWorkDelivery::Completed,
                 51,
             )
             .await
@@ -277,6 +280,7 @@ fn takeover_preserves_uncertainty_and_late_evidence_without_refunding_reservatio
                     reply("1"),
                     labels("late"),
                     None,
+                    McpWorkDelivery::Completed,
                     102
                 )
                 .await
@@ -293,6 +297,7 @@ fn takeover_preserves_uncertainty_and_late_evidence_without_refunding_reservatio
                     reply("1"),
                     labels("late"),
                     None,
+                    McpWorkDelivery::Completed,
                     102
                 )
                 .await
@@ -300,7 +305,15 @@ fn takeover_preserves_uncertainty_and_late_evidence_without_refunding_reservatio
             StoreError::Fenced
         );
         let digest = store
-            .retain_mcp_late_reply(&old, record.id, reply("1"), labels("late"), 2)
+            .retain_mcp_late_reply(
+                &old,
+                record.id,
+                reply("1"),
+                labels("late"),
+                McpWorkDelivery::Completed,
+                None,
+                2,
+            )
             .await
             .unwrap();
         let late = store
@@ -515,6 +528,7 @@ fn typed_request_ids_conflicts_deadlines_and_principal_isolation_are_independent
                     reply("\"1\""),
                     SecurityLabels::default(),
                     None,
+                    McpWorkDelivery::Completed,
                     6
                 )
                 .await
@@ -531,6 +545,7 @@ fn typed_request_ids_conflicts_deadlines_and_principal_isolation_are_independent
                     reply("1"),
                     SecurityLabels::default(),
                     None,
+                    McpWorkDelivery::Completed,
                     50
                 )
                 .await
@@ -661,6 +676,144 @@ fn run_epochs_require_actual_run_authority_and_cannot_use_host_work_budgets() {
         assert_eq!(
             store.validate_mcp_owner(&owner, 200).await.unwrap_err(),
             StoreError::Fenced
+        );
+    });
+}
+
+#[test]
+fn acknowledged_callback_error_does_not_prove_underlying_model_completion() {
+    actix::System::new().block_on(async {
+        let store = SqliteStore::in_memory(StoreConfig::default()).await.unwrap();
+        let alice = host("alice");
+        let owner = store.acquire_mcp_owner(&alice, "model", 1, 1000).await.unwrap();
+        let session = store.open_mcp_epoch(&owner, hash_bytes(b"server"), 2).await.unwrap();
+        let record = store.receive_mcp_interaction(&owner, session.id, request("1"), labels("private"), 900, 3, 8).await.unwrap();
+        store.begin_mcp_work(&owner, record.id, 4, 8, 1).await.unwrap();
+        let error = br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Provider timeout","data":{"completed":true}}}"#.to_vec();
+        let recorded = store.complete_mcp_work(&owner, record.id, &alice, "timeout", error.clone(), SecurityLabels::default(), None, McpWorkDelivery::Uncertain, 5).await.unwrap();
+        assert_eq!(recorded.state, McpWorkState::Result);
+        assert!(recorded.outstanding);
+        assert_eq!(recorded.work_delivery, McpWorkDelivery::Uncertain);
+        store.record_mcp_delivery(&owner, record.id, false, 6).await.unwrap();
+        store.record_mcp_delivery(&owner, record.id, true, 7).await.unwrap();
+        assert_eq!(store.mcp_owner_usage(&owner).await.unwrap(), McpOwnerUsage { calls_spent: 1, outstanding: 1 });
+        assert!(matches!(store.begin_mcp_work(&owner, record.id, 8, 8, 1).await.unwrap(), McpWorkClaim::Existing(_)));
+        let unknown = store.retain_mcp_late_reply(&owner, record.id, error.clone(), labels("later"), McpWorkDelivery::Uncertain, None, 4).await.unwrap();
+        assert_eq!(store.settle_mcp_work(&owner, record.id, unknown, 9).await.unwrap_err(), StoreError::Invalid);
+        let completion = store.retain_mcp_late_reply(&owner, record.id, reply("1"), labels("later"), McpWorkDelivery::Completed, Some(Value::Integer(12)), 4).await.unwrap();
+        let settled = store.settle_mcp_work(&owner, record.id, completion, 10).await.unwrap();
+        assert_eq!(settled.state, McpWorkState::Result);
+        assert_eq!(settled.reply.as_deref(), Some(error.as_slice()), "reconciliation cannot replace the already-sent reply");
+        assert_eq!(settled.work_delivery, McpWorkDelivery::Completed);
+        assert!(!settled.outstanding);
+        assert_eq!(store.mcp_owner_usage(&owner).await.unwrap(), McpOwnerUsage { calls_spent: 1, outstanding: 0 });
+        let repeated = store.complete_mcp_work(&owner, record.id, &alice, "timeout", error, SecurityLabels::default(), None, McpWorkDelivery::Uncertain, 11).await.unwrap();
+        assert_eq!(repeated.revision, settled.revision, "old receipts remain historical after reconciliation");
+        let evidence = store.mcp_late_replies(&owner, record.id, None, 4).await.unwrap();
+        let completed = evidence.iter().find(|entry| entry.digest == completion).unwrap();
+        assert_eq!(completed.raw_digest, hash_bytes(&reply("1")));
+        assert_eq!(completed.usage, Some(Value::Integer(12)));
+    });
+}
+
+#[test]
+fn predispatch_refusals_and_cancellation_replies_do_not_invent_work_completion() {
+    actix::System::new().block_on(async {
+        let store = SqliteStore::in_memory(StoreConfig::default())
+            .await
+            .unwrap();
+        let alice = host("alice");
+        let owner = store
+            .acquire_mcp_owner(&alice, "model", 1, 1000)
+            .await
+            .unwrap();
+        let session = store
+            .open_mcp_epoch(&owner, hash_bytes(b"server"), 2)
+            .await
+            .unwrap();
+        let denied = store
+            .receive_mcp_interaction(
+                &owner,
+                session.id,
+                request("1"),
+                SecurityLabels::default(),
+                900,
+                3,
+                8,
+            )
+            .await
+            .unwrap();
+        let error =
+            br#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"Rejected"}}"#.to_vec();
+        let refused = store
+            .complete_mcp_work(
+                &owner,
+                denied.id,
+                &alice,
+                "refused",
+                error,
+                SecurityLabels::default(),
+                None,
+                McpWorkDelivery::NotStarted,
+                4,
+            )
+            .await
+            .unwrap();
+        assert!(!refused.call_charged);
+        assert!(!refused.outstanding);
+        assert_eq!(
+            store.mcp_owner_usage(&owner).await.unwrap(),
+            McpOwnerUsage {
+                calls_spent: 0,
+                outstanding: 0
+            }
+        );
+        let pending = store
+            .receive_mcp_interaction(
+                &owner,
+                session.id,
+                request("2"),
+                SecurityLabels::default(),
+                20,
+                5,
+                8,
+            )
+            .await
+            .unwrap();
+        store
+            .begin_mcp_work(&owner, pending.id, 6, 8, 1)
+            .await
+            .unwrap();
+        store.cancel_mcp_work(&owner, pending.id, 20).await.unwrap();
+        let error =
+            br#"{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Cancelled"}}"#.to_vec();
+        let cancelled = store
+            .record_mcp_cancelled_reply(&owner, pending.id, error.clone(), 21)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.state, McpWorkState::Cancelled);
+        assert!(cancelled.outstanding);
+        assert_eq!(cancelled.reply.as_deref(), Some(error.as_slice()));
+        store
+            .record_mcp_delivery(&owner, pending.id, false, 22)
+            .await
+            .unwrap();
+        store
+            .record_mcp_delivery(&owner, pending.id, true, 23)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.mcp_owner_usage(&owner).await.unwrap(),
+            McpOwnerUsage {
+                calls_spent: 1,
+                outstanding: 1
+            }
+        );
+        assert!(
+            store
+                .record_mcp_cancelled_reply(&owner, pending.id, reply("2"), 24)
+                .await
+                .is_err()
         );
     });
 }

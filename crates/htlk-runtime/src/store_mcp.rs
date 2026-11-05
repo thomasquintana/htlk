@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     HostContext,
-    mcp::client::{McpOwner, McpOwnerScope, McpRequestId},
+    mcp::client::{McpOwner, McpOwnerScope, McpRequestId, McpWorkDelivery},
     records::SecurityLabels,
 };
 use htlk_executable::{JsonDocument, digest::hash_bytes};
@@ -21,8 +21,8 @@ pub struct McpStoredSession {
     pub server: Digest,
 }
 
-/// Durable callback work state. Intent without a result is uncertain after loss of
-/// the executor; receipt of that state never authorizes redispatch.
+/// Durable callback protocol state. Underlying work delivery is separate: even a
+/// recorded error reply can leave model work uncertain. Neither permits redispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum McpWorkState {
     /// Received but no host work has been dispatched.
@@ -55,6 +55,8 @@ pub struct McpStoredInteraction {
     pub session: Digest,
     /// Canonical request identity for duplicate/conflicting message checks.
     pub request_digest: Digest,
+    /// Exact original request-byte digest, independent of canonical JSON identity.
+    pub raw_digest: Digest,
     /// Original admitted wire request bytes.
     pub request: Vec<u8>,
     /// Unioned immutable request/result protection.
@@ -65,10 +67,14 @@ pub struct McpStoredInteraction {
     pub revision: i64,
     /// Current durable work state.
     pub state: McpWorkState,
+    /// Underlying work completion, independent of callback reply transmission.
+    pub work_delivery: McpWorkDelivery,
     /// Absolute callback deadline.
     pub deadline_ms: i64,
     /// Whether a possibly dispatched work reservation remains outstanding.
     pub outstanding: bool,
+    /// Whether this interaction committed a spent call before host dispatch.
+    pub call_charged: bool,
     /// Exact saved reply, including result/error envelope, before transmission.
     pub reply: Option<Vec<u8>>,
     /// Hash of the saved reply, independent of delivery acknowledgement.
@@ -79,7 +85,7 @@ pub struct McpStoredInteraction {
     pub send_attempts: u64,
     /// Transport accepted a reply; this does not prove application consumption.
     pub transport_accepted: bool,
-    /// Explicitly reconciled late evidence for cancelled work. This releases only
+    /// Explicitly reconciled late evidence for uncertain work. This releases only
     /// concurrency; it cannot publish a reply or refund the spent call.
     pub settlement_digest: Option<Digest>,
 }
@@ -134,8 +140,14 @@ pub struct McpOwnerUsage {
 /// an uncertain work reservation. The service must authorize its labels before use.
 #[derive(Clone)]
 pub struct McpLateReply {
-    /// Exact reply content identity.
+    /// Evidence identity binding bytes, work delivery, and usage observation.
     pub digest: Digest,
+    /// Exact original reply-byte digest.
+    pub raw_digest: Digest,
+    /// Underlying work evidence; uncertainty cannot settle a reservation.
+    pub work_delivery: McpWorkDelivery,
+    /// Usage observed with this late result, independently of the original reply.
+    pub usage: Option<Value>,
     /// Complete bounded reply bytes.
     pub reply: Vec<u8>,
     /// Union of original and late-result protection.
@@ -500,12 +512,13 @@ impl SqliteStore {
             if old.state != McpWorkState::Pending { tx.commit()?; return Ok(McpWorkClaim::Existing(old)); }
             session_authority(&tx, &owner, old.session, true)?;
             if now >= old.deadline_ms { return Err(StoreError::Deadline(FailureCode::Timeout)); }
-            let (calls, outstanding): (i64, i64) = tx.query_row("SELECT calls_spent,outstanding FROM mcp_owners WHERE owner_key=?1", [owner.key().to_string()], |r| Ok((r.get(0)?,r.get(1)?)))?;
+            let totals = checked_usage(&tx, &owner)?;
+            let (calls, outstanding) = (totals.calls_spent as i64, totals.outstanding as i64);
             if calls as u64 >= maximum_calls || outstanding as u64 >= maximum_concurrency { return Err(StoreError::Budget); }
             let calls = calls.checked_add(1).ok_or(StoreError::Invalid)?;
             let outstanding = outstanding.checked_add(1).ok_or(StoreError::Invalid)?;
             tx.execute("UPDATE mcp_owners SET calls_spent=?2,outstanding=?3 WHERE owner_key=?1", params![owner.key().to_string(), calls, outstanding])?;
-            tx.execute("UPDATE mcp_interactions SET state='intent',outstanding=1,revision=revision+1 WHERE interaction_id=?1", [id.to_string()])?;
+            tx.execute("UPDATE mcp_interactions SET state='intent',work_delivery='uncertain',outstanding=1,call_charged=1,revision=revision+1 WHERE interaction_id=?1", [id.to_string()])?;
             fact(&tx, &owner, Some(id), "work_intent", now, &Value::Integer(calls), &limits)?;
             let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             tx.commit()?; Ok(McpWorkClaim::Started(record))
@@ -528,6 +541,7 @@ impl SqliteStore {
         reply: Vec<u8>,
         labels: SecurityLabels,
         usage: Option<Value>,
+        work_delivery: McpWorkDelivery,
         now_ms: i64,
     ) -> Result<McpStoredInteraction, StoreError> {
         timestamp(now_ms)?;
@@ -557,33 +571,37 @@ impl SqliteStore {
             let now = authority(&tx, &owner, now_ms)?;
             let old = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             validate_reply(&old.request, &reply, &limits)?;
+            validate_work_reply(&reply, work_delivery, &limits)?;
+            checked_usage(&tx, &owner)?;
             let digest = hash_bytes(&reply);
-            let receipt: Option<(String, String)> = tx.query_row("SELECT interaction_id,reply_digest FROM mcp_receipts WHERE owner_key=?1 AND principal=?2 AND idempotency_key=?3",
-                params![owner.key().to_string(), responder.principal(), idempotency_key], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let receipt: Option<(String, String, String)> = tx.query_row("SELECT interaction_id,reply_digest,work_delivery FROM mcp_receipts WHERE owner_key=?1 AND principal=?2 AND idempotency_key=?3",
+                params![owner.key().to_string(), responder.principal(), idempotency_key], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
             if let Some(receipt) = receipt {
-                if receipt != (id.to_string(), digest.to_string()) { return Err(StoreError::IdempotencyConflict); }
+                if receipt != (id.to_string(), digest.to_string(), work_delivery.as_str().into()) { return Err(StoreError::IdempotencyConflict); }
                 if old.reply_digest != Some(digest) { return Err(StoreError::Corrupt); }
                 tx.commit()?;
                 return Ok(old);
             }
             if old.state == McpWorkState::Result {
-                if old.reply_digest != Some(digest) { return Err(StoreError::IdempotencyConflict); }
-                tx.execute("INSERT INTO mcp_receipts VALUES(?1,?2,?3,?4,?5)", params![owner.key().to_string(), responder.principal(), idempotency_key, id.to_string(), digest.to_string()])?;
+                let initial: String = tx.query_row("SELECT work_delivery FROM mcp_receipts WHERE owner_key=?1 AND interaction_id=?2 LIMIT 1", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?.ok_or(StoreError::Corrupt)?;
+                if old.reply_digest != Some(digest) || initial != work_delivery.as_str() { return Err(StoreError::IdempotencyConflict); }
+                tx.execute("INSERT INTO mcp_receipts VALUES(?1,?2,?3,?4,?5,?6)", params![owner.key().to_string(), responder.principal(), idempotency_key, id.to_string(), digest.to_string(), work_delivery.as_str()])?;
                 fact(&tx, &owner, Some(id), "reply_receipt", now, &Value::Text(digest.to_string()), &limits)?;
                 tx.commit()?;
                 return Ok(old);
             }
-            if old.state != McpWorkState::Intent { return Err(StoreError::Terminal); }
+            if old.state != McpWorkState::Intent && !(old.state == McpWorkState::Pending && work_delivery == McpWorkDelivery::NotStarted) { return Err(StoreError::Terminal); }
             if old.generation != owner.generation() { return Err(StoreError::Fenced); }
             if now >= old.deadline_ms { return Err(StoreError::Deadline(FailureCode::Timeout)); }
             let protection = old.labels.union(&labels, &limits).map_err(|_| StoreError::Invalid)?;
             let protection = cbor::encode(&protection.to_value(&limits).map_err(|_| StoreError::Invalid)?, &limits)?;
             if protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Invalid); }
-            tx.execute("UPDATE mcp_interactions SET state='result',outstanding=0,reply=?2,reply_digest=?3,protection=?4,usage=?5,revision=revision+1 WHERE interaction_id=?1",
-                params![id.to_string(), reply, digest.to_string(), protection, usage])?;
-            if old.outstanding && tx.execute("UPDATE mcp_owners SET outstanding=outstanding-1 WHERE owner_key=?1 AND outstanding>0", [owner.key().to_string()])? != 1 { return Err(StoreError::Corrupt); }
-            tx.execute("INSERT INTO mcp_receipts VALUES(?1,?2,?3,?4,?5)", params![owner.key().to_string(), responder.principal(), idempotency_key, id.to_string(), digest.to_string()])?;
-            fact(&tx, &owner, Some(id), "reply_recorded", now, &Value::Text(digest.to_string()), &limits)?;
+            let outstanding = work_delivery == McpWorkDelivery::Uncertain;
+            tx.execute("UPDATE mcp_interactions SET state='result',outstanding=?6,work_delivery=?7,reply=?2,reply_digest=?3,protection=?4,usage=?5,revision=revision+1 WHERE interaction_id=?1",
+                params![id.to_string(), reply, digest.to_string(), protection, usage, outstanding, work_delivery.as_str()])?;
+            if old.outstanding && !outstanding && tx.execute("UPDATE mcp_owners SET outstanding=outstanding-1 WHERE owner_key=?1 AND outstanding>0", [owner.key().to_string()])? != 1 { return Err(StoreError::Corrupt); }
+            tx.execute("INSERT INTO mcp_receipts VALUES(?1,?2,?3,?4,?5,?6)", params![owner.key().to_string(), responder.principal(), idempotency_key, id.to_string(), digest.to_string(), work_delivery.as_str()])?;
+            fact(&tx, &owner, Some(id), "reply_recorded", now, &Value::Array(vec![Value::Text(digest.to_string()), Value::Text(work_delivery.as_str().into())]), &limits)?;
             let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             tx.commit()?; Ok(record)
         }).await.map_err(StoreError::from_worker)
@@ -614,6 +632,45 @@ impl SqliteStore {
         }).await.map_err(StoreError::from_worker)
     }
 
+    /// Saves a protocol error for an already cancelled interaction without changing
+    /// underlying work delivery, charges, or reservations. Deadlines do not prevent
+    /// recording this terminal refusal; the owner and session must still be live.
+    ///
+    /// # Errors
+    /// Returns stale authority, wrong state, conflicting reply or malformed error.
+    pub async fn record_mcp_cancelled_reply(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+        reply: Vec<u8>,
+        now_ms: i64,
+    ) -> Result<McpStoredInteraction, StoreError> {
+        host_owner(owner)?;
+        timestamp(now_ms)?;
+        if reply.len() > self.config.limits.max_document_bytes / 8 {
+            return Err(StoreError::Invalid);
+        }
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let now = authority(&tx, &owner, now_ms)?;
+            let old = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            if old.state != McpWorkState::Cancelled { return Err(StoreError::Terminal); }
+            session_authority(&tx, &owner, old.session, true)?;
+            validate_reply(&old.request, &reply, &limits)?;
+            validate_work_reply(&reply, McpWorkDelivery::Uncertain, &limits)?;
+            let digest = hash_bytes(&reply);
+            if let Some(previous) = old.reply_digest {
+                if previous != digest { return Err(StoreError::IdempotencyConflict); }
+                tx.commit()?; return Ok(old);
+            }
+            tx.execute("UPDATE mcp_interactions SET reply=?2,reply_digest=?3,revision=revision+1 WHERE interaction_id=?1", params![id.to_string(), reply, digest.to_string()])?;
+            fact(&tx, &owner, Some(id), "cancelled_reply_recorded", now, &Value::Text(digest.to_string()), &limits)?;
+            let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            tx.commit()?; Ok(record)
+        }).await.map_err(StoreError::from_worker)
+    }
+
     /// Records attempted send or transport acceptance of an existing immutable
     /// reply. This does not authorize rerunning its handler or original operation.
     ///
@@ -633,7 +690,7 @@ impl SqliteStore {
             let now = authority(&tx, &owner, now_ms)?;
             let old = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             session_authority(&tx, &owner, old.session, true)?;
-            if old.state != McpWorkState::Result || (accepted && old.send_attempts == 0) { return Err(StoreError::Invalid); }
+            if old.reply.is_none() || (accepted && old.send_attempts == 0) { return Err(StoreError::Invalid); }
             if accepted && old.transport_accepted { tx.commit()?; return Ok(()); }
             let attempts = old.send_attempts.checked_add(u64::from(!accepted)).filter(|v| *v <= i64::MAX as u64).ok_or(StoreError::Invalid)?;
             tx.execute("UPDATE mcp_interactions SET send_attempts=?2,transport_accepted=?3,revision=revision+1 WHERE interaction_id=?1", params![id.to_string(), attempts as i64, accepted || old.transport_accepted])?;
@@ -666,22 +723,9 @@ impl SqliteStore {
     /// Returns missing owner, corrupt counters, or storage failure.
     pub async fn mcp_owner_usage(&self, owner: &McpOwner) -> Result<McpOwnerUsage, StoreError> {
         host_owner(owner)?;
-        let key = owner.key().to_string();
+        let owner = owner.clone();
         self.connection
-            .call(move |db| -> Result<_, StoreError> {
-                db.query_row(
-                    "SELECT calls_spent,outstanding FROM mcp_owners WHERE owner_key=?1",
-                    [key],
-                    |row| {
-                        Ok(McpOwnerUsage {
-                            calls_spent: row.get(0)?,
-                            outstanding: row.get(1)?,
-                        })
-                    },
-                )
-                .optional()?
-                .ok_or(StoreError::Missing)
-            })
+            .call(move |db| -> Result<_, StoreError> { checked_usage(db, &owner) })
             .await
             .map_err(StoreError::from_worker)
     }
@@ -692,12 +736,15 @@ impl SqliteStore {
     ///
     /// # Errors
     /// Returns missing identity, malformed reply, exhausted retention or storage failure.
+    #[allow(clippy::too_many_arguments)]
     pub async fn retain_mcp_late_reply(
         &self,
         owner: &McpOwner,
         id: Digest,
         reply: Vec<u8>,
         labels: SecurityLabels,
+        work_delivery: McpWorkDelivery,
+        usage: Option<Value>,
         maximum_replies: usize,
     ) -> Result<Digest, StoreError> {
         if reply.len() > self.config.limits.max_document_bytes / 8
@@ -706,12 +753,22 @@ impl SqliteStore {
         {
             return Err(StoreError::Invalid);
         }
+        let usage = usage
+            .map(|value| cbor::encode(&value, &self.config.limits))
+            .transpose()?;
+        if usage
+            .as_ref()
+            .is_some_and(|bytes| bytes.len() > self.config.limits.max_document_bytes / 8)
+        {
+            return Err(StoreError::Invalid);
+        }
         let (owner, limits) = (owner.clone(), self.config.limits.clone());
         self.connection.call(move |db| -> Result<_, StoreError> {
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let old = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             validate_reply(&old.request, &reply, &limits)?;
-            let digest = hash_bytes(&reply);
+            let raw_digest = hash_bytes(&reply);
+            let digest = late_identity(id, raw_digest, work_delivery, usage.as_deref(), &limits)?;
             let existing: Option<Vec<u8>> = tx.query_row("SELECT protection FROM mcp_late_results WHERE interaction_id=?1 AND digest=?2", params![id.to_string(), digest.to_string()], |row| row.get(0)).optional()?;
             let mut protection = old.labels.union(&labels, &limits).map_err(|_| StoreError::Invalid)?;
             if let Some(existing) = existing {
@@ -723,8 +780,8 @@ impl SqliteStore {
             }
             let protection = cbor::encode(&protection.to_value(&limits).map_err(|_| StoreError::Invalid)?, &limits)?;
             if protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Invalid); }
-            tx.execute("INSERT INTO mcp_late_results VALUES(?1,?2,?3,?4) ON CONFLICT(interaction_id,digest) DO UPDATE SET protection=excluded.protection",
-                params![id.to_string(), digest.to_string(), reply, protection])?;
+            tx.execute("INSERT INTO mcp_late_results VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(interaction_id,digest) DO UPDATE SET protection=excluded.protection",
+                params![id.to_string(), digest.to_string(), reply, protection, raw_digest.to_string(), work_delivery.as_str(), usage])?;
             tx.commit()?; Ok(digest)
         }).await.map_err(StoreError::from_worker)
     }
@@ -744,28 +801,24 @@ impl SqliteStore {
         let (owner, limits) = (owner.clone(), self.config.limits.clone());
         self.connection.call(move |db| -> Result<_, StoreError> {
             let old = interaction(db, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
-            let mut statement = db.prepare("SELECT digest,reply,protection FROM mcp_late_results WHERE interaction_id=?1 AND digest>?2 ORDER BY digest LIMIT ?3")?;
+            let mut statement = db.prepare("SELECT digest,reply,protection,raw_digest,work_delivery,usage FROM mcp_late_results WHERE interaction_id=?1 AND digest>?2 ORDER BY digest LIMIT ?3")?;
             let mut rows = statement.query(params![id.to_string(), after.map_or_else(String::new, |id| id.to_string()), count])?;
             let mut replies = Vec::new(); let mut retained = 0usize;
             while let Some(row) = rows.next()? {
-                let raw = row.get_ref(1)?.as_blob().map_err(|_| StoreError::Corrupt)?;
-                let protection = row.get_ref(2)?.as_blob().map_err(|_| StoreError::Corrupt)?;
-                if raw.len() > limits.max_document_bytes / 8 || protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Corrupt); }
-                retained = retained.checked_add(raw.len() + protection.len() + 128).ok_or(StoreError::Invalid)?;
+                let result = late_reply(row, id, &old.request, &limits)?;
+                let size = result.reply.len() + cbor::encode(&result.labels.to_value(&limits).map_err(|_| StoreError::Corrupt)?, &limits)?.len()
+                    + result.usage.as_ref().map(|value| cbor::encode(value, &limits)).transpose()?.map_or(0, |bytes| bytes.len()) + 512;
+                retained = retained.checked_add(size).ok_or(StoreError::Invalid)?;
                 if retained > limits.max_document_bytes { break; }
-                let digest = row.get::<_, String>(0)?.parse().map_err(|_| StoreError::Corrupt)?;
-                if hash_bytes(raw) != digest { return Err(StoreError::Corrupt); }
-                validate_reply(&old.request, raw, &limits).map_err(|_| StoreError::Corrupt)?;
-                let labels = SecurityLabels::from_value(&cbor::decode(protection, &limits)?, &limits).map_err(|_| StoreError::Corrupt)?;
-                replies.push(McpLateReply { digest, reply: raw.to_vec(), labels });
+                replies.push(result);
             }
             Ok(replies)
         }).await.map_err(StoreError::from_worker)
     }
 
-    /// Explicitly reconciles cancelled uncertain work against an exact retained
-    /// late reply. The caller must authenticate and authorize reconciliation.
-    /// Cancellation and spent calls remain immutable; no reply is published.
+    /// Explicitly reconciles uncertain work against a retained known-completion or
+    /// known-not-started receipt. Cancellation, saved RPC replies, and spent calls
+    /// remain immutable. The caller must authenticate and authorize reconciliation.
     ///
     /// # Errors
     /// Returns stale ownership, missing/conflicting evidence, wrong state or storage failure.
@@ -786,22 +839,20 @@ impl SqliteStore {
                 if settlement != late_digest { return Err(StoreError::IdempotencyConflict); }
                 tx.commit()?; return Ok(old);
             }
-            if old.state != McpWorkState::Cancelled || !old.outstanding { return Err(StoreError::Invalid); }
-            let mut statement = tx.prepare("SELECT reply,protection FROM mcp_late_results WHERE interaction_id=?1 AND digest=?2")?;
+            if !matches!(old.state, McpWorkState::Cancelled | McpWorkState::Result) || !old.outstanding { return Err(StoreError::Invalid); }
+            checked_usage(&tx, &owner)?;
+            let mut statement = tx.prepare("SELECT digest,reply,protection,raw_digest,work_delivery,usage FROM mcp_late_results WHERE interaction_id=?1 AND digest=?2")?;
             let mut rows = statement.query(params![id.to_string(), late_digest.to_string()])?;
             let row = rows.next()?.ok_or(StoreError::Missing)?;
-            let reply = bounded_blob(row, 0, &limits)?.ok_or(StoreError::Corrupt)?;
-            if hash_bytes(&reply) != late_digest { return Err(StoreError::Corrupt); }
-            validate_reply(&old.request, &reply, &limits).map_err(|_| StoreError::Corrupt)?;
-            let protection = bounded_blob(row, 1, &limits)?.ok_or(StoreError::Corrupt)?;
-            let late_labels = SecurityLabels::from_value(&cbor::decode(&protection, &limits)?, &limits).map_err(|_| StoreError::Corrupt)?;
-            let labels = old.labels.union(&late_labels, &limits).map_err(|_| StoreError::Invalid)?;
+            let evidence = late_reply(row, id, &old.request, &limits)?;
+            if evidence.work_delivery == McpWorkDelivery::Uncertain { return Err(StoreError::Invalid); }
+            let labels = old.labels.union(&evidence.labels, &limits).map_err(|_| StoreError::Invalid)?;
             let protection = cbor::encode(&labels.to_value(&limits).map_err(|_| StoreError::Invalid)?, &limits)?;
             if protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Invalid); }
             drop(rows); drop(statement);
-            tx.execute("UPDATE mcp_interactions SET outstanding=0,settlement_digest=?2,protection=?3,revision=revision+1 WHERE interaction_id=?1", params![id.to_string(), late_digest.to_string(), protection])?;
+            tx.execute("UPDATE mcp_interactions SET outstanding=0,settlement_digest=?2,protection=?3,work_delivery=?4,revision=revision+1 WHERE interaction_id=?1", params![id.to_string(), late_digest.to_string(), protection, evidence.work_delivery.as_str()])?;
             if tx.execute("UPDATE mcp_owners SET outstanding=outstanding-1 WHERE owner_key=?1 AND outstanding>0", [owner.key().to_string()])? != 1 { return Err(StoreError::Corrupt); }
-            fact(&tx, &owner, Some(id), "cancelled_work_settled", now, &Value::Text(late_digest.to_string()), &limits)?;
+            fact(&tx, &owner, Some(id), "uncertain_work_settled", now, &Value::Text(late_digest.to_string()), &limits)?;
             let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             tx.commit()?; Ok(record)
         }).await.map_err(StoreError::from_worker)
@@ -936,6 +987,27 @@ fn session_authority(db: &Db, owner: &McpOwner, id: Digest, open: bool) -> Resul
     }
     Ok(())
 }
+fn checked_usage(db: &Db, owner: &McpOwner) -> Result<McpOwnerUsage, StoreError> {
+    let key = owner.key().to_string();
+    let totals = db
+        .query_row(
+            "SELECT calls_spent,outstanding FROM mcp_owners WHERE owner_key=?1",
+            [&key],
+            |row| {
+                Ok(McpOwnerUsage {
+                    calls_spent: row.get(0)?,
+                    outstanding: row.get(1)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(StoreError::Missing)?;
+    let actual: (u64, u64) = db.query_row("SELECT coalesce(sum(call_charged),0),coalesce(sum(outstanding),0) FROM mcp_interactions WHERE owner_key=?1", [&key], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    if (totals.calls_spent, totals.outstanding) != actual {
+        return Err(StoreError::Corrupt);
+    }
+    Ok(totals)
+}
 fn identity(domain: &str, mut values: Vec<Value>, limits: &Limits) -> Result<Digest, StoreError> {
     values.insert(0, Value::Text(format!("htlk.mcp-{domain}/1")));
     Ok(hash_bytes(&cbor::encode(&Value::Array(values), limits)?))
@@ -971,13 +1043,82 @@ fn validate_reply(request: &[u8], reply: &[u8], limits: &Limits) -> Result<(), S
         _ => Err(StoreError::Invalid),
     }
 }
+fn validate_work_reply(
+    reply: &[u8],
+    delivery: McpWorkDelivery,
+    limits: &Limits,
+) -> Result<(), StoreError> {
+    let reply = JsonDocument::new(reply, limits).map_err(|_| StoreError::Invalid)?;
+    if delivery != McpWorkDelivery::Completed && map(reply.value())?.get("result").is_some() {
+        return Err(StoreError::Invalid);
+    }
+    Ok(())
+}
+fn late_identity(
+    id: Digest,
+    raw: Digest,
+    delivery: McpWorkDelivery,
+    usage: Option<&[u8]>,
+    limits: &Limits,
+) -> Result<Digest, StoreError> {
+    identity(
+        "late",
+        vec![
+            Value::Text(id.to_string()),
+            Value::Text(raw.to_string()),
+            Value::Text(delivery.as_str().into()),
+            usage.map_or(Value::Null, |bytes| {
+                Value::Text(hash_bytes(bytes).to_string())
+            }),
+        ],
+        limits,
+    )
+}
+fn late_reply(
+    row: &tokio_rusqlite::rusqlite::Row<'_>,
+    id: Digest,
+    request: &[u8],
+    limits: &Limits,
+) -> Result<McpLateReply, StoreError> {
+    let reply = bounded_blob(row, 1, limits)?.ok_or(StoreError::Corrupt)?;
+    let protection = bounded_blob(row, 2, limits)?.ok_or(StoreError::Corrupt)?;
+    let usage = bounded_blob(row, 5, limits)?;
+    let raw_digest = row
+        .get::<_, String>(3)?
+        .parse()
+        .map_err(|_| StoreError::Corrupt)?;
+    let work_delivery =
+        McpWorkDelivery::parse(&row.get::<_, String>(4)?).ok_or(StoreError::Corrupt)?;
+    let digest = row
+        .get::<_, String>(0)?
+        .parse()
+        .map_err(|_| StoreError::Corrupt)?;
+    if hash_bytes(&reply) != raw_digest
+        || late_identity(id, raw_digest, work_delivery, usage.as_deref(), limits)? != digest
+    {
+        return Err(StoreError::Corrupt);
+    }
+    validate_reply(request, &reply, limits).map_err(|_| StoreError::Corrupt)?;
+    let labels = SecurityLabels::from_value(&cbor::decode(&protection, limits)?, limits)
+        .map_err(|_| StoreError::Corrupt)?;
+    Ok(McpLateReply {
+        digest,
+        raw_digest,
+        work_delivery,
+        reply,
+        labels,
+        usage: usage
+            .map(|bytes| cbor::decode(&bytes, limits))
+            .transpose()?,
+    })
+}
 fn interaction(
     db: &Db,
     owner: &McpOwner,
     id: Digest,
     limits: &Limits,
 ) -> Result<Option<McpStoredInteraction>, StoreError> {
-    let mut statement = db.prepare("SELECT session_id,request_digest,raw_digest,request,protection,generation,revision,state,deadline_ms,outstanding,reply,reply_digest,usage,send_attempts,transport_accepted,settlement_digest FROM mcp_interactions WHERE owner_key=?1 AND interaction_id=?2")?;
+    let mut statement = db.prepare("SELECT session_id,request_digest,raw_digest,request,protection,generation,revision,state,deadline_ms,outstanding,reply,reply_digest,usage,send_attempts,transport_accepted,settlement_digest,work_delivery,call_charged FROM mcp_interactions WHERE owner_key=?1 AND interaction_id=?2")?;
     let mut rows = statement.query(params![owner.key().to_string(), id.to_string()])?;
     let Some(row) = rows.next()? else {
         return Ok(None);
@@ -1011,20 +1152,24 @@ fn interaction(
         validate_reply(request, reply, limits).map_err(|_| StoreError::Corrupt)?;
     }
     let usage = bounded_blob(row, 12, limits)?;
-    let record = McpStoredInteraction {
+    let mut record = McpStoredInteraction {
         id,
         session: row
             .get::<_, String>(0)?
             .parse()
             .map_err(|_| StoreError::Corrupt)?,
         request_digest: request_digest.parse().map_err(|_| StoreError::Corrupt)?,
+        raw_digest: raw_digest.parse().map_err(|_| StoreError::Corrupt)?,
         request: request.to_vec(),
         labels: SecurityLabels::from_value(&protection, limits).map_err(|_| StoreError::Corrupt)?,
         generation: row.get(5)?,
         revision: row.get(6)?,
         state: McpWorkState::parse(&row.get::<_, String>(7)?)?,
+        work_delivery: McpWorkDelivery::parse(&row.get::<_, String>(16)?)
+            .ok_or(StoreError::Corrupt)?,
         deadline_ms: row.get(8)?,
         outstanding: row.get(9)?,
+        call_charged: row.get(17)?,
         reply,
         reply_digest: reply_digest
             .map(|d| d.parse().map_err(|_| StoreError::Corrupt))
@@ -1051,18 +1196,51 @@ fn interaction(
         ],
         limits,
     )? != id
-        || (record.state == McpWorkState::Result) != record.reply.is_some()
-        || (matches!(record.state, McpWorkState::Pending | McpWorkState::Result)
-            && record.outstanding)
+        || (record.state == McpWorkState::Result && record.reply.is_none())
+        || (matches!(record.state, McpWorkState::Pending | McpWorkState::Intent)
+            && record.reply.is_some())
+        || (record.outstanding != (record.work_delivery == McpWorkDelivery::Uncertain))
+        || (record.outstanding && !record.call_charged)
+        || (record.work_delivery == McpWorkDelivery::Completed && !record.call_charged)
+        || (record.state == McpWorkState::Pending
+            && (record.call_charged || record.work_delivery != McpWorkDelivery::NotStarted))
         || (record.state == McpWorkState::Intent && !record.outstanding)
         || record.generation <= 0
         || record.revision <= 0
         || record.deadline_ms <= 0
         || (record.transport_accepted && record.send_attempts == 0)
         || (record.settlement_digest.is_some()
-            && (record.state != McpWorkState::Cancelled || record.outstanding))
+            && (!matches!(record.state, McpWorkState::Cancelled | McpWorkState::Result)
+                || record.outstanding))
     {
         return Err(StoreError::Corrupt);
+    }
+    if let Some(reply) = &record.reply {
+        let delivery = if record.state == McpWorkState::Cancelled {
+            McpWorkDelivery::Uncertain
+        } else {
+            record.work_delivery
+        };
+        validate_work_reply(reply, delivery, limits).map_err(|_| StoreError::Corrupt)?;
+    }
+    if let Some(digest) = record.settlement_digest {
+        let mut statement = db.prepare("SELECT digest,reply,protection,raw_digest,work_delivery,usage FROM mcp_late_results WHERE interaction_id=?1 AND digest=?2")?;
+        let mut rows = statement.query(params![record.id.to_string(), digest.to_string()])?;
+        let evidence = late_reply(
+            rows.next()?.ok_or(StoreError::Corrupt)?,
+            record.id,
+            &record.request,
+            limits,
+        )?;
+        if evidence.work_delivery != record.work_delivery
+            || evidence.work_delivery == McpWorkDelivery::Uncertain
+        {
+            return Err(StoreError::Corrupt);
+        }
+        record.labels = record
+            .labels
+            .union(&evidence.labels, limits)
+            .map_err(|_| StoreError::Corrupt)?;
     }
     Ok(Some(record))
 }

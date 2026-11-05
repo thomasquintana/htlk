@@ -8,6 +8,10 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Host callback outcomes distinguish underlying work completion from RPC reply
+  delivery. Acknowledged timeout errors retain uncertain reservations; explicit
+  reconciliation preserves the original reply. Usage receipts retain unknown
+  values separately from measured zero.
 - Native MCP result/error evidence preserves original payload bytes before JSON
   normalization, including escaped member names. Pending and unconsumed replies
   reserve bounded response capacity before request transmission.
@@ -23,7 +27,7 @@ User-visible changes and compatibility boundaries are recorded here, following
   independent host-work budgets.
 - Transactional host MCP ownership, persistent session epochs, callback work intent,
   saved replies and receipts, delivery facts, cumulative usage, and bounded late
-  evidence storage. Private SQLite schema 8 deliberately rejects earlier stores.
+  evidence storage. Private SQLite schema 9 deliberately rejects earlier stores.
 - Protected MCP evidence inspection now includes prompt, resource, and template
   attempts, with explicit operation kind, bounded original bytes, and delivery
   evidence; tool-only normalization and inference remain independently restricted.

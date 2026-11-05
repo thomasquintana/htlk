@@ -28,8 +28,10 @@ CREATE TABLE mcp_interactions (
     generation INTEGER NOT NULL CHECK(generation > 0),
     revision INTEGER NOT NULL CHECK(revision > 0),
     state TEXT NOT NULL CHECK(state IN ('pending','intent','result','cancelled')),
+    work_delivery TEXT NOT NULL DEFAULT 'not_started' CHECK(work_delivery IN ('not_started','uncertain','completed')),
     deadline_ms INTEGER NOT NULL CHECK(deadline_ms > 0),
     outstanding INTEGER NOT NULL DEFAULT 0 CHECK(outstanding IN (0,1)),
+    call_charged INTEGER NOT NULL DEFAULT 0 CHECK(call_charged IN (0,1)),
     reply BLOB,
     reply_digest TEXT,
     usage BLOB,
@@ -38,7 +40,8 @@ CREATE TABLE mcp_interactions (
     settlement_digest TEXT,
     CHECK((reply IS NULL AND reply_digest IS NULL) OR
           (reply IS NOT NULL AND reply_digest IS NOT NULL)),
-    CHECK((state = 'result') = (reply IS NOT NULL))
+    CHECK(state != 'result' OR reply IS NOT NULL),
+    CHECK(reply IS NULL OR state IN ('result','cancelled'))
 ) STRICT;
 CREATE INDEX mcp_interactions_owner ON mcp_interactions(owner_key,interaction_id);
 CREATE TABLE mcp_receipts (
@@ -47,6 +50,7 @@ CREATE TABLE mcp_receipts (
     idempotency_key TEXT NOT NULL,
     interaction_id TEXT NOT NULL REFERENCES mcp_interactions(interaction_id),
     reply_digest TEXT NOT NULL,
+    work_delivery TEXT NOT NULL CHECK(work_delivery IN ('not_started','uncertain','completed')),
     PRIMARY KEY(owner_key,principal,idempotency_key)
 ) STRICT;
 CREATE TABLE mcp_events (
@@ -64,5 +68,8 @@ CREATE TABLE mcp_late_results (
     digest TEXT NOT NULL,
     reply BLOB NOT NULL,
     protection BLOB NOT NULL,
+    raw_digest TEXT NOT NULL,
+    work_delivery TEXT NOT NULL CHECK(work_delivery IN ('not_started','uncertain','completed')),
+    usage BLOB,
     PRIMARY KEY(interaction_id,digest)
 ) STRICT;
