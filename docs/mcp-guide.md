@@ -79,7 +79,8 @@ the original operation POST. A GET 405 reports lack of idle-stream support while
 ordinary POST requests remain available. `with_server_event_stream(false)` disables
 the optional GET; the default graph adapter uses this setting when no host event
 consumer is configured. Structured RPC errors remain available through the client
-session API; graph-visible failures retain redacted runtime classifications.
+session API and protected runtime evidence; graph-visible failures retain redacted
+runtime classifications.
 
 `McpAdapter` is a trusted integration contract. Its connection resolver receives the
 `McpRunContext`, containing the actual run ID, host principal, ownership fence and
@@ -269,6 +270,12 @@ receipt, and effect uncertainty. It performs no dispatch, retry, publication, or
 Tool normalization is available only for tool attempts. Prompt/resource inspection
 returns the same protected raw-byte/digest/delivery evidence and never reads tool
 normalization checkpoints or invokes a reconstruction engine.
+
+`McpEvidencePayload` distinguishes result objects from correlated JSON-RPC error
+objects. Protected error bytes retain the remote code, message, and optional data,
+including `-32042` URL-required interactions. Errors never enter tool normalization
+or become successful graph artifacts. Runtime recovery independently rechecks their
+digest, shape, and delivery association; inspection and recovery do not retry them.
 
 The positive byte ceiling cannot exceed the runtime codec ceiling. A truncated raw
 prefix is not a complete result to parse or salvage. The allowance bounds returned

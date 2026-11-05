@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Correlated MCP JSON-RPC errors retain protected code/message/data in durable
+  attempt evidence, including URL-elicitation-required errors. Graph-visible
+  failures remain redacted, and inspecting errors cannot dispatch or retry work.
 - Independent MCP client-service validation for multimodal sampling, balanced
   tool-use histories and tool choice, form/URL elicitation, and roots. Form numbers
   include fractional values as required by the authoritative MCP TypeScript model.

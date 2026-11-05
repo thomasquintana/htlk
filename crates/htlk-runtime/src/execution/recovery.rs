@@ -415,6 +415,7 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
                     return Err(corrupt());
                 }
                 labels(&response.payload, &runtime.config.limits)?;
+                super::mcp::protocol_error(&response.payload, &runtime.config.limits)?;
                 let delivery =
                     crate::mcp::McpDelivery::parse(&string(&response.payload, "delivery")?)
                         .ok_or_else(corrupt)?;

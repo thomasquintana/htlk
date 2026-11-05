@@ -116,6 +116,7 @@ async fn operate_inner(
                     .await?;
                 let delivery =
                     McpDelivery::parse(&string(&response.payload, "delivery")?).ok_or_else(err)?;
+                protocol_error(&response.payload, &runtime.config.limits)?;
                 // Persist the response independently of reservation revisions.
                 // An extension can adopt accounting ancestors while a reply is
                 // arriving. A local CAS retry must never discard that reply or
@@ -581,6 +582,7 @@ async fn operate_inner(
                     delivery: McpDelivery::NotSent,
                     result: Err(error),
                 },
+                None,
                 &policy,
                 influence,
             )
@@ -595,6 +597,7 @@ async fn operate_inner(
                     delivery: McpDelivery::NotSent,
                     result: Err(crate::failure::RuntimeFailure::new(FailureCode::McpTimeout)),
                 },
+                None,
                 &policy,
                 influence,
             )
@@ -613,6 +616,7 @@ async fn operate_inner(
                         FailureCode::McpDescriptor,
                     )),
                 },
+                None,
                 &policy,
                 influence,
             )
@@ -729,7 +733,17 @@ async fn operate_inner(
                 result: Err(crate::failure::RuntimeFailure::new(FailureCode::McpTimeout)),
             },
         };
-        record_outcome(runtime, lease, &attempt, outcome, &policy, influence).await
+        let protocol_error = connection.take_protocol_error();
+        record_outcome(
+            runtime,
+            lease,
+            &attempt,
+            outcome,
+            protocol_error,
+            &policy,
+            influence,
+        )
+        .await
     }
     .await;
     let _ = tokio::time::timeout(
@@ -774,12 +788,25 @@ async fn record_outcome(
     runtime: &Runtime,
     lease: &RunLease,
     attempt: &StoredRecord,
-    outcome: McpOutcome,
+    mut outcome: McpOutcome,
+    protocol_error: Option<crate::mcp::client::McpRpcError>,
     policy: &McpPolicy,
     influence: crate::records::SecurityLabels,
 ) -> Result<bool, RuntimeError> {
     let attempt_id = &attempt.key.id;
     let delivery = outcome.delivery;
+    let protocol_error = protocol_error.filter(|error| {
+        let valid = delivery == McpDelivery::ResponseReceived
+            && outcome.result.is_err()
+            && error.document().as_bytes().len() <= response_limit(runtime)
+            && JsonDocument::new(error.document().as_bytes(), &runtime.config.limits).is_ok();
+        if !valid {
+            outcome.result = Err(crate::failure::RuntimeFailure::new(
+                FailureCode::McpProtocol,
+            ));
+        }
+        valid
+    });
     let response = match outcome.result {
         Ok(raw)
             if delivery == McpDelivery::ResponseReceived
@@ -824,6 +851,26 @@ async fn record_outcome(
                 ),
             ])?
         }
+    };
+    let response = if let Some(error) = protocol_error {
+        replace(
+            &response,
+            [
+                (
+                    "protocol_error",
+                    Value::Bytes(error.document().as_bytes().to_vec()),
+                ),
+                (
+                    "protocol_error_digest",
+                    Value::Text(
+                        htlk_executable::digest::hash_bytes(error.document().as_bytes())
+                            .to_string(),
+                    ),
+                ),
+            ],
+        )?
+    } else {
+        response
     };
     let response_labels = influence.union(&policy.result_labels, &runtime.config.limits)?;
     let response = replace(
@@ -911,6 +958,34 @@ fn deduplication(
             }
         },
     )
+}
+
+pub(super) fn protocol_error<'a>(
+    response: &'a Value,
+    limits: &htlk_executable::cbor::Limits,
+) -> Result<Option<&'a [u8]>, RuntimeError> {
+    let fields = map(response)?;
+    let invalid = || RuntimeError::failure(FailureCode::Digest);
+    let Some(raw) = fields.get("protocol_error") else {
+        if fields.get("protocol_error_digest").is_some() {
+            return Err(invalid());
+        }
+        return Ok(None);
+    };
+    let Value::Bytes(raw) = raw else {
+        return Err(invalid());
+    };
+    if fields.get("raw").is_some()
+        || fields.get("failure_code").is_none()
+        || string(response, "delivery")? != McpDelivery::ResponseReceived.as_str()
+        || raw.len() > limits.max_document_bytes / 8
+        || digest(response, "protocol_error_digest")? != htlk_executable::digest::hash_bytes(raw)
+    {
+        return Err(invalid());
+    }
+    let document = JsonDocument::new(raw, limits).map_err(|_| invalid())?;
+    crate::mcp::client::McpRpcError::new(document).map_err(|_| invalid())?;
+    Ok(Some(raw))
 }
 async fn request(
     runtime: &Runtime,

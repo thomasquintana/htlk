@@ -29,11 +29,22 @@ pub enum McpEvidenceKind {
     ResourceTemplate,
 }
 
+/// Which correlated response object the protected raw bytes represent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpEvidencePayload {
+    /// The JSON-RPC result object; tool normalization may apply.
+    Result,
+    /// The JSON-RPC error object, including protected code/message/data.
+    ProtocolError,
+}
+
 /// Authorized evidence, not a successful output artifact or permission to retry.
 #[derive(Clone)]
 pub struct McpEvidenceView {
     /// Actual protocol operation category from the original admitted binding.
     pub kind: McpEvidenceKind,
+    /// Actual raw response category, absent when no response bytes were retained.
+    pub payload_kind: Option<McpEvidencePayload>,
     /// Original run, unchanged through extension.
     pub run_id: RunId,
     /// Original MCP invocation.
@@ -52,7 +63,8 @@ pub struct McpEvidenceView {
     pub recorded_normalization: Option<Value>,
     /// Exact original byte identity, including when only a prefix is returned.
     pub raw_digest: Option<Digest>,
-    /// Authorized original result bytes or a clearly marked bounded prefix.
+    /// Authorized response-payload bytes or a clearly marked bounded prefix.
+    /// `payload_kind` distinguishes result data from protected JSON-RPC errors.
     pub raw_response: Option<Vec<u8>>,
     /// Original bytes were not returned completely.
     pub raw_truncated: bool,
@@ -452,6 +464,7 @@ impl Runtime {
         };
         let mut result = McpEvidenceView {
             kind,
+            payload_kind: None,
             run_id: run.clone(),
             invocation_id: invocation,
             attempt_id: attempt,
@@ -489,7 +502,8 @@ impl Runtime {
                 labels: &result.labels,
             },
         )?;
-        let normalization = if kind == McpEvidenceKind::Tool {
+        let protocol_error = super::mcp::protocol_error(&response.payload, &self.config.limits)?;
+        let normalization = if kind == McpEvidenceKind::Tool && protocol_error.is_none() {
             match self
                 .store
                 .record(
@@ -519,14 +533,26 @@ impl Runtime {
             )?;
         }
         let mut remaining = maximum_bytes;
-        let Some(Value::Bytes(raw)) = map(&response.payload)?.get("raw") else {
+        let (raw, raw_digest, payload_kind) = if let Some(raw) = protocol_error {
+            (
+                raw,
+                digest(&response.payload, "protocol_error_digest")?,
+                McpEvidencePayload::ProtocolError,
+            )
+        } else if let Some(Value::Bytes(raw)) = map(&response.payload)?.get("raw") {
+            (
+                raw.as_slice(),
+                digest(&response.payload, "raw_digest")?,
+                McpEvidencePayload::Result,
+            )
+        } else {
             return Ok(result);
         };
-        let raw_digest = digest(&response.payload, "raw_digest")?;
         if hash_bytes(raw) != raw_digest {
             return Err(RuntimeError::failure(FailureCode::Digest));
         }
         result.raw_digest = Some(raw_digest);
+        result.payload_kind = Some(payload_kind);
         let take = raw.len().min(remaining);
         let mut returned = Vec::new();
         returned.try_reserve_exact(take).map_err(|_| err())?;
@@ -536,7 +562,7 @@ impl Runtime {
         remaining -= take;
         // Other operation categories have no tool normalization observation. Do not
         // inspect an irrelevant checkpoint or re-admit engines to expose their bytes.
-        if kind != McpEvidenceKind::Tool {
+        if kind != McpEvidenceKind::Tool || payload_kind == McpEvidencePayload::ProtocolError {
             return Ok(result);
         }
         if let Some(record) = &normalization {

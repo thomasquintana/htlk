@@ -86,6 +86,7 @@ impl NativeSessions {
                 descriptor,
                 lifetime: context.cancellation.clone(),
                 closed: false,
+                protocol_error: None,
             }),
             Err(error) => {
                 let _ = session.close().await;
@@ -186,6 +187,7 @@ pub(super) struct NativeLease {
     descriptor: JsonDocument,
     lifetime: Arc<McpCancellation>,
     closed: bool,
+    protocol_error: Option<client::McpRpcError>,
 }
 impl McpConnection for NativeLease {
     fn descriptor(&self) -> &JsonDocument {
@@ -193,6 +195,7 @@ impl McpConnection for NativeLease {
     }
     fn invoke<'a>(&'a mut self, mut request: McpRequest) -> McpAttemptFuture<'a> {
         Box::pin(async move {
+            self.protocol_error = None;
             if self.lifetime.is_cancelled() {
                 return McpOutcome {
                     delivery: McpDelivery::NotSent,
@@ -212,6 +215,9 @@ impl McpConnection for NativeLease {
                 .extend(request.cancellation.parents.iter().cloned());
             request.cancellation = Arc::new(signal);
             let reply = self.session.invoke(request).await;
+            if let Ok(Err(error)) = &reply.result {
+                self.protocol_error = Some(error.clone());
+            }
             if reply.delivery != McpDelivery::ResponseReceived {
                 self.closed = true;
                 let _ = self.session.close().await;
@@ -229,5 +235,8 @@ impl McpConnection for NativeLease {
     fn close(&mut self) -> McpFuture<'_, ()> {
         self.closed = true;
         Box::pin(async { Ok(()) })
+    }
+    fn take_protocol_error(&mut self) -> Option<client::McpRpcError> {
+        self.protocol_error.take()
     }
 }

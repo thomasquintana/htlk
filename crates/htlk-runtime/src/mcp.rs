@@ -161,6 +161,12 @@ pub trait McpConnection: Send {
     fn descriptor(&self) -> &JsonDocument;
     /// Sends the frozen request and reports observed delivery separately.
     fn invoke<'a>(&'a mut self, request: McpRequest) -> McpAttemptFuture<'a>;
+    /// Takes the last invocation's protected correlated JSON-RPC error. Runtime
+    /// records it separately from redacted graph failures and rechecks its bounds.
+    /// A subsequent invocation must clear any previously retained error.
+    fn take_protocol_error(&mut self) -> Option<client::McpRpcError> {
+        None
+    }
     /// Releases this operation handle; run-owned transport sessions survive.
     fn close(&mut self) -> McpFuture<'_, ()> {
         Box::pin(async { Ok(()) })
