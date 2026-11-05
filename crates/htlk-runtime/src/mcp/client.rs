@@ -21,7 +21,13 @@ pub const MCP_VERSION: &str = "2025-11-25";
 
 mod session;
 pub use session::{McpClientReply, McpClientSession, NativeMcpClient};
+mod interactions;
 mod protocol;
+mod workers;
+pub use interactions::{
+    McpAwaitReply, McpClientAction, McpClientAuthorization, McpClientAuthorizer,
+    McpInteractionHost, McpInteractionPage, McpInteractionReceipt, McpInteractionView,
+};
 pub use protocol::{
     McpClientValidationError, McpIncomingKind, validate_client_request, validate_client_result,
 };
@@ -40,6 +46,10 @@ pub enum McpSessionEnd {
     EventOverflow,
     /// Event consumer failed or exceeded its delivery deadline.
     EventHandler,
+    /// Host callback capacity exhausted; no unbounded work is queued.
+    CallbackOverflow,
+    /// A callback could not be safely completed or disclosed.
+    CallbackFailure,
     /// Server invalidated the HTTP session; reopening requires a new epoch.
     SessionExpired,
 }
@@ -164,6 +174,10 @@ pub struct McpInteractionContext {
     pub interaction_id: Digest,
     /// Incoming JSON-RPC ID, preserving integer versus string identity.
     pub request_id: McpRequestId,
+    /// Outgoing request whose response stream carried this callback, when known.
+    pub originating_request_id: Option<McpRequestId>,
+    /// Trusted nesting depth, never copied from server metadata.
+    pub depth: usize,
     /// Runtime-established originating work, when unambiguous.
     pub origin: Option<McpOperationOrigin>,
     /// Evidence used to associate the request with its origin.
@@ -288,7 +302,8 @@ pub struct McpClientLimits {
     pub requests_per_session: usize,
     /// Maximum received frames per epoch, bounding even ignored notification work.
     pub messages_per_session: usize,
-    /// Maximum nested callback depth.
+    /// Maximum active callback ancestry. Without explicit parent attribution this
+    /// conservatively bounds active callbacks globally, including parallel requests.
     pub callback_depth: usize,
     /// Maximum pages inspected in one catalog enumeration.
     pub catalog_pages: usize,
@@ -653,6 +668,7 @@ pub struct McpClientConfig {
     capabilities: JsonDocument,
     listen_for_events: bool,
     persistence: Option<McpClientPersistence>,
+    authorizer: Option<Arc<dyn McpClientAuthorizer>>,
 }
 impl McpClientConfig {
     /// Freezes a checked service registry and derives its protocol capabilities.
@@ -719,6 +735,7 @@ impl McpClientConfig {
             capabilities,
             listen_for_events: true,
             persistence: None,
+            authorizer: None,
         })
     }
     /// Checked immutable resource bounds.
@@ -749,6 +766,12 @@ impl McpClientConfig {
     /// checked against the runtime's actual persisted ownership and principal.
     pub fn with_persistence(mut self, persistence: McpClientPersistence) -> Self {
         self.persistence = Some(persistence);
+        self
+    }
+    /// Installs current host authorization/classification for client interactions.
+    /// Effectful services require both this policy and durable persistence.
+    pub fn with_authorizer(mut self, authorizer: Arc<dyn McpClientAuthorizer>) -> Self {
+        self.authorizer = Some(authorizer);
         self
     }
 }

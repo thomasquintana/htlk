@@ -8,6 +8,10 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Durable host-owned sampling and addressed form/URL elicitation execute on bounded
+  host workers independently of transport reception. Interactive and headless hosts
+  share authorized inspection/reply commands; saved responses replay without model
+  recall, and blocked callbacks cannot monopolize I/O or erase late evidence.
 - Host callback outcomes distinguish underlying work completion from RPC reply
   delivery. Acknowledged timeout errors retain uncertain reservations; explicit
   reconciliation preserves the original reply. Usage receipts retain unknown

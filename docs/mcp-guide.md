@@ -66,8 +66,9 @@ persistence the client uses ephemeral ownership. See the
 [conformance inventory](mcp-conformance.md) for callback implementation status.
 
 `McpClientConfig` derives client capabilities from installed services and validates
-queue, byte, frame, cumulative-message, and timeout bounds. Native transport startup
-currently rejects effectful handlers until durable admission is available. Hosts
+queue, byte, frame, cumulative-message, and timeout bounds. Effectful host-owned
+services require persistence and a `McpClientAuthorizer`. Run-owned callback
+admission is tracked separately in the conformance inventory. Hosts
 can install an `McpEventHandler` and use `NativeMcpAdapter::with_client_config` for
 run-owned events. Event handling neither reads resources nor mutates workflows.
 `McpClientSession::ended` reports overflow or consumer failure even when its event
@@ -78,6 +79,37 @@ Unconsumed `McpClientReply` values retain that reservation, so callers should co
 or drop each reply after processing it. `raw_result` and `McpRpcError::as_bytes`
 preserve exact payload bytes; their `JsonDocument` views provide canonical values
 separately. Byte-span extraction occurs only after strict full-message admission.
+
+### Addressed host interactions
+
+Install `McpClientHandler` implementations for sampling and other services, link
+`McpClientPersistence` and current authorization with `with_authorizer`, and create
+`McpInteractionHost` from that same configuration. Host work and event consumers use
+separate bounded worker pools so human waits cannot consume the event-delivery
+capacity needed to answer them. Without explicit parent attribution, the configured
+nesting allowance conservatively bounds active callbacks, including parallel ones.
+
+`McpAwaitReply` implements form/URL elicitation by waiting for the addressed host API.
+The `htlk/interaction` event identifies the interaction, request digest, and kind;
+it contains no question/answer values. A polling/headless frontend can enumerate the
+same identities with `list`. An authenticated frontend calls `inspect`,
+then `respond` with the exact digest and an idempotency key. Responses are validated
+against the original request schema and mode. The same API is used by terminal,
+API, and CLI frontends. New human replies require a live original session; saved
+receipts remain historical facts. `cancel` and `reconcile` have distinct grants.
+
+Sampling handlers receive the complete structured request and return
+`McpServiceOutcome`: underlying work delivery, a protocol result/error, optional
+actual usage, and additional protection. Model routing and the actual generation
+belong to the host. Tool-use requests are returned to the server, never automatically
+executed by the client. An uncertain model operation retains its reservation even
+if its callback error reply was delivered. Known saved replies can be retransmitted
+after a lost acknowledgement without recalling the handler.
+
+Form acceptance carries validated content; URL acceptance carries no content and
+does not establish external completion. Applications present the requesting server
+and full URL, obtain consent, and perform secure navigation themselves. The native
+client never fetches the URL or its metadata as part of elicitation.
 
 Streamable HTTP supports optional idle GET SSE, incremental bounded framing, and
 GET resumption using the failed stream's event cursor. Resumption never repeats

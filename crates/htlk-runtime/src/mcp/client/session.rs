@@ -91,19 +91,25 @@ pub struct NativeMcpClient {
     finished: tokio::sync::watch::Receiver<bool>,
 }
 impl NativeMcpClient {
-    /// Starts a bounded transport owner. Effectful service handlers require the
-    /// durable interaction implementation and are rejected until it is installed.
+    /// Starts a bounded transport owner. Host-owned service handlers require
+    /// persistence and authorization, and execute on separate bounded workers.
     ///
     /// # Errors
     /// Returns unsupported service configuration or inability to launch the I/O owner.
     pub fn new(config: McpClientConfig) -> Result<Self, RuntimeFailure> {
         // A declaration alone must never advertise a nonfunctional service.
-        if !config.handlers.is_empty() {
+        if !config.handlers.is_empty()
+            && (config.persistence.is_none() || config.authorizer.is_none())
+        {
             return Err(fail(FailureCode::Profile));
+        }
+        if !config.handlers.is_empty() {
+            htlk_analyzer::mcp_schema_validators().map_err(|_| fail(FailureCode::Profile))?;
         }
         let timeout_ms = config.limits.timeout_ms;
         let (sender, mut receiver) = mpsc::channel(config.limits.pending_requests);
         let stop = Arc::new(McpCancellation::new());
+        let executors = workers::Executors::launch(&config, stop.clone())?;
         let owner_stop = stop.clone();
         let (finished, completion) = tokio::sync::watch::channel(false);
         std::thread::Builder::new().name("htlk-mcp-client".into()).spawn(move || {
@@ -128,8 +134,9 @@ impl NativeMcpClient {
                                 let config = config.clone();
                                 let stop = stop.clone();
                                 let epochs = epochs.clone();
+                                let executors = executors.clone();
                                 jobs.spawn(async move {
-                                    let result = open(registry, config, stop, epochs, owner, server, endpoint, limits, lifetime).await;
+                                    let result = open(registry, config, executors, stop, epochs, owner, server, endpoint, limits, lifetime).await;
                                     let _ = reply.send(result);
                                 });
                             }
@@ -332,6 +339,7 @@ impl McpClientSession {
 async fn open(
     registry: Registry,
     config: Arc<McpClientConfig>,
+    executors: workers::Executors,
     stop: Arc<McpCancellation>,
     epochs: Arc<AtomicU64>,
     owner: McpOwner,
@@ -342,6 +350,10 @@ async fn open(
 ) -> Result<Arc<Wire>, RuntimeFailure> {
     if lifetime.is_cancelled() || stop.is_cancelled() {
         return Err(fail(FailureCode::Cancelled));
+    }
+    // Run callbacks require their runtime-origin accounting bridge, not host budgets.
+    if matches!(owner.scope(), McpOwnerScope::Run(_)) && !config.handlers.is_empty() {
+        return Err(fail(FailureCode::Profile));
     }
     let key = (
         owner.key(),
@@ -423,6 +435,7 @@ async fn open(
                 limits,
                 token.clone(),
                 stored_session.clone(),
+                executors,
             )
             .await;
             let wire = match started {

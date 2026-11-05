@@ -126,7 +126,7 @@ impl Http {
         &self,
         bytes: &[u8],
         id: &McpRequestId,
-        wire: &Wire,
+        wire: &Arc<Wire>,
         idempotency_key: Option<&str>,
         sent: &AtomicBool,
     ) -> Result<(), RuntimeFailure> {
@@ -195,7 +195,7 @@ impl Http {
             .await
             .map_err(|_| fail(FailureCode::McpTransport))
     }
-    pub async fn events(&self, wire: &Wire) -> Result<(), RuntimeFailure> {
+    pub async fn events(&self, wire: &Arc<Wire>) -> Result<(), RuntimeFailure> {
         let mut cursor: Option<String> = None;
         let mut retry = 1000;
         loop {
@@ -221,7 +221,7 @@ impl Http {
     async fn receive(
         &self,
         mut response: Response,
-        wire: &Wire,
+        wire: &Arc<Wire>,
         id: Option<&McpRequestId>,
         cursor: &mut Option<String>,
         retry: &mut u64,

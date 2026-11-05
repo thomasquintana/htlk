@@ -13,18 +13,18 @@ coverage and custom host implementations are distinct.
 | resources/list, resources/read | Server resources | Selected descriptor + read implemented | MCP E2E |
 | resources/templates/list, expanded resources/read | Server resources | Selected template + read implemented | MCP E2E |
 | Complete four-category catalog API | Server category capabilities | Pending | All-page completion, bounds, repeated cursor, no effect dispatch |
-| Host services and derived client capabilities | Installed service + host policy | Pending | Invalid combinations cannot initialize |
+| Host services and derived client capabilities | Installed service + host policy | Host-owned services implemented; run callback bridge pending | Invalid combinations cannot initialize; [callback tests](../crates/htlk-runtime/tests/mcp_callbacks.rs) |
 | Host-owned sessions | Authenticated owner/generation | Implemented with optional durable ownership/epochs through `McpClientPersistence` | [Client session tests](../crates/htlk-runtime/tests/mcp_client_sessions.rs), [interaction store tests](../crates/htlk-runtime/tests/mcp_interaction_store.rs); restart identity, expiry, isolation, explicit reopen |
 | Idle stdio reception | Transport | Implemented in the shared native client and graph adapter dispatcher | Client session tests: notification observed before next foreground request |
 | HTTP POST JSON/SSE | Transport | Implemented for outstanding RPCs | Transport tests, MCP E2E |
 | HTTP GET SSE, resumability, retry, expiry/new epoch | Optional server stream; transport | Implemented in `NativeMcpClient`; durable replay tracking pending | Client session tests: 405 fallback, fragmented/priming events, no effectful POST replay |
 | ping | Bidirectional base utility | Reverse ping implemented during exchanges | Transport tests |
 | notifications/cancelled | Bidirectional base utility | Outgoing cancellation implemented | MCP E2E; incoming callback cancellation pending |
-| sampling/createMessage | Client sampling | Pending | Nested model work, text/image/audio, limits, durable result replay |
+| sampling/createMessage | Client sampling | Host-owned execution implemented; run attribution/ancestor accounting pending | Callback tests: nested model work, no session-lock deadlock, durable result replay |
 | Tool-enabled sampling | Client sampling.tools | Pending | Tool choice, balanced tool results, no automatic client tool dispatch |
 | Context sampling | Client sampling.context; soft-deprecated | Pending assessment | Explicit authorized bounded context service required |
-| elicitation/create, form | Client elicitation.form (empty elicitation also means form) | Pending | Restricted schema, omitted mode, validated addressed replies |
-| elicitation/create, URL; -32042 | Client elicitation.url | Pending | Consent, error interactions, no prefetch or credential transit |
+| elicitation/create, form | Client elicitation.form (empty elicitation also means form) | Host-owned addressed replies implemented; run callback bridge pending | Restricted schema, omitted mode, validated addressed replies |
+| elicitation/create, URL; -32042 | Client elicitation.url | Host-owned URL requests implemented; -32042 interaction routing pending | Consent, no prefetch or credential transit; error data retained as evidence |
 | notifications/elicitation/complete | Server to client; known elicitation ID | Pending | Separate consent/completion, ignore unknown/completed IDs |
 | resources/subscribe, resources/unsubscribe | Server resources.subscribe | Pending | Durable intent, lifecycle races, explicit restoration/gaps |
 | notifications/resources/updated | Server to client | Pending | Idle delivery; zero automatic content reads |

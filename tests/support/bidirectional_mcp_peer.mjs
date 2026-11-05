@@ -51,13 +51,28 @@ const server = http.createServer(async (request, response) => {
   };
   if (rpc.method === "initialize") {
     const id = `session-${++sessionSequence}`;
-    session = { streams: new Set(), resume: new Set(), posts: 0, reverse: new Map(), waits: new Map() };
+    session = { streams: new Set(), resume: new Set(), posts: 0, reverse: new Map(), waits: new Map(), sampling: new Map() };
     sessions.set(id, session);
     response.setHeader("mcp-session-id", id);
     result({ protocolVersion: "2025-11-25", serverInfo: { name: "peer", version: "1" }, capabilities: { tools: {}, resources: { subscribe: true } } });
     return;
   }
   if (!session) { response.writeHead(404).end(); return; }
+  if (!rpc.method && rpc.id?.startsWith?.("sampling-")) {
+    const pending = session.sampling.get(rpc.id);
+    if (!pending || rpc.error) process.exit(27);
+    const value = JSON.stringify(rpc.result);
+    if (++pending.replies === 1) {
+      pending.value = value;
+      response.destroy(); // The client must retry the saved reply, not model work.
+    } else {
+      if (pending.value !== value) process.exit(28);
+      response.writeHead(202).end();
+      send(pending.response, { jsonrpc: "2.0", id: pending.parent, result: { content: [], structuredContent: { callbackReplies: pending.replies } } });
+      pending.response.end();
+    }
+    return;
+  }
   if (!rpc.method && rpc.id?.startsWith?.("ping-")) {
     response.writeHead(202).end();
     const pending = session.reverse.get(rpc.id);
@@ -95,6 +110,12 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(404).end(); return;
     }
     response.writeHead(200, { "content-type": "text/event-stream" });
+    if (rpc.params.name === "sampling") {
+      const id = `sampling-${rpc.id}`;
+      session.sampling.set(id, { response, parent: rpc.id, replies: 0 });
+      send(response, { jsonrpc: "2.0", id, method: "sampling/createMessage", params: { messages: [{ role: "user", content: { type: "text", text: "Question" } }], maxTokens: 10 } });
+      return;
+    }
     if (rpc.params.name === "resume") {
       session.resume.add(rpc.id);
       response.end(`id: resume-${rpc.id}\nretry: 5\ndata:\n\n`); return;

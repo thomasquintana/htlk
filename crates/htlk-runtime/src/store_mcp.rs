@@ -19,6 +19,10 @@ pub struct McpStoredSession {
     pub epoch: u64,
     /// Exact compound server digest.
     pub server: Digest,
+    /// Generation that opened this epoch.
+    pub generation: i64,
+    /// Explicitly closed transport epoch; reopening uses a different identity.
+    pub closed: bool,
 }
 
 /// Durable callback protocol state. Underlying work delivery is separate: even a
@@ -163,6 +167,76 @@ impl fmt::Debug for McpLateReply {
 }
 
 impl SqliteStore {
+    /// Enumerates a bounded page of interaction identities without loading values.
+    /// The host service independently authorizes each selected record.
+    ///
+    /// # Errors
+    /// Returns invalid paging bounds, corruption, or storage failure.
+    pub async fn mcp_interaction_ids(
+        &self,
+        owner: &McpOwner,
+        after: Option<Digest>,
+        page_size: usize,
+    ) -> Result<Vec<Digest>, StoreError> {
+        let count = self.page_size(page_size)?;
+        let key = owner.key().to_string();
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let mut statement = db.prepare("SELECT interaction_id FROM mcp_interactions WHERE owner_key=?1 AND interaction_id>?2 ORDER BY interaction_id LIMIT ?3")?;
+            let mut rows = statement.query(params![key, after.map_or_else(String::new, |id| id.to_string()), count])?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next()? { ids.push(row.get::<_, String>(0)?.parse().map_err(|_| StoreError::Corrupt)?); }
+            Ok(ids)
+        }).await.map_err(StoreError::from_worker)
+    }
+    /// Computes the bounded identity of a server request without reading values or
+    /// granting authority. The receive transaction independently uses this domain.
+    ///
+    /// # Errors
+    /// Returns representation limits.
+    pub fn mcp_interaction_id(
+        &self,
+        session: Digest,
+        request: &McpRequestId,
+    ) -> Result<Digest, StoreError> {
+        identity(
+            "interaction",
+            vec![Value::Text(session.to_string()), request.to_value()],
+            &self.config.limits,
+        )
+    }
+
+    /// Reads only callback control state, without loading request/result values.
+    ///
+    /// # Errors
+    /// Returns corrupt state or storage failure; an absent interaction returns None.
+    pub async fn mcp_interaction_state(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+    ) -> Result<Option<McpWorkState>, StoreError> {
+        let owner = owner.clone();
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let value: Option<String> = db.query_row("SELECT state FROM mcp_interactions WHERE owner_key=?1 AND interaction_id=?2", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
+            value.map(|value| McpWorkState::parse(&value)).transpose()
+        }).await.map_err(StoreError::from_worker)
+    }
+    /// Reads historical session identity under the exact owner namespace. This
+    /// does not assert that a transport or its ownership lease remains live.
+    ///
+    /// # Errors
+    /// Returns missing/cross-owner session, corruption, or storage failure.
+    pub async fn mcp_session(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+    ) -> Result<McpStoredSession, StoreError> {
+        let owner = owner.clone();
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let (epoch, server, generation, closed): (u64, String, i64, bool) = db.query_row("SELECT epoch,server_digest,generation,closed FROM mcp_epochs WHERE owner_key=?1 AND session_id=?2", params![owner.key().to_string(), id.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional()?.ok_or(StoreError::Missing)?;
+            if epoch == 0 { return Err(StoreError::Corrupt); }
+            Ok(McpStoredSession { id, epoch, server: server.parse().map_err(|_| StoreError::Corrupt)?, generation, closed })
+        }).await.map_err(StoreError::from_worker)
+    }
     /// Checks current host/run ownership independently of local transport state.
     /// Run owners are checked against the actual run fence and lifetime.
     ///
@@ -366,6 +440,8 @@ impl SqliteStore {
                     id,
                     epoch: epoch as u64,
                     server,
+                    generation: owner.generation(),
+                    closed: false,
                 })
             })
             .await
@@ -544,6 +620,66 @@ impl SqliteStore {
         work_delivery: McpWorkDelivery,
         now_ms: i64,
     ) -> Result<McpStoredInteraction, StoreError> {
+        self.complete_mcp_work_inner(
+            owner,
+            id,
+            responder,
+            idempotency_key,
+            reply,
+            labels,
+            usage,
+            work_delivery,
+            now_ms,
+            false,
+        )
+        .await
+    }
+
+    /// Accepts a human reply only while the original session remains live. Exact
+    /// historical receipts remain retrievable without authorizing a new delivery.
+    ///
+    /// # Errors
+    /// Returns stale session/ownership, expiry, conflicting key or malformed reply.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_mcp_reply(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+        responder: &HostContext,
+        idempotency_key: &str,
+        reply: Vec<u8>,
+        labels: SecurityLabels,
+        now_ms: i64,
+    ) -> Result<McpStoredInteraction, StoreError> {
+        self.complete_mcp_work_inner(
+            owner,
+            id,
+            responder,
+            idempotency_key,
+            reply,
+            labels,
+            None,
+            McpWorkDelivery::Completed,
+            now_ms,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn complete_mcp_work_inner(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+        responder: &HostContext,
+        idempotency_key: &str,
+        reply: Vec<u8>,
+        labels: SecurityLabels,
+        usage: Option<Value>,
+        work_delivery: McpWorkDelivery,
+        now_ms: i64,
+        live_reply: bool,
+    ) -> Result<McpStoredInteraction, StoreError> {
         timestamp(now_ms)?;
         host_owner(owner)?;
         self.check_text(responder.principal())?;
@@ -590,6 +726,7 @@ impl SqliteStore {
                 tx.commit()?;
                 return Ok(old);
             }
+            if live_reply { session_authority(&tx, &owner, old.session, true)?; }
             if old.state != McpWorkState::Intent && !(old.state == McpWorkState::Pending && work_delivery == McpWorkDelivery::NotStarted) { return Err(StoreError::Terminal); }
             if old.generation != owner.generation() { return Err(StoreError::Fenced); }
             if now >= old.deadline_ms { return Err(StoreError::Deadline(FailureCode::Timeout)); }

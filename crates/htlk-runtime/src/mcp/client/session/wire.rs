@@ -7,6 +7,7 @@ use std::{
     sync::{OnceLock, atomic::AtomicBool},
 };
 
+mod callbacks;
 mod http;
 mod payload;
 mod sse;
@@ -23,6 +24,8 @@ struct PendingRequest {
     reply: oneshot::Sender<McpClientReply>,
     limits: Limits,
     sent: Arc<AtomicBool>,
+    cancellation: Arc<McpCancellation>,
+    deadline: tokio::time::Instant,
 }
 type Pending = BTreeMap<McpRequestId, PendingRequest>;
 type QueuedEvent = (String, JsonDocument, tokio::sync::OwnedSemaphorePermit);
@@ -47,6 +50,8 @@ pub(super) struct Wire {
     received: AtomicU64,
     memory: Arc<tokio::sync::Semaphore>,
     cleanup: tokio::sync::Mutex<()>,
+    executors: workers::Executors,
+    incoming: Mutex<BTreeMap<McpRequestId, (Digest, Arc<McpCancellation>)>>,
 }
 
 impl Wire {
@@ -60,6 +65,7 @@ impl Wire {
         mut limits: Limits,
         stop: Arc<McpCancellation>,
         stored_session: Option<crate::store::McpStoredSession>,
+        executors: workers::Executors,
     ) -> Result<Arc<Self>, RuntimeFailure> {
         limits.max_document_bytes = limits.max_document_bytes.min(config.limits.frame_bytes);
         let (transport, output) = match endpoint {
@@ -126,6 +132,8 @@ impl Wire {
             event_sequence: AtomicU64::new(1),
             received: AtomicU64::new(0),
             cleanup: tokio::sync::Mutex::new(()),
+            executors,
+            incoming: Mutex::new(BTreeMap::new()),
         });
         let reader = wire.clone();
         tokio::spawn(async move {
@@ -328,6 +336,8 @@ impl Wire {
                     reply,
                     limits,
                     sent: sent_state.clone(),
+                    cancellation: request.cancellation.clone(),
+                    deadline,
                 },
             );
         }
@@ -491,7 +501,10 @@ impl Wire {
         .map_err(|_| fail(FailureCode::McpTimeout))?
     }
 
-    async fn read(&self, mut output: tokio::process::ChildStdout) -> Result<(), RuntimeFailure> {
+    async fn read(
+        self: &Arc<Self>,
+        mut output: tokio::process::ChildStdout,
+    ) -> Result<(), RuntimeFailure> {
         let mut chunk = [0u8; 4096];
         let mut frame = Vec::new();
         loop {
@@ -517,7 +530,7 @@ impl Wire {
     }
 
     async fn route(
-        &self,
+        self: &Arc<Self>,
         bytes: &[u8],
         associated: Option<&McpRequestId>,
         allow_response: bool,
@@ -541,6 +554,11 @@ impl Wire {
             }
             if let Some(id) = fields.get("id") {
                 let id = McpRequestId::from_value(id)?;
+                if self.initialization.get().is_some() && self.callback_supported(method) {
+                    return self
+                        .start_callback(document, bytes.to_vec(), id, associated.cloned())
+                        .inspect_err(|_| self.end(McpSessionEnd::CallbackFailure));
+                }
                 let (kind, result) = if method == "ping"
                     && fields
                         .get("params")
@@ -569,6 +587,14 @@ impl Wire {
                 let params = fields.get("params").cloned().unwrap_or(obj([])?);
                 if !matches!(params, Value::Map(_)) {
                     return Err(fail(FailureCode::McpProtocol));
+                }
+                if method == "notifications/cancelled"
+                    && let Some(id) = as_map(&params)?.get("requestId")
+                    && let Ok(id) = McpRequestId::from_value(id)
+                    && let Ok(incoming) = self.incoming.lock()
+                    && let Some((_, signal)) = incoming.get(&id)
+                {
+                    signal.cancel();
                 }
                 let params = JsonDocument::from_value(&params, &self.limits)
                     .map_err(|_| fail(FailureCode::McpProtocol))?;
@@ -684,12 +710,24 @@ impl Wire {
                 method: event.0,
                 params: event.1,
             };
+            let handler = handler.clone();
+            let Some(workers) = &self.executors.events else {
+                self.end(McpSessionEnd::EventHandler);
+                break;
+            };
+            let receive = match workers.submit(async move { handler.receive(event).await }) {
+                Ok(receive) => receive,
+                Err(_) => {
+                    self.end(McpSessionEnd::EventOverflow);
+                    break;
+                }
+            };
             let result = tokio::select! {
                 biased;
                 _ = self.stop.cancelled() => break,
-                result = tokio::time::timeout(Duration::from_millis(self.config.limits.timeout_ms), handler.receive(event)) => result,
+                result = tokio::time::timeout(Duration::from_millis(self.config.limits.timeout_ms), receive) => result,
             };
-            if !matches!(result, Ok(Ok(()))) {
+            if !matches!(result, Ok(Ok(Ok(())))) {
                 self.end(McpSessionEnd::EventHandler);
                 break;
             }
