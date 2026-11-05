@@ -159,6 +159,18 @@ and archival. Event overflow and connection gaps are observable.
   transit the client. Connection credentials are applied on every relevant HTTP
   request and excluded from ordinary evidence and executable meaning.
 
+## Generated-schema interpretation
+
+The authoritative MCP TypeScript definition at the
+[pinned source revision](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/c4c367f9f58296a7053f5c78a52fd02bfbb56a49/schema/2025-11-25/schema.ts)
+defines `ElicitResult.content` scalars as `string | number | boolean`, alongside
+string arrays. The generated JSON Schema snapshot incorrectly narrows that scalar
+number branch to integer. HTLK's client-service validator admits finite fractional
+numbers and validates them against the actual requested form schema. It separately
+enforces content presence only for accepted form responses. Other protocol shapes
+use the pinned schema plus applicable cross-message rules. Sampling `stopReason`
+remains an optional open string, including provider-specific values.
+
 ## Compatibility and implementation identity
 
 This green-field revision imposes no database or public API backward-compatibility

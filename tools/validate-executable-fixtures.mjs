@@ -142,7 +142,7 @@ assert.equal(get(profile, 'core_digest').value, native([
   ...sources('htlk-runtime', [
     'lib.rs', 'native_profile.rs', 'evaluate.rs', 'checked_evaluate.rs', 'runtime_type.rs',
     'schema_projection.rs', 'native_registry.rs', 'verified.rs', 'identity.rs', 'failure.rs', 'records.rs', 'store.rs', 'store_transitions.rs', 'store_replay.rs', 'store.sql', 'runtime.rs', 'store_registration.rs', 'store_registration.sql', 'artifact.rs', 'store_artifacts.rs', 'store_artifacts.sql', 'clock.rs', 'run.rs', 'store_runs.rs', 'store_runs.sql', 'binding.rs', 'influence.rs', 'store_execution.rs', 'execution/mod.rs', 'execution/model.rs', 'execution/checkpoint.rs', 'execution/frame.rs', 'execution/step.rs', 'execution/composite.rs', 'execution/control.rs', 'execution/waits.rs', 'execution/host.rs', 'execution/inspection.rs', 'execution/mcp_evidence.rs', 'execution/mcp_samples.rs',
-    'mcp.rs', 'mcp/client.rs', 'mcp/client/session.rs', 'mcp/client/session/wire.rs',
+    'mcp.rs', 'mcp/client.rs', 'mcp/client/protocol.rs', 'mcp/client/session.rs', 'mcp/client/session/wire.rs',
     'mcp/client/session/wire/http.rs', 'mcp/client/session/wire/sse.rs',
     'mcp/native_sessions.rs', 'mcp_control.rs', 'execution/mcp.rs', 'execution/approval.rs', 'execution/extension.rs', 'store_late.sql', 'retention.rs', 'source.rs', 'store_retention.rs', 'execution/recovery.rs', 'mcp_protocol.rs', 'mcp_extract.rs', 'mcp_normalize.rs', 'uri_template.rs',
     'artifact_access.rs', 'execution/artifacts.rs', 'execution/boundary.rs', 'execution/retry.rs',

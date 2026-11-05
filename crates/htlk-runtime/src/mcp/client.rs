@@ -21,6 +21,10 @@ pub const MCP_VERSION: &str = "2025-11-25";
 
 mod session;
 pub use session::{McpClientReply, McpClientSession, NativeMcpClient};
+mod protocol;
+pub use protocol::{
+    McpClientValidationError, McpIncomingKind, validate_client_request, validate_client_result,
+};
 
 /// Observable reason a session stopped receiving. This remains inspectable even
 /// when the application event queue is full or its consumer is stalled.

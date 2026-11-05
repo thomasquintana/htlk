@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Independent MCP client-service validation for multimodal sampling, balanced
+  tool-use histories and tool choice, form/URL elicitation, and roots. Form numbers
+  include fractional values as required by the authoritative MCP TypeScript model.
 - Native MCP clients can link durable owner leases and store-scoped session epochs;
   request/event delivery rechecks ownership and expired leases stop reception.
   Run sessions verify actual persisted principals and fences without borrowing

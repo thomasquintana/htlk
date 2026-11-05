@@ -40,7 +40,10 @@ pub use implementation::implementation_digest;
 pub use linkage::DocumentAnalysis;
 pub use linked::LinkedDocument;
 pub use mcp_protocol::{MCP_SCHEMA_URI, mcp_schema_validators};
-pub use mcp_protocol::{McpDescriptorKind, McpValidationError, validate_mcp_descriptor};
+pub use mcp_protocol::{
+    McpDescriptorKind, McpMessageKind, McpValidationError, validate_mcp_descriptor,
+    validate_mcp_message,
+};
 pub use native_schema::{
     NativeSchemaDiagnostic, NativeSchemaError, NativeSchemaOptions, NativeSchemas,
     SchemaDiagnosticLocation,
