@@ -8,6 +8,7 @@ use std::{
 };
 
 mod http;
+mod payload;
 mod sse;
 
 enum Transport {
@@ -189,9 +190,9 @@ impl Wire {
                 ])?,
             ),
         ])?;
-        let reply = self
-            .invoke(self.default_request("initialize", params, self.stop.clone()))
-            .await;
+        let request = self.default_request("initialize", params, self.stop.clone());
+        let _reservation = self.reserve_request(&request)?;
+        let reply = self.invoke(request).await;
         let result = reply.result?.map_err(|_| fail(FailureCode::McpProtocol))?;
         let fields = as_map(result.value())?;
         if as_text(get(fields, "protocolVersion")?)? != MCP_VERSION {
@@ -291,10 +292,7 @@ impl Wire {
         };
         if let Err(error) = checked {
             self.end(McpSessionEnd::Cancelled);
-            return McpClientReply {
-                delivery: McpDelivery::NotSent,
-                result: Err(error),
-            };
+            return McpClientReply::error(McpDelivery::NotSent, error);
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         if id > self.config.limits.requests_per_session as u64 || id > i64::MAX as u64 {
@@ -312,10 +310,7 @@ impl Wire {
         }) {
             Ok(doc) => doc.as_bytes().to_vec(),
             Err(error) => {
-                return McpClientReply {
-                    delivery: McpDelivery::NotSent,
-                    result: Err(error),
-                };
+                return McpClientReply::error(McpDelivery::NotSent, error);
             }
         };
         let (reply, mut receive) = oneshot::channel();
@@ -387,14 +382,14 @@ impl Wire {
         }
         match result {
             Ok(reply) => reply,
-            Err(error) => McpClientReply {
-                delivery: if sent_state.load(Ordering::Acquire) {
+            Err(error) => McpClientReply::error(
+                if sent_state.load(Ordering::Acquire) {
                     McpDelivery::PossiblySent
                 } else {
                     McpDelivery::NotSent
                 },
-                result: Err(error),
-            },
+                error,
+            ),
         }
     }
 
@@ -415,7 +410,15 @@ impl Wire {
             .and_then(|n| n.checked_add(256))
             .filter(|n| *n <= self.limits.max_document_bytes)
             .ok_or_else(|| fail(FailureCode::Input))?;
-        self.reserve(bytes)
+        let response = request
+            .max_response_bytes
+            .min(request.response_limits.max_document_bytes)
+            .min(self.limits.max_document_bytes);
+        let reserved = response
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(bytes))
+            .ok_or_else(|| fail(FailureCode::McpTransport))?;
+        self.reserve(reserved)
     }
 
     fn reserve(&self, bytes: usize) -> Result<tokio::sync::OwnedSemaphorePermit, RuntimeFailure> {
@@ -586,18 +589,13 @@ impl Wire {
             if !allow_response || associated.is_some_and(|expected| expected != &id) {
                 return Err(fail(FailureCode::McpProtocol));
             }
-            let result = match (fields.get("result"), fields.get("error")) {
-                (Some(Value::Map(_)), None) => Ok(JsonDocument::from_value(
-                    get(fields, "result")?,
-                    &self.limits,
-                )
-                .map_err(|_| fail(FailureCode::McpProtocol))?),
-                (None, Some(Value::Map(_))) => Err(McpRpcError::new(
-                    JsonDocument::from_value(get(fields, "error")?, &self.limits)
-                        .map_err(|_| fail(FailureCode::McpProtocol))?,
-                )?),
+            match (fields.get("result"), fields.get("error")) {
+                (Some(Value::Map(_)), None) => {}
+                (None, Some(Value::Map(error)))
+                    if matches!(error.get("code"), Some(Value::Integer(_)))
+                        && matches!(error.get("message"), Some(Value::Text(_))) => {}
                 _ => return Err(fail(FailureCode::McpProtocol)),
-            };
+            }
             let pending = self
                 .pending
                 .lock()
@@ -611,18 +609,36 @@ impl Wire {
             } else if !matches!(&id, McpRequestId::Integer(id) if *id > 0 && (*id as u64) < self.next.load(Ordering::Relaxed))
             {
                 return Err(fail(FailureCode::McpProtocol));
+            } else {
+                // No waiting request can consume this late/duplicate payload.
+                return Ok(());
             }
             drop(pending);
+            let (result, raw_result) = if fields.get("result").is_some() {
+                let raw = payload::member(bytes, "result", &self.limits)?;
+                (
+                    Ok(JsonDocument::new(raw, &self.limits)
+                        .map_err(|_| fail(FailureCode::McpProtocol))?),
+                    Some(raw.to_vec()),
+                )
+            } else {
+                (
+                    Err(McpRpcError::from_bytes(
+                        payload::member(bytes, "error", &self.limits)?,
+                        &self.limits,
+                    )?),
+                    None,
+                )
+            };
             if let Some(request) = self
                 .pending
                 .lock()
                 .map_err(|_| fail(FailureCode::Invariant))?
                 .remove(&id)
             {
-                let _ = request.reply.send(McpClientReply {
-                    delivery: McpDelivery::ResponseReceived,
-                    result: Ok(result),
-                });
+                let _ = request
+                    .reply
+                    .send(McpClientReply::correlated(result, raw_result));
             }
             // A late response cannot resurrect a timed-out pending request.
         }

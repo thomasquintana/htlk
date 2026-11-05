@@ -28,7 +28,11 @@ for await (const line of createInterface({input:process.stdin})) {
     if(held.length===2) for(const call of held.reverse())
       send({jsonrpc:'2.0',id:call.id,result:{tools:[],marker:call.params.marker}});
   } else if(r.method==='tools/call') {
-    if(r.params.name==='flood') {
+    if(r.params.name==='wait') {
+      send({jsonrpc:'2.0',method:'notifications/progress',params:{progressToken:'held',progress:1}});
+    } else if(r.params.name==='raw') {
+      process.stdout.write('{"jsonrpc":"2.0","id":'+r.id+',"extension":{"result":{"wrong":true}},"re\\u0073ult":{ "content" : [], "value" : 1.0, "text" : "brace }" }}\n');
+    } else if(r.params.name==='flood') {
       for(let i=0;i<30;i++) send({jsonrpc:'2.0',method:'notifications/message',params:{level:'info',data:i}});
     } else if(r.params.name==='url') {
       send({jsonrpc:'2.0',id:r.id,error:{code:-32042,message:'private-error',data:{elicitations:[{mode:'url',elicitationId:'one',url:'https://example.test/continue',message:'Continue'}]}}});
@@ -336,6 +340,112 @@ fn durable_epochs_survive_transport_owners_and_expired_ownership_prevents_dispat
         assert!(acquired.generation() > owner.generation());
         persistence.release_owner(&acquired).await.unwrap();
         assert!(store.validate_mcp_owner(&acquired, 110).await.is_err());
+    });
+}
+
+#[test]
+fn exact_payload_bytes_survive_escaped_keys_nested_decoys_and_number_normalization() {
+    const RESULT: &[u8] = br#"{ "content" : [], "value" : 1.0, "text" : "brace }" }"#;
+    const ERROR: &[u8] = br#"{ "code" : -32042, "message" : "private", "data" : {"value":1.0} }"#;
+    for mode in ["json", "sse", "stdio"] {
+        let peer = (mode != "stdio").then(|| HttpPeer::start(mode, "405"));
+        actix::System::new().block_on(async {
+            let client = client(None, McpClientLimits::default());
+            let session = if let Some(peer) = &peer {
+                peer.open(&client).await
+            } else {
+                open(&client, "alice", 1).await
+            };
+            let reply = session
+                .request(
+                    "tools/call",
+                    document(r#"{"name":"raw"}"#),
+                    Arc::new(McpCancellation::new()),
+                )
+                .await;
+            assert_eq!(reply.raw_result.as_deref(), Some(RESULT));
+            assert_ne!(reply.result.unwrap().unwrap().as_bytes(), RESULT);
+            if mode != "stdio" {
+                let reply = session
+                    .request(
+                        "tools/call",
+                        document(r#"{"name":"raw-error"}"#),
+                        Arc::new(McpCancellation::new()),
+                    )
+                    .await;
+                let error = reply.result.unwrap().unwrap_err();
+                assert_eq!(error.as_bytes(), ERROR);
+                assert_ne!(error.document().as_bytes(), ERROR);
+            }
+            client.shutdown().await.unwrap();
+        });
+    }
+}
+
+#[test]
+fn response_byte_reservations_bound_inflight_and_unconsumed_replies_before_send() {
+    actix::System::new().block_on(async {
+        let (events, mut receive) = tokio::sync::mpsc::channel(8);
+        let limits = McpClientLimits {
+            frame_bytes: 1024,
+            retained_bytes: 3072,
+            ..Default::default()
+        };
+        let client = client(Some(Arc::new(Events(events))), limits);
+        let session = open(&client, "alice", 1).await;
+        let cancellation = Arc::new(McpCancellation::new());
+        let controls = async {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let event = receive.recv().await.unwrap();
+                    if event.method == "notifications/progress" {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let rejected = session
+                .request(
+                    "tools/call",
+                    document(r#"{"name":"url"}"#),
+                    Arc::new(McpCancellation::new()),
+                )
+                .await;
+            assert_eq!(rejected.delivery, McpDelivery::NotSent);
+            cancellation.cancel();
+        };
+        let (held, ()) = tokio::join!(
+            session.request(
+                "tools/call",
+                document(r#"{"name":"wait","_meta":{"progressToken":"held"}}"#),
+                cancellation.clone()
+            ),
+            controls
+        );
+        assert_eq!(held.delivery, McpDelivery::ResponseReceived);
+        let rejected = session
+            .request(
+                "tools/call",
+                document(r#"{"name":"url"}"#),
+                Arc::new(McpCancellation::new()),
+            )
+            .await;
+        assert_eq!(
+            rejected.delivery,
+            McpDelivery::NotSent,
+            "unconsumed reply retains its reservation"
+        );
+        drop(held);
+        let admitted = session
+            .request(
+                "tools/call",
+                document(r#"{"name":"url"}"#),
+                Arc::new(McpCancellation::new()),
+            )
+            .await;
+        assert_eq!(admitted.delivery, McpDelivery::ResponseReceived);
+        client.shutdown().await.unwrap();
     });
 }
 

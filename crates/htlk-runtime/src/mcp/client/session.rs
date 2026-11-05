@@ -20,6 +20,11 @@ pub struct McpClientReply {
     pub delivery: McpDelivery,
     /// Local transport/validation failure or complete correlated result/error.
     pub result: Result<Result<JsonDocument, McpRpcError>, RuntimeFailure>,
+    /// Exact result-object bytes before JSON normalization; protocol errors retain
+    /// their own original bytes in `McpRpcError`. Absent for local failures.
+    pub raw_result: Option<Vec<u8>>,
+    // Holds response capacity until the caller consumes or drops this reply.
+    _reservation: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 impl fmt::Debug for McpClientReply {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -31,10 +36,27 @@ impl fmt::Debug for McpClientReply {
 }
 impl McpClientReply {
     fn failed(delivery: McpDelivery, code: FailureCode) -> Self {
+        Self::error(delivery, fail(code))
+    }
+    fn error(delivery: McpDelivery, error: RuntimeFailure) -> Self {
         Self {
             delivery,
-            result: Err(fail(code)),
+            result: Err(error),
+            raw_result: None,
+            _reservation: None,
         }
+    }
+    fn correlated(result: Result<JsonDocument, McpRpcError>, raw_result: Option<Vec<u8>>) -> Self {
+        Self {
+            delivery: McpDelivery::ResponseReceived,
+            result: Ok(result),
+            raw_result,
+            _reservation: None,
+        }
+    }
+    fn reserved(mut self, reservation: tokio::sync::OwnedSemaphorePermit) -> Self {
+        self._reservation = Some(reservation);
+        self
     }
 }
 
@@ -117,8 +139,8 @@ impl NativeMcpClient {
                                     continue;
                                 }
                                 jobs.spawn(async move {
-                                    let _reservation = reservation;
-                                    let _ = reply.send(wire.invoke(request).await);
+                                    let outcome = wire.invoke(request).await.reserved(reservation);
+                                    let _ = reply.send(outcome);
                                 });
                             }
                             None => break,
@@ -273,10 +295,7 @@ impl McpClientSession {
         let reservation = match self.wire.reserve_request(&request) {
             Ok(reservation) => reservation,
             Err(error) => {
-                return McpClientReply {
-                    delivery: McpDelivery::NotSent,
-                    result: Err(error),
-                };
+                return McpClientReply::error(McpDelivery::NotSent, error);
             }
         };
         let send = self.sender.send(Command::Request {

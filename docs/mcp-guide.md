@@ -73,6 +73,12 @@ run-owned events. Event handling neither reads resources nor mutates workflows.
 `McpClientSession::ended` reports overflow or consumer failure even when its event
 queue cannot accept another event.
 
+Requests reserve their bounded original/canonical response capacity before sending.
+Unconsumed `McpClientReply` values retain that reservation, so callers should consume
+or drop each reply after processing it. `raw_result` and `McpRpcError::as_bytes`
+preserve exact payload bytes; their `JsonDocument` views provide canonical values
+separately. Byte-span extraction occurs only after strict full-message admission.
+
 Streamable HTTP supports optional idle GET SSE, incremental bounded framing, and
 GET resumption using the failed stream's event cursor. Resumption never repeats
 the original operation POST. A GET 405 reports lack of idle-stream support while

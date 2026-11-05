@@ -798,8 +798,8 @@ async fn record_outcome(
     let protocol_error = protocol_error.filter(|error| {
         let valid = delivery == McpDelivery::ResponseReceived
             && outcome.result.is_err()
-            && error.document().as_bytes().len() <= response_limit(runtime)
-            && JsonDocument::new(error.document().as_bytes(), &runtime.config.limits).is_ok();
+            && error.as_bytes().len() <= response_limit(runtime)
+            && JsonDocument::new(error.as_bytes(), &runtime.config.limits).is_ok();
         if !valid {
             outcome.result = Err(crate::failure::RuntimeFailure::new(
                 FailureCode::McpProtocol,
@@ -856,16 +856,10 @@ async fn record_outcome(
         replace(
             &response,
             [
-                (
-                    "protocol_error",
-                    Value::Bytes(error.document().as_bytes().to_vec()),
-                ),
+                ("protocol_error", Value::Bytes(error.as_bytes().to_vec())),
                 (
                     "protocol_error_digest",
-                    Value::Text(
-                        htlk_executable::digest::hash_bytes(error.document().as_bytes())
-                            .to_string(),
-                    ),
+                    Value::Text(htlk_executable::digest::hash_bytes(error.as_bytes()).to_string()),
                 ),
             ],
         )?

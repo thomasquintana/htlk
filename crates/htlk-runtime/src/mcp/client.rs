@@ -210,6 +210,7 @@ impl McpRequestId {
 pub struct McpRpcError {
     code: i64,
     document: JsonDocument,
+    original: Vec<u8>,
 }
 impl McpRpcError {
     /// Validates an exact error object while preserving its structured data.
@@ -217,6 +218,20 @@ impl McpRpcError {
     /// # Errors
     /// Returns a protocol failure for a missing integer code or string message.
     pub fn new(document: JsonDocument) -> Result<Self, RuntimeFailure> {
+        let original = document.as_bytes().to_vec();
+        Self::checked(document, original)
+    }
+    /// Validates and preserves exact original error-object bytes before JSON
+    /// normalization. Remote text and data remain protected evidence.
+    ///
+    /// # Errors
+    /// Returns bounded JSON ingress or invalid error shape.
+    pub fn from_bytes(bytes: &[u8], limits: &Limits) -> Result<Self, RuntimeFailure> {
+        let document =
+            JsonDocument::new(bytes, limits).map_err(|_| fail(FailureCode::McpProtocol))?;
+        Self::checked(document, bytes.to_vec())
+    }
+    fn checked(document: JsonDocument, original: Vec<u8>) -> Result<Self, RuntimeFailure> {
         let map = super::as_map(document.value())?;
         let Some(Value::Integer(code)) = map.get("code") else {
             return Err(fail(FailureCode::McpProtocol));
@@ -227,6 +242,7 @@ impl McpRpcError {
         Ok(Self {
             code: *code,
             document,
+            original,
         })
     }
     /// Numeric JSON-RPC error code.
@@ -237,12 +253,16 @@ impl McpRpcError {
     pub fn document(&self) -> &JsonDocument {
         &self.document
     }
+    /// Exact protected error-object bytes, distinct from canonical JSON identity.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.original
+    }
 }
 impl fmt::Debug for McpRpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("McpRpcError")
             .field("code", &self.code)
-            .field("bytes", &self.document.as_bytes().len())
+            .field("bytes", &self.original.len())
             .finish()
     }
 }
@@ -259,7 +279,8 @@ pub struct McpClientLimits {
     pub events: usize,
     /// Maximum raw JSON message or incomplete SSE frame bytes.
     pub frame_bytes: usize,
-    /// Maximum bytes retained across queued messages and replay data.
+    /// Maximum reserved request, original/canonical reply, and queued event bytes.
+    /// At least three frame ceilings are required to admit one full-size RPC.
     pub retained_bytes: usize,
     /// Cumulative admitted requests per epoch, bounding ID/replay retention.
     pub requests_per_session: usize,
@@ -315,7 +336,10 @@ impl McpClientLimits {
         if counts
             .into_iter()
             .any(|n| n == 0 || n > isize::MAX as usize)
-            || self.retained_bytes < self.frame_bytes
+            || self
+                .frame_bytes
+                .checked_mul(3)
+                .is_none_or(|minimum| self.retained_bytes < minimum)
             || self.retained_bytes > u32::MAX as usize
             || self.requests_per_session < self.pending_requests
             || self.callbacks > self.requests_per_session

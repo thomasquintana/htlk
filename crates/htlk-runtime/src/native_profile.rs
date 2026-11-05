@@ -68,6 +68,7 @@ pub fn native_profile(
         include_bytes!("mcp/client/session.rs"),
         include_bytes!("mcp/client/session/wire.rs"),
         include_bytes!("mcp/client/session/wire/http.rs"),
+        include_bytes!("mcp/client/session/wire/payload.rs"),
         include_bytes!("mcp/client/session/wire/sse.rs"),
         include_bytes!("mcp/native_sessions.rs"),
         include_bytes!("mcp_control.rs"),

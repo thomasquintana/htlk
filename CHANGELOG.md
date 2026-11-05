@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Native MCP result/error evidence preserves original payload bytes before JSON
+  normalization, including escaped member names. Pending and unconsumed replies
+  reserve bounded response capacity before request transmission.
 - Correlated MCP JSON-RPC errors retain protected code/message/data in durable
   attempt evidence, including URL-elicitation-required errors. Graph-visible
   failures remain redacted, and inspecting errors cannot dispatch or retry work.

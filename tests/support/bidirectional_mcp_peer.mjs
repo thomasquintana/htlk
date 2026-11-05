@@ -78,6 +78,17 @@ const server = http.createServer(async (request, response) => {
   if (rpc.method === "tools/list") { result({ tools: [], marker: "café" }); return; }
   if (rpc.method === "tools/call") {
     session.posts++;
+    if (rpc.params.name === "raw" || rpc.params.name === "raw-error") {
+      const raw = rpc.params.name === "raw"
+        ? '{ "content" : [], "value" : 1.0, "text" : "brace }" }'
+        : '{ "code" : -32042, "message" : "private", "data" : {"value":1.0} }';
+      const key = rpc.params.name === "raw" ? 're\\u0073ult' : 'err\\u006fr';
+      const message = `{"jsonrpc":"2.0","id":${rpc.id},"extension":{"result":{"wrong":true}},"${key}":${raw}}`;
+      if (process.env.RESPONSE_MODE === "sse") {
+        response.writeHead(200, { "content-type": "text/event-stream" }).end(`data: ${message}\n\n`);
+      } else response.writeHead(200, { "content-type": "application/json" }).end(message);
+      return;
+    }
     if (rpc.params.name === "expire") {
       sessions.delete(request.headers["mcp-session-id"]);
       for (const stream of session.streams) stream.end();

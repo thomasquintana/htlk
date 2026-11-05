@@ -102,7 +102,9 @@ fn url_required_error_is_inspectable_after_shutdown_without_an_adapter_or_recall
         assert!(evidence.response_received); assert!(evidence.normalized.is_none());
         assert_eq!(evidence.failure_code, Some(FailureCode::McpProtocol));
         let raw = evidence.raw_response.unwrap();
+        assert!(raw.starts_with(br#"{"code":-32042,"message":"private-message","data":"#));
         let error = McpRpcError::new(JsonDocument::new(&raw, &limits).unwrap()).unwrap();
+        assert_ne!(raw, error.document().as_bytes());
         assert_eq!(error.code(), -32042);
         let Value::Map(fields) = error.document().value() else { panic!() };
         let Some(Value::Map(data)) = fields.get("data") else { panic!() };

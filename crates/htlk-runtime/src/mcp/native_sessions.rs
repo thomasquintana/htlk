@@ -214,7 +214,7 @@ impl McpConnection for NativeLease {
                 .parents
                 .extend(request.cancellation.parents.iter().cloned());
             request.cancellation = Arc::new(signal);
-            let reply = self.session.invoke(request).await;
+            let mut reply = self.session.invoke(request).await;
             if let Ok(Err(error)) = &reply.result {
                 self.protocol_error = Some(error.clone());
             }
@@ -222,11 +222,12 @@ impl McpConnection for NativeLease {
                 self.closed = true;
                 let _ = self.session.close().await;
             }
+            let raw_result = reply.raw_result.take();
             McpOutcome {
                 delivery: reply.delivery,
                 result: reply.result.and_then(|result| {
                     result
-                        .map(|result| result.as_bytes().to_vec())
+                        .map(|result| raw_result.unwrap_or_else(|| result.as_bytes().to_vec()))
                         .map_err(|_| fail(FailureCode::McpProtocol))
                 }),
             }
