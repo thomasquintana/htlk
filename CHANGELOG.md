@@ -8,6 +8,11 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Validated MCP client service configuration, finite session limits, distinct
+  host/run owner identities, callback context, and protected structured RPC errors.
+  These types form the bidirectional client foundation; native transport integration
+  and durable callback execution are tracked in the MCP conformance inventory.
+
 - HTLK IR Draft 0.1 compilation from standalone source, exact source bundles, and
   canonical documents; module interface inspection and public-port graph joins.
 - Shared canonical executable records, deterministic CBOR/JCS, content identities,

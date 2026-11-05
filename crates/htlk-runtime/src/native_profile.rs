@@ -63,6 +63,7 @@ pub fn native_profile(
         include_bytes!("execution/mcp_evidence.rs"),
         include_bytes!("execution/mcp_samples.rs"),
         include_bytes!("mcp.rs"),
+        include_bytes!("mcp/client.rs"),
         include_bytes!("mcp/native_sessions.rs"),
         include_bytes!("mcp_control.rs"),
         include_bytes!("execution/mcp.rs"),

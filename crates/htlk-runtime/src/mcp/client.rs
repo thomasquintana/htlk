@@ -1,0 +1,465 @@
+//! Host-facing configuration and identities for the bidirectional MCP client.
+//!
+//! Configuration describes installed services. It does not itself open a transport
+//! or grant a callback authority to spend a run's budget.
+
+use super::{McpCancellation, McpFuture, fail, obj};
+use crate::{
+    HostContext,
+    failure::{FailureCode, RuntimeFailure},
+    identity::{AttemptId, InvocationId, RunId},
+};
+use htlk_executable::{
+    JsonDocument, ServerIdentity,
+    cbor::{Limits, Map, Value},
+    digest::Digest,
+};
+use std::{collections::BTreeMap, fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
+
+/// The sole protocol version implemented by this client profile.
+pub const MCP_VERSION: &str = "2025-11-25";
+
+/// Namespace for an authenticated session owner. Equal names in different
+/// namespaces never identify the same owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum McpOwnerScope {
+    /// A workflow run; authority comes from its durable runtime lease.
+    Run(RunId),
+    /// A host-selected session group independent of any workflow run.
+    Host(String),
+}
+
+/// Validated owner representation. Construction establishes shape, not authority;
+/// the durable owner registry independently checks generation and principal.
+#[derive(Clone)]
+pub struct McpOwner {
+    host: HostContext,
+    scope: McpOwnerScope,
+    generation: i64,
+    key: Digest,
+}
+impl McpOwner {
+    /// Creates an owner with a positive generation and bounded nonempty name.
+    /// The stable key excludes generation so takeover cannot reset work identity.
+    ///
+    /// # Errors
+    /// Returns invalid generation/name or representation limits.
+    pub fn new(
+        host: HostContext,
+        scope: McpOwnerScope,
+        generation: i64,
+        limits: &Limits,
+    ) -> Result<Self, RuntimeFailure> {
+        let (kind, name) = match &scope {
+            McpOwnerScope::Run(run) => ("run", run.as_str()),
+            McpOwnerScope::Host(name) => ("host", name.as_str()),
+        };
+        if generation <= 0 || name.is_empty() {
+            return Err(fail(FailureCode::Input));
+        }
+        let identity = Value::Array(vec![
+            Value::Text("htlk.mcp-owner/1".into()),
+            Value::Text(kind.into()),
+            Value::Text(host.principal().into()),
+            Value::Text(name.into()),
+        ]);
+        let key = JsonDocument::from_value(&identity, limits)
+            .map_err(|_| fail(FailureCode::Input))?
+            .digest();
+        Ok(Self {
+            host,
+            scope,
+            generation,
+            key,
+        })
+    }
+    /// Authenticated principal supplied by the embedding host.
+    pub fn host(&self) -> &HostContext {
+        &self.host
+    }
+    /// Run or host namespace and exact name.
+    pub fn scope(&self) -> &McpOwnerScope {
+        &self.scope
+    }
+    /// Current ownership generation, independently checked at commit.
+    pub fn generation(&self) -> i64 {
+        self.generation
+    }
+    /// Stable principal/namespace/name identity, excluding ownership generation.
+    pub fn key(&self) -> Digest {
+        self.key
+    }
+}
+impl fmt::Debug for McpOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpOwner")
+            .field("key", &self.key)
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How the dispatcher established a callback's operation association.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpAttribution {
+    /// No operation association; explicit host-session policy is required for work.
+    Session,
+    /// The request arrived on the HTTP response stream of an outgoing operation.
+    ResponseStream,
+    /// A serialized foreground operation provides the documented association.
+    SerializedOperation,
+    /// Validated protocol related-task metadata identifies a retained task.
+    RelatedTask,
+}
+
+/// Immutable operation identity carried independently of server-provided metadata.
+#[derive(Clone, Debug)]
+pub struct McpOperationOrigin {
+    /// Owning workflow run.
+    pub run_id: RunId,
+    /// Exact admitted invocation.
+    pub invocation_id: InvocationId,
+    /// Exact attempt; the runtime checks its relation to the invocation.
+    pub attempt_id: AttemptId,
+}
+
+/// Context for one admitted host request. Authority and budget admission precede
+/// handler dispatch; possession of a copied context grants no acceptance authority.
+#[derive(Clone)]
+pub struct McpInteractionContext {
+    /// Authenticated durable owner and generation.
+    pub owner: McpOwner,
+    /// Exact compound server identity.
+    pub server: ServerIdentity,
+    /// Transport session epoch, distinct from owner generation.
+    pub epoch: u64,
+    /// Durable interaction identity, stable through explicitly authorized recovery.
+    pub interaction_id: Digest,
+    /// Incoming JSON-RPC ID, preserving integer versus string identity.
+    pub request_id: McpRequestId,
+    /// Runtime-established originating work, when unambiguous.
+    pub origin: Option<McpOperationOrigin>,
+    /// Evidence used to associate the request with its origin.
+    pub attribution: McpAttribution,
+    /// Optional protocol task identity, validated against retained task authority.
+    pub task_id: Option<String>,
+    /// Parent client interaction for bounded nested work.
+    pub parent_interaction: Option<Digest>,
+    /// Trusted absolute deadline in milliseconds, not a server-provided timestamp.
+    pub deadline_ms: i64,
+    /// Cooperative cancellation subordinate to durable fencing.
+    pub cancellation: Arc<McpCancellation>,
+}
+
+/// Non-null JSON-RPC request identity. Strings and integers are separate keys.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum McpRequestId {
+    /// Integer identity.
+    Integer(i64),
+    /// Exact string identity (including the valid empty string).
+    String(String),
+}
+impl McpRequestId {
+    /// Validates a parsed ID without coercing its type.
+    ///
+    /// # Errors
+    /// Returns a protocol failure for null, fractions, booleans, or other values.
+    pub fn from_value(value: &Value) -> Result<Self, RuntimeFailure> {
+        match value {
+            Value::Integer(value) => Ok(Self::Integer(*value)),
+            Value::Text(value) => Ok(Self::String(value.clone())),
+            _ => Err(fail(FailureCode::McpProtocol)),
+        }
+    }
+    /// Original protocol representation.
+    pub fn to_value(&self) -> Value {
+        match self {
+            Self::Integer(value) => Value::Integer(*value),
+            Self::String(value) => Value::Text(value.clone()),
+        }
+    }
+}
+
+/// Protected JSON-RPC error. Debug deliberately excludes remote text and data.
+#[derive(Clone)]
+pub struct McpRpcError {
+    code: i64,
+    document: JsonDocument,
+}
+impl McpRpcError {
+    /// Validates an exact error object while preserving its structured data.
+    ///
+    /// # Errors
+    /// Returns a protocol failure for a missing integer code or string message.
+    pub fn new(document: JsonDocument) -> Result<Self, RuntimeFailure> {
+        let map = super::as_map(document.value())?;
+        let Some(Value::Integer(code)) = map.get("code") else {
+            return Err(fail(FailureCode::McpProtocol));
+        };
+        if !matches!(map.get("message"), Some(Value::Text(_))) {
+            return Err(fail(FailureCode::McpProtocol));
+        }
+        Ok(Self {
+            code: *code,
+            document,
+        })
+    }
+    /// Numeric JSON-RPC error code.
+    pub fn code(&self) -> i64 {
+        self.code
+    }
+    /// Exact protected error document, including optional data.
+    pub fn document(&self) -> &JsonDocument {
+        &self.document
+    }
+}
+impl fmt::Debug for McpRpcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpRpcError")
+            .field("code", &self.code)
+            .field("bytes", &self.document.as_bytes().len())
+            .finish()
+    }
+}
+
+/// Finite cumulative and instantaneous limits for one client session. Configuration
+/// validates these before allocating channels or starting processes.
+#[derive(Clone, Debug)]
+pub struct McpClientLimits {
+    /// Pending outgoing requests.
+    pub pending_requests: usize,
+    /// Simultaneously admitted host callbacks.
+    pub callbacks: usize,
+    /// Queued host events.
+    pub events: usize,
+    /// Maximum raw JSON message or incomplete SSE frame bytes.
+    pub frame_bytes: usize,
+    /// Maximum bytes retained across queued messages and replay data.
+    pub retained_bytes: usize,
+    /// Cumulative admitted requests per epoch, bounding ID/replay retention.
+    pub requests_per_session: usize,
+    /// Maximum nested callback depth.
+    pub callback_depth: usize,
+    /// Maximum pages inspected in one catalog enumeration.
+    pub catalog_pages: usize,
+    /// Maximum descriptors retained in one catalog enumeration.
+    pub catalog_items: usize,
+    /// Absolute request timeout; progress never extends it.
+    pub timeout_ms: u64,
+    /// Maximum local cooperative cancellation grace.
+    pub cancellation_grace_ms: u64,
+}
+impl Default for McpClientLimits {
+    fn default() -> Self {
+        Self {
+            pending_requests: 64,
+            callbacks: 8,
+            events: 128,
+            frame_bytes: 2 * 1024 * 1024,
+            retained_bytes: 16 * 1024 * 1024,
+            requests_per_session: 4096,
+            callback_depth: 8,
+            catalog_pages: 128,
+            catalog_items: 4096,
+            timeout_ms: 30_000,
+            cancellation_grace_ms: 100,
+        }
+    }
+}
+impl McpClientLimits {
+    /// Checks positive, representable bounds and consistent reservations.
+    ///
+    /// # Errors
+    /// Returns a profile failure before any allocation or transport startup.
+    pub fn validate(&self) -> Result<(), RuntimeFailure> {
+        let counts = [
+            self.pending_requests,
+            self.callbacks,
+            self.events,
+            self.frame_bytes,
+            self.retained_bytes,
+            self.requests_per_session,
+            self.callback_depth,
+            self.catalog_pages,
+            self.catalog_items,
+        ];
+        if counts
+            .into_iter()
+            .any(|n| n == 0 || n > isize::MAX as usize)
+            || self.retained_bytes < self.frame_bytes
+            || self.requests_per_session < self.pending_requests
+            || self.callbacks > self.requests_per_session
+            || [self.pending_requests, self.callbacks, self.events]
+                .into_iter()
+                .any(|n| n > 65_536)
+            || self.cancellation_grace_ms > self.timeout_ms
+        {
+            return Err(fail(FailureCode::Profile));
+        }
+        for ms in [self.timeout_ms, self.cancellation_grace_ms] {
+            if ms == 0
+                || ms > i64::MAX as u64
+                || std::time::Instant::now()
+                    .checked_add(Duration::from_millis(ms))
+                    .is_none()
+            {
+                return Err(fail(FailureCode::Profile));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Protocol services whose implementation is supplied by the embedding host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum McpClientService {
+    /// Basic sampling; tool/context extensions are independently installed.
+    Sampling,
+    /// Tool-enabled sampling, requiring basic sampling too.
+    SamplingTools,
+    /// Authorized context inclusion (soft-deprecated in the selected version).
+    SamplingContext,
+    /// Schema-driven form elicitation.
+    ElicitationForm,
+    /// External URL elicitation.
+    ElicitationUrl,
+    /// Host roots provider.
+    Roots,
+    /// Host roots-change service, requiring a roots provider too.
+    RootsChanged,
+}
+
+/// A protected service result, kept separate from operational runtime failures.
+pub type McpServiceFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<JsonDocument, McpRpcError>> + Send + 'a>>;
+
+/// Installed host implementation. The client admits and validates a complete
+/// protocol request before calling this handler, and independently validates its
+/// result. Sampling receives the full structured request, not flattened prompt text.
+pub trait McpClientHandler: Send + Sync {
+    /// Executes one admitted interaction. Implementations must honor its cancellation,
+    /// deadline and accounted work identity; persistence precedes reply transmission.
+    fn handle<'a>(
+        &'a self,
+        context: &'a McpInteractionContext,
+        request: &'a JsonDocument,
+    ) -> McpServiceFuture<'a>;
+}
+
+/// Bounded protected host event; `method` names protocol notifications or a local
+/// lifecycle event. No event authorizes content acquisition or workflow mutation.
+#[derive(Clone)]
+pub struct McpClientEvent {
+    /// Durable owner context, without fabricated operation attribution.
+    pub owner: McpOwner,
+    /// Exact server identity.
+    pub server: ServerIdentity,
+    /// Source transport epoch.
+    pub epoch: u64,
+    /// Locally stable event identity for consumer deduplication.
+    pub event_id: Digest,
+    /// Protocol method or local lifecycle event name.
+    pub method: String,
+    /// Protected bounded event parameters.
+    pub params: JsonDocument,
+}
+
+/// Host event delivery boundary. Slow consumers are isolated from the protocol
+/// reader by bounded queues; returning does not assert permanent archival.
+pub trait McpEventHandler: Send + Sync {
+    /// Receives one event under the session delivery deadline.
+    fn receive<'a>(&'a self, event: McpClientEvent) -> McpFuture<'a, ()>;
+}
+
+/// Immutable, checked client service configuration. Capabilities cannot be supplied
+/// as arbitrary JSON. Installing services is distinct from enabling them on a live
+/// native transport with its durable interaction journal.
+#[derive(Clone)]
+pub struct McpClientConfig {
+    limits: McpClientLimits,
+    handlers: BTreeMap<McpClientService, Arc<dyn McpClientHandler>>,
+    events: Option<Arc<dyn McpEventHandler>>,
+    capabilities: JsonDocument,
+}
+impl McpClientConfig {
+    /// Freezes a checked service registry and derives its protocol capabilities.
+    ///
+    /// # Errors
+    /// Returns invalid limits or extension services missing their base provider.
+    pub fn new(
+        limits: McpClientLimits,
+        handlers: BTreeMap<McpClientService, Arc<dyn McpClientHandler>>,
+        events: Option<Arc<dyn McpEventHandler>>,
+    ) -> Result<Self, RuntimeFailure> {
+        limits.validate()?;
+        use McpClientService::*;
+        let has = |s| handlers.contains_key(&s);
+        if ((has(SamplingTools) || has(SamplingContext)) && !has(Sampling))
+            || (has(RootsChanged) && !has(Roots))
+        {
+            return Err(fail(FailureCode::Profile));
+        }
+        let mut capabilities = Vec::new();
+        if has(Sampling) {
+            let mut entries = Vec::new();
+            if has(SamplingTools) {
+                entries.push(("tools".into(), obj([])?));
+            }
+            if has(SamplingContext) {
+                entries.push(("context".into(), obj([])?));
+            }
+            capabilities.push((
+                "sampling".into(),
+                Value::Map(Map::try_from_entries(entries).map_err(|_| fail(FailureCode::Profile))?),
+            ));
+        }
+        if has(ElicitationForm) || has(ElicitationUrl) {
+            let mut entries = Vec::new();
+            if has(ElicitationForm) {
+                entries.push(("form".into(), obj([])?));
+            }
+            if has(ElicitationUrl) {
+                entries.push(("url".into(), obj([])?));
+            }
+            capabilities.push((
+                "elicitation".into(),
+                Value::Map(Map::try_from_entries(entries).map_err(|_| fail(FailureCode::Profile))?),
+            ));
+        }
+        if has(Roots) {
+            capabilities.push((
+                "roots".into(),
+                obj([("listChanged", Value::Bool(has(RootsChanged)))])?,
+            ));
+        }
+        let capabilities = JsonDocument::from_value(
+            &Value::Map(
+                Map::try_from_entries(capabilities).map_err(|_| fail(FailureCode::Profile))?,
+            ),
+            &Limits::default(),
+        )
+        .map_err(|_| fail(FailureCode::Profile))?;
+        Ok(Self {
+            limits,
+            handlers,
+            events,
+            capabilities,
+        })
+    }
+    /// Checked immutable resource bounds.
+    pub fn limits(&self) -> &McpClientLimits {
+        &self.limits
+    }
+    /// Exact client capability object derived from installed services.
+    pub fn capabilities(&self) -> &JsonDocument {
+        &self.capabilities
+    }
+    /// Borrows an explicitly installed service implementation.
+    pub fn handler(&self, service: McpClientService) -> Option<&Arc<dyn McpClientHandler>> {
+        self.handlers.get(&service)
+    }
+    /// Borrows the host event consumer, when installed.
+    pub fn event_handler(&self) -> Option<&Arc<dyn McpEventHandler>> {
+        self.events.as_ref()
+    }
+}

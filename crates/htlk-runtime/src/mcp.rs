@@ -27,6 +27,7 @@ pub enum McpDeduplication {
     },
 }
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+pub mod client;
 mod native_sessions;
 use native_sessions::NativeSessions;
 
