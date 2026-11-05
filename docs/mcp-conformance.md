@@ -14,10 +14,10 @@ coverage and custom host implementations are distinct.
 | resources/templates/list, expanded resources/read | Server resources | Selected template + read implemented | MCP E2E |
 | Complete four-category catalog API | Server category capabilities | Pending | All-page completion, bounds, repeated cursor, no effect dispatch |
 | Host services and derived client capabilities | Installed service + host policy | Pending | Invalid combinations cannot initialize |
-| Host-owned sessions | Authenticated owner/generation | Pending | Owner isolation, persistence, explicit restore |
-| Idle stdio reception | Transport | Pending | Notification observed before next foreground request |
+| Host-owned sessions | Authenticated owner/generation | Process-local `NativeMcpClient` implemented; durable ownership pending | [Client session tests](../crates/htlk-runtime/tests/mcp_client_sessions.rs); cross-reactor lifetime, owner isolation, explicit reopen |
+| Idle stdio reception | Transport | Implemented in `NativeMcpClient`; graph adapter integration pending | Client session tests: notification observed before next foreground request |
 | HTTP POST JSON/SSE | Transport | Implemented for outstanding RPCs | Transport tests, MCP E2E |
-| HTTP GET SSE, resumability, retry, expiry/new epoch | Optional server stream; transport | Pending | 405 fallback, fragmented/priming events, no effectful POST replay |
+| HTTP GET SSE, resumability, retry, expiry/new epoch | Optional server stream; transport | Implemented in `NativeMcpClient`; durable replay tracking pending | Client session tests: 405 fallback, fragmented/priming events, no effectful POST replay |
 | ping | Bidirectional base utility | Reverse ping implemented during exchanges | Transport tests |
 | notifications/cancelled | Bidirectional base utility | Outgoing cancellation implemented | MCP E2E; incoming callback cancellation pending |
 | sampling/createMessage | Client sampling | Pending | Nested model work, text/image/audio, limits, durable result replay |

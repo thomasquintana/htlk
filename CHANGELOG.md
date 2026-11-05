@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Persistent native MCP client sessions with bounded idle event delivery, reverse
+  ping, concurrent request correlation, cooperative cancellation, stdio/Streamable
+  HTTP transports, SSE resumption, explicit session epochs, and observable overflow.
 - Validated MCP client service configuration, finite session limits, distinct
   host/run owner identities, callback context, and protected structured RPC errors.
   These types form the bidirectional client foundation; native transport integration

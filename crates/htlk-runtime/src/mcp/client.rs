@@ -19,6 +19,27 @@ use std::{collections::BTreeMap, fmt, future::Future, pin::Pin, sync::Arc, time:
 /// The sole protocol version implemented by this client profile.
 pub const MCP_VERSION: &str = "2025-11-25";
 
+mod session;
+pub use session::{McpClientReply, McpClientSession, NativeMcpClient};
+
+/// Observable reason a session stopped receiving. This remains inspectable even
+/// when the application event queue is full or its consumer is stalled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpSessionEnd {
+    /// Explicit owner close, shutdown, or lifetime cancellation.
+    Cancelled,
+    /// Transport EOF or I/O failure.
+    Transport,
+    /// Invalid or over-budget protocol ingress.
+    Protocol,
+    /// Event count or retained-byte budget exhausted.
+    EventOverflow,
+    /// Event consumer failed or exceeded its delivery deadline.
+    EventHandler,
+    /// Server invalidated the HTTP session; reopening requires a new epoch.
+    SessionExpired,
+}
+
 /// Namespace for an authenticated session owner. Equal names in different
 /// namespaces never identify the same owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,6 +259,8 @@ pub struct McpClientLimits {
     pub retained_bytes: usize,
     /// Cumulative admitted requests per epoch, bounding ID/replay retention.
     pub requests_per_session: usize,
+    /// Maximum received frames per epoch, bounding even ignored notification work.
+    pub messages_per_session: usize,
     /// Maximum nested callback depth.
     pub callback_depth: usize,
     /// Maximum pages inspected in one catalog enumeration.
@@ -258,6 +281,7 @@ impl Default for McpClientLimits {
             frame_bytes: 2 * 1024 * 1024,
             retained_bytes: 16 * 1024 * 1024,
             requests_per_session: 4096,
+            messages_per_session: 65_536,
             callback_depth: 8,
             catalog_pages: 128,
             catalog_items: 4096,
@@ -279,6 +303,7 @@ impl McpClientLimits {
             self.frame_bytes,
             self.retained_bytes,
             self.requests_per_session,
+            self.messages_per_session,
             self.callback_depth,
             self.catalog_pages,
             self.catalog_items,
@@ -287,6 +312,7 @@ impl McpClientLimits {
             .into_iter()
             .any(|n| n == 0 || n > isize::MAX as usize)
             || self.retained_bytes < self.frame_bytes
+            || self.retained_bytes > u32::MAX as usize
             || self.requests_per_session < self.pending_requests
             || self.callbacks > self.requests_per_session
             || [self.pending_requests, self.callbacks, self.events]
