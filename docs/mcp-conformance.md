@@ -41,7 +41,7 @@ coverage and custom host implementations are distinct.
 | MCP OAuth discovery, PKCE, resource indicators, refresh/scope | Optional HTTP authorization profile | Pending | Local protected-server/authorization-server integration |
 | Preregistration / Client ID Metadata Documents / dynamic registration | Authorization mechanism support | Pending assessment | Each mechanism individually documented and tested |
 | Durable callback accounting, addressed host replies | Runtime authority, deadlines and budgets | Pending | Crash points, duplicate replies, fencing, one-worker liveness |
-| Protected raw evidence | Current host authorization | Tool attempts implemented; other categories pending | [Evidence tests](../tests/runtime_mcp_results.rs) |
+| Protected raw evidence | Current host authorization | Tool/prompt/resource/template attempts implemented; client interactions pending | [Tool evidence tests](../tests/runtime_mcp_results.rs), [non-tool evidence tests](../tests/runtime_mcp_data.rs) |
 
 Deprecated HTTP+SSE transport and protocol versions other than 2025-11-25 are outside
 this version profile. SSE above means Streamable HTTP. Independently versioned MCP

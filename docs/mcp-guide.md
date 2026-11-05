@@ -254,11 +254,15 @@ digests, assessments, extraction state, candidate/span references, failure, deli
 effect uncertainty, and protection. Detailed diagnostics share the pinned allowance;
 truncation is explicit. Recovery checks this saved decision without provider recall.
 
-`Runtime::inspect_mcp_evidence` selects one exact run/invocation/attempt and checks
+`Runtime::inspect_mcp_evidence` selects one exact tool, prompt, resource, or template
+run/invocation/attempt and reports its `McpEvidenceKind`. It checks
 current node/evidence authorization and all source/response/decision/outcome labels.
 It returns original failure and normalization, raw digest and authorized bytes,
 truncation flags, reconstructed envelope, separate reconstruction failure, response
 receipt, and effect uncertainty. It performs no dispatch, retry, publication, or adoption.
+Tool normalization is available only for tool attempts. Prompt/resource inspection
+returns the same protected raw-byte/digest/delivery evidence and never reads tool
+normalization checkpoints or invokes a reconstruction engine.
 
 The positive byte ceiling cannot exceed the runtime codec ceiling. A truncated raw
 prefix is not a complete result to parse or salvage. The allowance bounds returned

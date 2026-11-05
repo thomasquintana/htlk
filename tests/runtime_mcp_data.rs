@@ -134,7 +134,31 @@ fn resources_preserve_mixed_order_and_authorize_each_uri_while_prompts_remain_me
             for _ in 0..2000{if let Ok(view)=runtime.inspect_run(&caller,&run.run_id).await && view.header.status.is_terminal(){done=Some(view);break}actix::clock::sleep(Duration::from_millis(2)).await;}
             let view=done.expect("data graph stalled");assert_eq!(view.header.status,if deny_extra_uri{RunStatus::Failed}else{RunStatus::Succeeded});
             let requests=adapter.requests.lock().unwrap().clone();assert_eq!(requests.len(),3);
-            assert!(requests.iter().any(|r|matches!(&r.params,Value::Map(m) if m.get("uri")==Some(&Value::Text("context://topics/a%20b".into())))));
+             assert!(requests.iter().any(|r|matches!(&r.params,Value::Map(m) if m.get("uri")==Some(&Value::Text("context://topics/a%20b".into())))));
+             for (name, kind) in [
+                 ("fixed", htlk::runtime::execution::McpEvidenceKind::Resource),
+                 ("expanded", htlk::runtime::execution::McpEvidenceKind::ResourceTemplate),
+                 ("prompt", htlk::runtime::execution::McpEvidenceKind::Prompt),
+             ] {
+                 let invocation = htlk::runtime::identity::InvocationId::new(view.header.root_scope, &name.parse().unwrap(), &Limits::default()).unwrap();
+                 let attempt = htlk::runtime::identity::AttemptId::new(invocation, 1, &Limits::default()).unwrap();
+                 let evidence = runtime.inspect_mcp_evidence(&caller, &run.run_id, invocation, attempt, 4096).await.unwrap();
+                 assert_eq!(evidence.kind, kind);
+                 assert!(evidence.response_received);
+                 assert!(!evidence.raw_truncated);
+                 assert!(evidence.normalized.is_none());
+                 assert!(evidence.recorded_normalization.is_none());
+                 assert!(evidence.reconstruction_failure.is_none());
+                 let raw = evidence.raw_response.unwrap();
+                 assert_eq!(evidence.raw_digest, Some(htlk_executable::digest::hash_bytes(&raw)));
+                 if name == "prompt" { assert_eq!(raw, PROMPT); }
+                 else { assert!(std::str::from_utf8(&raw).unwrap().contains("context://extra")); }
+                 let prefix = runtime.inspect_mcp_evidence(&caller, &run.run_id, invocation, attempt, 1).await.unwrap();
+                 assert_eq!(prefix.raw_response.as_deref(), Some(&raw[..1]));
+                 assert!(prefix.raw_truncated);
+                 assert!(!prefix.normalized_truncated);
+             }
+             assert_eq!(adapter.requests.lock().unwrap().len(), 3, "evidence inspection cannot dispatch");
             if !deny_extra_uri{
                 let Value::Map(outputs)=view.outputs.unwrap()else{panic!()};
                 for (port,entry) in outputs.iter(){

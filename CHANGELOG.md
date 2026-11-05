@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Protected MCP evidence inspection now includes prompt, resource, and template
+  attempts, with explicit operation kind, bounded original bytes, and delivery
+  evidence; tool-only normalization and inference remain independently restricted.
 - Run-owned native MCP operations use the same persistent dispatcher as host-owned
   sessions, without exclusive reader leases. Per-attempt ingress limits, exact
   deduplication keys, cooperative stop hints, and sticky ambiguous-session failures
