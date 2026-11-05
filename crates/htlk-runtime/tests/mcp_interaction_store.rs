@@ -554,3 +554,113 @@ fn typed_request_ids_conflicts_deadlines_and_principal_isolation_are_independent
         assert!(store.mcp_journal(&owner, 0, 0).await.is_err());
     });
 }
+
+#[test]
+fn run_epochs_require_actual_run_authority_and_cannot_use_host_work_budgets() {
+    use htlk_runtime::{
+        identity::{RunId, ScopeInstanceId},
+        mcp::client::{McpOwner, McpOwnerScope},
+        store::*,
+    };
+    actix::System::new().block_on(async {
+        let limits = Limits::default();
+        let store = SqliteStore::in_memory(StoreConfig::default())
+            .await
+            .unwrap();
+        let run = RunId::new("run-owner".into(), &limits).unwrap();
+        let root = ScopeInstanceId::root(&run, &limits).unwrap();
+        store
+            .create_run(RunSeed {
+                run_id: run.clone(),
+                fingerprint: hash_bytes(b"graph"),
+                root_scope: root,
+                actor: "alice".into(),
+                causation: "test".into(),
+                timestamp_ms: 1,
+            })
+            .await
+            .unwrap();
+        let lease = store.acquire(&run, "worker".into(), 1, 100).await.unwrap();
+        store
+            .commit(
+                &lease,
+                Transition {
+                    context: TransitionContext {
+                        command_id: "scope".into(),
+                        actor: "worker".into(),
+                        causation: "test".into(),
+                        timestamp_ms: 2,
+                    },
+                    writes: vec![RecordWrite {
+                        key: RecordKey {
+                            family: RecordFamily::Scope,
+                            id: root.to_string(),
+                        },
+                        expected_revision: None,
+                        final_record: false,
+                        payload: htlk_executable::JsonDocument::new(
+                            br#"{"principal":"alice"}"#,
+                            &limits,
+                        )
+                        .unwrap()
+                        .value()
+                        .clone(),
+                    }],
+                    next_status: None,
+                    root: None,
+                    expected_fingerprint: None,
+                },
+            )
+            .await
+            .unwrap();
+        let owner = McpOwner::new(
+            host("alice"),
+            McpOwnerScope::Run(run.clone()),
+            lease.fence(),
+            &limits,
+        )
+        .unwrap();
+        let wrong =
+            McpOwner::new(host("bob"), McpOwnerScope::Run(run), lease.fence(), &limits).unwrap();
+        assert_eq!(
+            store
+                .open_mcp_epoch(&wrong, hash_bytes(b"server"), 3)
+                .await
+                .unwrap_err(),
+            StoreError::Fenced
+        );
+        let session = store
+            .open_mcp_epoch(&owner, hash_bytes(b"server"), 3)
+            .await
+            .unwrap();
+        store.renew(&lease, 4, 200).await.unwrap();
+        store.validate_mcp_owner(&owner, 150).await.unwrap();
+        assert_eq!(
+            store
+                .receive_mcp_interaction(
+                    &owner,
+                    session.id,
+                    request("1"),
+                    SecurityLabels::default(),
+                    190,
+                    151,
+                    8
+                )
+                .await
+                .unwrap_err(),
+            StoreError::Invalid
+        );
+        assert_eq!(
+            store.mcp_owner_usage(&owner).await.unwrap_err(),
+            StoreError::Invalid
+        );
+        assert_eq!(
+            store.release_mcp_owner(&owner, 152).await.unwrap_err(),
+            StoreError::Invalid
+        );
+        assert_eq!(
+            store.validate_mcp_owner(&owner, 200).await.unwrap_err(),
+            StoreError::Fenced
+        );
+    });
+}

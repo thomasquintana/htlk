@@ -151,6 +151,61 @@ impl fmt::Debug for McpLateReply {
 }
 
 impl SqliteStore {
+    /// Checks current host/run ownership independently of local transport state.
+    /// Run owners are checked against the actual run fence and lifetime.
+    ///
+    /// # Errors
+    /// Returns missing/stale authority or storage failure.
+    pub async fn validate_mcp_owner(
+        &self,
+        owner: &McpOwner,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        timestamp(now_ms)?;
+        let owner = owner.clone();
+        self.connection
+            .call(move |db| -> Result<_, StoreError> {
+                let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                authority(&tx, &owner, now_ms)?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::from_worker)
+    }
+
+    /// Releases an explicitly owned host namespace. Outstanding work and spent
+    /// calls remain retained; a later acquisition receives a higher generation.
+    ///
+    /// # Errors
+    /// Returns stale or run-owned authority, or storage failure.
+    pub async fn release_mcp_owner(&self, owner: &McpOwner, now_ms: i64) -> Result<(), StoreError> {
+        host_owner(owner)?;
+        timestamp(now_ms)?;
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        self.connection
+            .call(move |db| -> Result<_, StoreError> {
+                let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let now = authority(&tx, &owner, now_ms)?;
+                tx.execute(
+                    "UPDATE mcp_owners SET expires_ms=?2 WHERE owner_key=?1",
+                    params![owner.key().to_string(), now],
+                )?;
+                fact(
+                    &tx,
+                    &owner,
+                    None,
+                    "owner_released",
+                    now,
+                    &Value::Null,
+                    &limits,
+                )?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+            .map_err(StoreError::from_worker)
+    }
     /// Acquires an unowned/expired host-session namespace. The generation increases;
     /// existing spent calls and unresolved reservations do not reset on takeover.
     ///
@@ -205,6 +260,7 @@ impl SqliteStore {
         now_ms: i64,
         expires_ms: i64,
     ) -> Result<(), StoreError> {
+        host_owner(owner)?;
         check_lease_times(now_ms, expires_ms)?;
         let (owner, limits) = (owner.clone(), self.config.limits.clone());
         self.connection
@@ -254,6 +310,7 @@ impl SqliteStore {
         self.connection
             .call(move |db| -> Result<_, StoreError> {
                 let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                register_run_owner(&tx, &owner, now_ms, &limits)?;
                 let now = authority(&tx, &owner, now_ms)?;
                 let namespace: String = tx.query_row(
                     "SELECT namespace FROM runtime_identity WHERE singleton=1",
@@ -360,6 +417,7 @@ impl SqliteStore {
         now_ms: i64,
         maximum_records: usize,
     ) -> Result<McpStoredInteraction, StoreError> {
+        host_owner(owner)?;
         check_lease_times(now_ms, deadline_ms)?;
         if maximum_records == 0
             || maximum_records > i64::MAX as usize
@@ -432,6 +490,7 @@ impl SqliteStore {
         maximum_calls: u64,
         maximum_concurrency: u64,
     ) -> Result<McpWorkClaim, StoreError> {
+        host_owner(owner)?;
         timestamp(now_ms)?;
         let (owner, limits) = (owner.clone(), self.config.limits.clone());
         self.connection.call(move |db| -> Result<_, StoreError> {
@@ -472,6 +531,7 @@ impl SqliteStore {
         now_ms: i64,
     ) -> Result<McpStoredInteraction, StoreError> {
         timestamp(now_ms)?;
+        host_owner(owner)?;
         self.check_text(responder.principal())?;
         self.check_text(idempotency_key)?;
         if idempotency_key.is_empty() || reply.len() > self.config.limits.max_document_bytes / 8 {
@@ -605,6 +665,7 @@ impl SqliteStore {
     /// # Errors
     /// Returns missing owner, corrupt counters, or storage failure.
     pub async fn mcp_owner_usage(&self, owner: &McpOwner) -> Result<McpOwnerUsage, StoreError> {
+        host_owner(owner)?;
         let key = owner.key().to_string();
         self.connection
             .call(move |db| -> Result<_, StoreError> {
@@ -778,16 +839,27 @@ impl SqliteStore {
 }
 
 fn authority(db: &Db, owner: &McpOwner, observed: i64) -> Result<i64, StoreError> {
-    let McpOwnerScope::Host(name) = owner.scope() else {
-        return Err(StoreError::Invalid);
+    let name = match owner.scope() {
+        McpOwnerScope::Host(name) => name.as_str(),
+        McpOwnerScope::Run(run) => run.as_str(),
     };
     let row: (String, String, i64, i64, i64) = db.query_row("SELECT principal,name,generation,expires_ms,last_time_ms FROM mcp_owners WHERE owner_key=?1", [owner.key().to_string()],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?.ok_or(StoreError::Missing)?;
-    let now = observed.max(row.4);
+    let mut now = observed.max(row.4);
+    let expiry = if let McpOwnerScope::Run(run) = owner.scope() {
+        let header = load_header(db, run)?;
+        now = now.max(header.last_time_ms);
+        if header.fence != owner.generation() || header.status.is_terminal() {
+            return Err(StoreError::Fenced);
+        }
+        header.expires_at_ms.ok_or(StoreError::Fenced)?
+    } else {
+        row.3
+    };
     if row.0 != owner.host().principal()
-        || row.1 != *name
+        || row.1 != name
         || row.2 != owner.generation()
-        || now >= row.3
+        || now >= expiry
     {
         return Err(StoreError::Fenced);
     }
@@ -796,6 +868,59 @@ fn authority(db: &Db, owner: &McpOwner, observed: i64) -> Result<i64, StoreError
         params![owner.key().to_string(), now],
     )?;
     Ok(now)
+}
+fn host_owner(owner: &McpOwner) -> Result<(), StoreError> {
+    if matches!(owner.scope(), McpOwnerScope::Host(_)) {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid)
+    }
+}
+fn register_run_owner(
+    db: &Db,
+    owner: &McpOwner,
+    observed: i64,
+    limits: &Limits,
+) -> Result<(), StoreError> {
+    let McpOwnerScope::Run(run) = owner.scope() else {
+        return Ok(());
+    };
+    let header = load_header(db, run)?;
+    let now = observed.max(header.last_time_ms);
+    if header.fence != owner.generation()
+        || header.status.is_terminal()
+        || header.expires_at_ms.is_none_or(|expiry| now >= expiry)
+    {
+        return Err(StoreError::Fenced);
+    }
+    let mut statement = db.prepare(
+        "SELECT payload FROM records WHERE run_id=?1 AND family='scope' AND record_id=?2",
+    )?;
+    let mut rows = statement.query(params![run.as_str(), header.root_scope.to_string()])?;
+    let row = rows.next()?.ok_or(StoreError::Missing)?;
+    let scope = cbor::decode(
+        row.get_ref(0)?.as_blob().map_err(|_| StoreError::Corrupt)?,
+        limits,
+    )?;
+    if map(&scope)?.get("principal") != Some(&Value::Text(owner.host().principal().into())) {
+        return Err(StoreError::Fenced);
+    }
+    drop(rows);
+    drop(statement);
+    let previous: Option<i64> = db
+        .query_row(
+            "SELECT generation FROM mcp_owners WHERE owner_key=?1",
+            [owner.key().to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if previous.is_some_and(|generation| generation > owner.generation()) {
+        return Err(StoreError::Fenced);
+    }
+    db.execute("INSERT INTO mcp_owners(owner_key,principal,name,generation,expires_ms,last_time_ms) VALUES(?1,?2,?3,?4,?5,?6)
+        ON CONFLICT(owner_key) DO UPDATE SET generation=excluded.generation,expires_ms=excluded.expires_ms,last_time_ms=max(last_time_ms,excluded.last_time_ms)",
+        params![owner.key().to_string(), owner.host().principal(), run.as_str(), owner.generation(), header.expires_at_ms, now])?;
+    Ok(())
 }
 fn session_authority(db: &Db, owner: &McpOwner, id: Digest, open: bool) -> Result<(), StoreError> {
     let row: (String, i64, bool) = db

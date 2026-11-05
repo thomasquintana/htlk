@@ -35,6 +35,7 @@ pub(super) struct Wire {
     pub closed: tokio::sync::watch::Sender<bool>,
     pub ended: tokio::sync::watch::Sender<Option<McpSessionEnd>>,
     pub server_events: tokio::sync::watch::Sender<Option<bool>>,
+    pub stored_session: Option<crate::store::McpStoredSession>,
     config: Arc<McpClientConfig>,
     limits: Limits,
     transport: Transport,
@@ -57,6 +58,7 @@ impl Wire {
         config: Arc<McpClientConfig>,
         mut limits: Limits,
         stop: Arc<McpCancellation>,
+        stored_session: Option<crate::store::McpStoredSession>,
     ) -> Result<Arc<Self>, RuntimeFailure> {
         limits.max_document_bytes = limits.max_document_bytes.min(config.limits.frame_bytes);
         let (transport, output) = match endpoint {
@@ -104,6 +106,7 @@ impl Wire {
             epoch,
             initialization: OnceLock::new(),
             stop,
+            stored_session,
             closed: tokio::sync::watch::channel(false).0,
             ended: tokio::sync::watch::channel(None).0,
             server_events: tokio::sync::watch::channel(if output.is_some() {
@@ -151,6 +154,26 @@ impl Wire {
         tokio::spawn(async move {
             consumer.deliver_events(receiver).await;
         });
+        if wire.config.persistence.is_some() {
+            let watcher = wire.clone();
+            tokio::spawn(async move {
+                while !watcher.stop.is_cancelled() {
+                    let checked = tokio::select! {
+                        biased;
+                        _ = watcher.stop.cancelled() => break,
+                        result = watcher.check_owner() => result,
+                    };
+                    if checked.is_err() {
+                        watcher.end(McpSessionEnd::Cancelled);
+                        break;
+                    }
+                    tokio::select! {
+                        _ = watcher.stop.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                    }
+                }
+            });
+        }
         Ok(wire)
     }
 
@@ -259,6 +282,20 @@ impl Wire {
         {
             return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Input);
         }
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(request.timeout_ms);
+        let checked = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(fail(FailureCode::Cancelled)),
+            _ = self.stop.cancelled() => Err(fail(FailureCode::Cancelled)),
+            result = tokio::time::timeout_at(deadline, self.check_owner()) => result.unwrap_or_else(|_| Err(fail(FailureCode::McpTimeout))),
+        };
+        if let Err(error) = checked {
+            self.end(McpSessionEnd::Cancelled);
+            return McpClientReply {
+                delivery: McpDelivery::NotSent,
+                result: Err(error),
+            };
+        }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         if id > self.config.limits.requests_per_session as u64 || id > i64::MAX as u64 {
             return McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTransport);
@@ -299,7 +336,6 @@ impl Wire {
                 },
             );
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(request.timeout_ms);
         let result = tokio::time::timeout_at(deadline, async {
             let exchange = async {
                 match &self.transport {
@@ -400,6 +436,12 @@ impl Wire {
             }
         });
         self.stop.cancel();
+    }
+    async fn check_owner(&self) -> Result<(), RuntimeFailure> {
+        match &self.config.persistence {
+            Some(persistence) => persistence.validate(&self.owner).await,
+            None => Ok(()),
+        }
     }
 
     async fn send(&self, message: Value) -> Result<(), RuntimeFailure> {
@@ -597,11 +639,19 @@ impl Wire {
             let Some(handler) = &self.config.events else {
                 continue;
             };
+            if self.check_owner().await.is_err() {
+                self.end(McpSessionEnd::Cancelled);
+                break;
+            }
             let _reservation = event.2;
             let sequence = self.event_sequence.fetch_add(1, Ordering::Relaxed);
             let identity = Value::Array(vec![
                 Value::Text("htlk.mcp-event/1".into()),
                 Value::Text(self.owner.key().to_string()),
+                Value::Integer(self.owner.generation()),
+                self.stored_session
+                    .as_ref()
+                    .map_or(Value::Null, |session| Value::Text(session.id.to_string())),
                 Value::Integer(self.epoch as i64),
                 Value::Integer(sequence as i64),
             ]);
@@ -613,6 +663,7 @@ impl Wire {
                 owner: self.owner.clone(),
                 server: self.server.clone(),
                 epoch: self.epoch,
+                session_id: self.stored_session.as_ref().map(|session| session.id),
                 event_id: identity.digest(),
                 method: event.0,
                 params: event.1,
@@ -660,6 +711,17 @@ impl Wire {
             }
         })
         .await;
+        if let (Some(persistence), Some(session)) = (&self.config.persistence, &self.stored_session)
+            && let Ok(now) = persistence.clock.now_ms()
+        {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(500),
+                persistence
+                    .store
+                    .close_mcp_epoch(&self.owner, session.id, now),
+            )
+            .await;
+        }
         self.closed.send_replace(true);
     }
 }

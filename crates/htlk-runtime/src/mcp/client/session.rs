@@ -222,6 +222,10 @@ impl McpClientSession {
     pub fn epoch(&self) -> u64 {
         self.wire.epoch
     }
+    /// Durable store-scoped session identity, absent for ephemeral clients.
+    pub fn durable_identity(&self) -> Option<Digest> {
+        self.wire.stored_session.as_ref().map(|session| session.id)
+    }
     /// Session termination reason, observable independently of the event queue.
     pub fn ended(&self) -> Option<McpSessionEnd> {
         *self.wire.ended.borrow()
@@ -370,17 +374,53 @@ async fn open(
     };
     let result = slot
         .get_or_init(|| async {
-            let epoch = epochs.fetch_add(1, Ordering::Relaxed);
-            let wire = Wire::start(
-                owner,
+            let stored_session = if let Some(persistence) = &config.persistence {
+                Some(
+                    persistence
+                        .store
+                        .open_mcp_epoch(
+                            &owner,
+                            server
+                                .digest(&limits)
+                                .map_err(|_| fail(FailureCode::McpIdentity))?,
+                            persistence.clock.now_ms()?,
+                        )
+                        .await
+                        .map_err(|e| fail(e.code()))?,
+                )
+            } else {
+                None
+            };
+            let epoch = stored_session.as_ref().map_or_else(
+                || epochs.fetch_add(1, Ordering::Relaxed),
+                |session| session.epoch,
+            );
+            let started = Wire::start(
+                owner.clone(),
                 server,
                 epoch,
                 endpoint,
-                config,
+                config.clone(),
                 limits,
                 token.clone(),
+                stored_session.clone(),
             )
-            .await?;
+            .await;
+            let wire = match started {
+                Ok(wire) => wire,
+                Err(error) => {
+                    if let (Some(persistence), Some(session)) =
+                        (&config.persistence, stored_session)
+                        && let Ok(now) = persistence.clock.now_ms()
+                    {
+                        let _ = persistence
+                            .store
+                            .close_mcp_epoch(&owner, session.id, now)
+                            .await;
+                    }
+                    return Err(error);
+                }
+            };
             match wire.initialize().await {
                 Ok(()) => Ok(wire),
                 Err(error) => {

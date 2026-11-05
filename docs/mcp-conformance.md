@@ -14,7 +14,7 @@ coverage and custom host implementations are distinct.
 | resources/templates/list, expanded resources/read | Server resources | Selected template + read implemented | MCP E2E |
 | Complete four-category catalog API | Server category capabilities | Pending | All-page completion, bounds, repeated cursor, no effect dispatch |
 | Host services and derived client capabilities | Installed service + host policy | Pending | Invalid combinations cannot initialize |
-| Host-owned sessions | Authenticated owner/generation | Process-local `NativeMcpClient` implemented; durable ownership pending | [Client session tests](../crates/htlk-runtime/tests/mcp_client_sessions.rs); cross-reactor lifetime, owner isolation, explicit reopen |
+| Host-owned sessions | Authenticated owner/generation | Implemented with optional durable ownership/epochs through `McpClientPersistence` | [Client session tests](../crates/htlk-runtime/tests/mcp_client_sessions.rs), [interaction store tests](../crates/htlk-runtime/tests/mcp_interaction_store.rs); restart identity, expiry, isolation, explicit reopen |
 | Idle stdio reception | Transport | Implemented in the shared native client and graph adapter dispatcher | Client session tests: notification observed before next foreground request |
 | HTTP POST JSON/SSE | Transport | Implemented for outstanding RPCs | Transport tests, MCP E2E |
 | HTTP GET SSE, resumability, retry, expiry/new epoch | Optional server stream; transport | Implemented in `NativeMcpClient`; durable replay tracking pending | Client session tests: 405 fallback, fragmented/priming events, no effectful POST replay |

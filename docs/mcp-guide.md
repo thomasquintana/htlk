@@ -55,9 +55,15 @@ recreation belong in explicit graph operations supported by the external service
 For host-owned discovery/monitoring, `mcp::client::NativeMcpClient` provides explicit
 open, inspection, close, and shutdown. `McpOwner` distinguishes host and run
 namespaces and principal/generation identity. Explicitly reopening a closed host
-session creates a new epoch; old handles stay closed. These ownership registries
-are currently process-local; see the [conformance inventory](mcp-conformance.md)
-for durable-interaction implementation status.
+session creates a new epoch; old handles stay closed. `McpClientPersistence`, installed
+through `McpClientConfig::with_persistence`, retains owner leases and store-scoped
+session identities. Acquire/renew/release host ownership explicitly through that
+service. Run-owned persisted sessions independently check the actual run principal,
+fence and lease; they cannot spend host-only callback budgets. Both outgoing requests
+and event delivery recheck durable ownership. Transport handles remain process-local,
+and restarting a transport owner allocates a fresh durable epoch. Without configured
+persistence the client uses ephemeral ownership. See the
+[conformance inventory](mcp-conformance.md) for callback implementation status.
 
 `McpClientConfig` derives client capabilities from installed services and validates
 queue, byte, frame, cumulative-message, and timeout bounds. Native transport startup

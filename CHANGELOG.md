@@ -8,6 +8,10 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Native MCP clients can link durable owner leases and store-scoped session epochs;
+  request/event delivery rechecks ownership and expired leases stop reception.
+  Run sessions verify actual persisted principals and fences without borrowing
+  independent host-work budgets.
 - Transactional host MCP ownership, persistent session epochs, callback work intent,
   saved replies and receipts, delivery facts, cumulative usage, and bounded late
   evidence storage. Private SQLite schema 8 deliberately rejects earlier stores.

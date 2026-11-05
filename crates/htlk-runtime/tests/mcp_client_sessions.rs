@@ -261,6 +261,84 @@ fn http_get_405_does_not_disable_normal_post_requests() {
     });
 }
 
+struct Clock(std::sync::atomic::AtomicI64);
+impl htlk_runtime::clock::CoordinatorClock for Clock {
+    fn now_ms(&self) -> Result<i64, htlk_runtime::failure::RuntimeFailure> {
+        Ok(self.0.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
+#[test]
+fn durable_epochs_survive_transport_owners_and_expired_ownership_prevents_dispatch() {
+    actix::System::new().block_on(async {
+        let store = htlk_runtime::store::SqliteStore::in_memory(Default::default())
+            .await
+            .unwrap();
+        let clock = Arc::new(Clock(std::sync::atomic::AtomicI64::new(10)));
+        let persistence = McpClientPersistence::new(store.clone(), clock.clone());
+        let owner = persistence
+            .acquire_owner(
+                &HostContext::new("alice".into(), &Limits::default()).unwrap(),
+                "workspace",
+                100,
+            )
+            .await
+            .unwrap();
+        let build = || {
+            NativeMcpClient::new(
+                McpClientConfig::new(McpClientLimits::default(), BTreeMap::new(), None)
+                    .unwrap()
+                    .with_persistence(persistence.clone()),
+            )
+            .unwrap()
+        };
+        let first = build();
+        let old = first
+            .open(
+                owner.clone(),
+                server(),
+                endpoint(),
+                Limits::default(),
+                Arc::new(McpCancellation::new()),
+            )
+            .await
+            .unwrap();
+        let old_id = old.durable_identity().unwrap();
+        first.shutdown().await.unwrap();
+        let second = build();
+        let fresh = second
+            .open(
+                owner.clone(),
+                server(),
+                endpoint(),
+                Limits::default(),
+                Arc::new(McpCancellation::new()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(fresh.durable_identity(), Some(old_id));
+        assert!(fresh.epoch() > old.epoch());
+        clock.0.store(110, std::sync::atomic::Ordering::SeqCst);
+        let reply = fresh
+            .request(
+                "tools/call",
+                document(r#"{"name":"url"}"#),
+                Arc::new(McpCancellation::new()),
+            )
+            .await;
+        assert_eq!(reply.delivery, McpDelivery::NotSent);
+        assert!(reply.result.is_err());
+        second.shutdown().await.unwrap();
+        let acquired = persistence
+            .acquire_owner(owner.host(), "workspace", 100)
+            .await
+            .unwrap();
+        assert!(acquired.generation() > owner.generation());
+        persistence.release_owner(&acquired).await.unwrap();
+        assert!(store.validate_mcp_owner(&acquired, 110).await.is_err());
+    });
+}
+
 #[test]
 fn idle_events_and_reverse_ping_arrive_before_any_foreground_call_and_responses_correlate() {
     actix::System::new().block_on(async {

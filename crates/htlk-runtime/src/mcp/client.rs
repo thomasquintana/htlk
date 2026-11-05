@@ -382,6 +382,8 @@ pub struct McpClientEvent {
     pub server: ServerIdentity,
     /// Source transport epoch.
     pub epoch: u64,
+    /// Durable store-scoped session identity when persistence is configured.
+    pub session_id: Option<Digest>,
     /// Locally stable event identity for consumer deduplication.
     pub event_id: Digest,
     /// Protocol method or local lifecycle event name.
@@ -397,6 +399,77 @@ pub trait McpEventHandler: Send + Sync {
     fn receive<'a>(&'a self, event: McpClientEvent) -> McpFuture<'a, ()>;
 }
 
+/// Trusted persistence and clock for durable client ownership and session epochs.
+/// Sharing a run-owned client with a runtime requires that runtime's actual store
+/// and clock. Store access alone is not frontend authorization.
+#[derive(Clone)]
+pub struct McpClientPersistence {
+    store: crate::store::SqliteStore,
+    clock: Arc<dyn crate::clock::CoordinatorClock>,
+}
+impl McpClientPersistence {
+    /// Links the existing trusted store and clock without opening any connection.
+    pub fn new(
+        store: crate::store::SqliteStore,
+        clock: Arc<dyn crate::clock::CoordinatorClock>,
+    ) -> Self {
+        Self { store, clock }
+    }
+    /// Acquires an explicit host-session namespace under the authenticated host.
+    /// Existing live ownership cannot be overwritten, including by the same caller.
+    ///
+    /// # Errors
+    /// Returns active ownership, invalid finite lifetime, or storage/clock failure.
+    pub async fn acquire_owner(
+        &self,
+        context: &HostContext,
+        name: &str,
+        lease_ms: u64,
+    ) -> Result<McpOwner, RuntimeFailure> {
+        let (now, expires) = self.lease_times(lease_ms)?;
+        self.store
+            .acquire_mcp_owner(context, name, now, expires)
+            .await
+            .map_err(|e| fail(e.code()))
+    }
+    /// Renews a live host owner; the generation and outstanding accounting persist.
+    ///
+    /// # Errors
+    /// Returns stale ownership, shortening expiry, or storage/clock failure.
+    pub async fn renew_owner(&self, owner: &McpOwner, lease_ms: u64) -> Result<(), RuntimeFailure> {
+        let (now, expires) = self.lease_times(lease_ms)?;
+        self.store
+            .renew_mcp_owner(owner, now, expires)
+            .await
+            .map_err(|e| fail(e.code()))
+    }
+    /// Releases host ownership after its transports have stopped. Work evidence
+    /// persists; a later acquisition gets a higher generation.
+    ///
+    /// # Errors
+    /// Returns stale/non-host ownership or storage/clock failure.
+    pub async fn release_owner(&self, owner: &McpOwner) -> Result<(), RuntimeFailure> {
+        self.store
+            .release_mcp_owner(owner, self.clock.now_ms()?)
+            .await
+            .map_err(|e| fail(e.code()))
+    }
+    fn lease_times(&self, lease_ms: u64) -> Result<(i64, i64), RuntimeFailure> {
+        super::valid_timeout(lease_ms)?;
+        let now = self.clock.now_ms()?;
+        let expires = now
+            .checked_add(lease_ms as i64)
+            .ok_or_else(|| fail(FailureCode::Profile))?;
+        Ok((now, expires))
+    }
+    async fn validate(&self, owner: &McpOwner) -> Result<(), RuntimeFailure> {
+        self.store
+            .validate_mcp_owner(owner, self.clock.now_ms()?)
+            .await
+            .map_err(|e| fail(e.code()))
+    }
+}
+
 /// Immutable, checked client service configuration. Capabilities cannot be supplied
 /// as arbitrary JSON. Installing services is distinct from enabling them on a live
 /// native transport with its durable interaction journal.
@@ -407,6 +480,7 @@ pub struct McpClientConfig {
     events: Option<Arc<dyn McpEventHandler>>,
     capabilities: JsonDocument,
     listen_for_events: bool,
+    persistence: Option<McpClientPersistence>,
 }
 impl McpClientConfig {
     /// Freezes a checked service registry and derives its protocol capabilities.
@@ -472,6 +546,7 @@ impl McpClientConfig {
             events,
             capabilities,
             listen_for_events: true,
+            persistence: None,
         })
     }
     /// Checked immutable resource bounds.
@@ -495,6 +570,13 @@ impl McpClientConfig {
     /// subscribe to idle events must leave this enabled.
     pub fn with_server_event_stream(mut self, enabled: bool) -> Self {
         self.listen_for_events = enabled;
+        self
+    }
+    /// Uses durable owner leases and store-scoped epoch identities. Host owners
+    /// must first be acquired through this persistence service. Run owners are
+    /// checked against the runtime's actual persisted ownership and principal.
+    pub fn with_persistence(mut self, persistence: McpClientPersistence) -> Self {
+        self.persistence = Some(persistence);
         self
     }
 }
