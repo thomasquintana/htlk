@@ -9,6 +9,7 @@ point, use the [user guide](../docs/user-guide.md).
 | [Compiler specification](compiler-spec.md) | Catalogs, source packages/modules, interface reports, static verification, composition, canonical representation, and identity. |
 | [Runtime specification](runtime-spec.md) | Execution, effects, authorization, persistence, recovery, extension, and stable failures. |
 | [MCP result specification](mcp-spec.md) | Result envelopes, extraction, assessments, and schema inference/adoption. |
+| [MCP client specification](mcp-client-spec.md) | Bidirectional client services, session ownership, interactions, delivery, and recovery; consult the linked conformance inventory for implementation status. |
 | [EBNF](htlk-ir.ebnf) | Machine-readable source grammar, checked against the language reference. |
 | [Executable CDDL](htlk-executable.cddl) | Machine-readable portable record shapes; semantic verification is additionally required. |
 
