@@ -4,6 +4,8 @@
 //! arguments. The expected implementation name/version are explicit identity pins.
 //! Discovery visits all four inventories but never calls tools, gets prompts,
 //! reads resources, expands templates, or adopts compiler contracts.
+//! `--connect-timeout-ms` sets the native client's startup/default timeout; raising
+//! it leaves explicit catalog and subscription budgets at five seconds.
 //!
 //! # Host callback setup
 //!
@@ -52,6 +54,7 @@ use std::{collections::BTreeMap, error::Error, path::Path, sync::Arc, time::Dura
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const PAGE_BYTES: usize = 256 * 1024;
 const RPC_MS: u64 = 5_000;
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const HELP: &str = "Host-owned MCP discovery (protocol 2025-11-25)
 
 Usage:
@@ -62,6 +65,7 @@ NAME and VERSION must match the server's initialize implementation identity.
 Options must precede stdio/http; all remaining stdio arguments go to the child.
 
 Options:
+  --connect-timeout-ms N  Native startup/default timeout: 1000..120000 ms (default: 5000)
   --store PATH         SQLite evidence/intent store (default: in-memory)
   --root FILE_URI      One explicit file:// advisory root (default: no roots)
   --subscribe URI      Monitor this exact resource; never read its content
@@ -82,6 +86,7 @@ struct Options {
     root: Option<String>,
     subscribe: Option<String>,
     watch_seconds: u64,
+    connect_timeout_ms: u64,
     server: ServerIdentity,
     endpoint: McpEndpoint,
 }
@@ -90,8 +95,8 @@ fn input() -> Box<dyn Error> {
     "invalid arguments or host configuration (values redacted); use --help".into()
 }
 
-fn parse() -> Result<Option<Options>> {
-    let mut args = std::env::args_os().skip(1);
+fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Option<Options>> {
+    let mut args = args.into_iter();
     let mut flags = BTreeMap::new();
     let transport = loop {
         let arg = args.next().ok_or_else(input)?;
@@ -104,7 +109,12 @@ fn parse() -> Result<Option<Options>> {
         }
         if !matches!(
             arg.as_str(),
-            "--store" | "--root" | "--subscribe" | "--watch-seconds" | "--bearer-env"
+            "--store"
+                | "--root"
+                | "--subscribe"
+                | "--watch-seconds"
+                | "--bearer-env"
+                | "--connect-timeout-ms"
         ) {
             return Err(input());
         }
@@ -124,6 +134,14 @@ fn parse() -> Result<Option<Options>> {
         return Err(input());
     }
     let limits = Limits::default();
+    let connect_timeout_ms = flags
+        .remove("--connect-timeout-ms")
+        .map(|n| n.parse::<u64>().map_err(|_| input()))
+        .transpose()?
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
+    if !(1_000..=120_000).contains(&connect_timeout_ms) {
+        return Err(input());
+    }
     let watch_seconds = flags
         .remove("--watch-seconds")
         .map(|n| n.parse::<u64>().map_err(|_| input()))
@@ -191,6 +209,7 @@ fn parse() -> Result<Option<Options>> {
         root,
         subscribe: flags.remove("--subscribe"),
         watch_seconds,
+        connect_timeout_ms,
         server: ServerIdentity::new(
             "host-example".into(),
             if transport == "stdio" {
@@ -454,7 +473,7 @@ async fn run(options: Options) -> Result<()> {
             callback_depth: 4,
             catalog_pages: 16,
             catalog_items: 512,
-            timeout_ms: RPC_MS,
+            timeout_ms: options.connect_timeout_ms,
             cancellation_grace_ms: 100,
         },
         BTreeMap::from([
@@ -473,13 +492,14 @@ async fn run(options: Options) -> Result<()> {
     let host = McpInteractionHost::new(config.clone())?;
     let client = NativeMcpClient::new(config)?;
     let actor = HostContext::new("local-operator".into(), &limits)?;
-    // Fixed upper bounds fit in this lease; production hosts renew long-lived owners.
+    // Covers at most 120s startup + 20s discovery + 60s watch + bounded
+    // subscribe/unsubscribe and cleanup, with margin. Long-lived hosts renew leases.
     let subscriptions = McpSubscriptionHost::new(
         persistence.clone(),
         McpSubscriptionLimits::new(8, 8, 32, 1024 * 1024, 2)?,
     );
     let owner = persistence
-        .acquire_owner(&actor, "catalog-monitor", 180_000)
+        .acquire_owner(&actor, "catalog-monitor", 300_000)
         .await?;
     let mut consumer = actix::spawn(consume_events(receive, host));
     let result = async {
@@ -531,7 +551,7 @@ async fn run(options: Options) -> Result<()> {
 }
 
 fn main() -> std::process::ExitCode {
-    let result = match parse() {
+    let result = match parse(std::env::args_os().skip(1)) {
         Ok(None) => {
             println!("{HELP}");
             return std::process::ExitCode::SUCCESS;
@@ -550,5 +570,214 @@ fn main() -> std::process::ExitCode {
             );
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{ffi::OsString, path::PathBuf};
+
+    fn arguments(timeout: Option<&str>) -> Vec<OsString> {
+        let mut args = Vec::new();
+        if let Some(timeout) = timeout {
+            args.extend(["--connect-timeout-ms".into(), timeout.into()]);
+        }
+        args.extend(["stdio", "timeout-peer", "1", "/unused-server"].map(OsString::from));
+        args
+    }
+
+    #[test]
+    fn startup_timeout_cli_default_and_inclusive_bounds() {
+        assert_eq!(
+            parse(arguments(None)).unwrap().unwrap().connect_timeout_ms,
+            5000
+        );
+        for (text, expected) in [("1000", 1000), ("30000", 30000), ("120000", 120000)] {
+            assert_eq!(
+                parse(arguments(Some(text)))
+                    .unwrap()
+                    .unwrap()
+                    .connect_timeout_ms,
+                expected
+            );
+        }
+        assert!(parse([OsString::from("--help")]).unwrap().is_none());
+    }
+
+    #[test]
+    fn invalid_startup_timeout_arguments_are_redacted() {
+        for timeout in [
+            "0",
+            "999",
+            "120001",
+            "-1",
+            "1.5",
+            "18446744073709551616",
+            "private-secret",
+            "",
+        ] {
+            let error = parse(arguments(Some(timeout)))
+                .err()
+                .expect("invalid timeout");
+            assert_eq!(error.to_string(), input().to_string());
+        }
+        let missing = parse([OsString::from("--connect-timeout-ms")])
+            .err()
+            .unwrap();
+        assert_eq!(missing.to_string(), input().to_string());
+        let mut duplicate = vec!["--connect-timeout-ms".into(), "30000".into()];
+        duplicate.extend(arguments(Some("private-secret")));
+        assert_eq!(
+            parse(duplicate).err().unwrap().to_string(),
+            input().to_string()
+        );
+    }
+
+    // This independent peer records actual wire methods rather than inferring
+    // discovery/no-dispatch from the Rust client's result. Delays exercise the
+    // example's parsed configuration through its real open/browse/close path.
+    const DELAYED_PEER: &str = r#"
+        const assert = require('node:assert/strict');
+        const {appendFileSync} = require('node:fs');
+        const {createInterface} = require('node:readline');
+        const [log, initializeDelay, catalogDelay] = process.argv.slice(1);
+        const reply = (r, result) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result})+'\n');
+        createInterface({input:process.stdin}).on('line', line => {
+            const r = JSON.parse(line);
+            appendFileSync(log, r.method+'\n');
+            if (r.method === 'initialize') {
+                assert.equal(r.params.capabilities.sampling, undefined);
+                setTimeout(() => reply(r, {protocolVersion:'2025-11-25',serverInfo:{name:'timeout-peer',version:'1'},capabilities:{tools:{},prompts:{},resources:{}}}), Number(initializeDelay));
+            } else if (r.method === 'tools/list') {
+                setTimeout(() => reply(r, {tools:[]}), Number(catalogDelay));
+            } else if (r.method === 'prompts/list') reply(r, {prompts:[]});
+            else if (r.method === 'resources/list') reply(r, {resources:[]});
+            else if (r.method === 'resources/templates/list') reply(r, {resourceTemplates:[]});
+            else assert(['notifications/initialized','notifications/cancelled'].includes(r.method), 'Unexpected content/effect method');
+        });
+    "#;
+
+    struct Logs(PathBuf);
+    impl Logs {
+        fn new() -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "htlk-example-timeout-{}-{nonce}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn methods(&self, name: &str) -> Vec<String> {
+            std::fs::read_to_string(self.0.join(name))
+                .unwrap()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+    }
+    impl Drop for Logs {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn delayed_peer(
+        node: &Path,
+        log: &Path,
+        timeout: Option<&str>,
+        initialize_ms: &str,
+        catalog_ms: &str,
+    ) -> Options {
+        let mut args = arguments(timeout);
+        args.pop();
+        args.extend([
+            node.as_os_str().to_owned(),
+            "-e".into(),
+            DELAYED_PEER.into(),
+            log.as_os_str().to_owned(),
+            initialize_ms.into(),
+            catalog_ms.into(),
+        ]);
+        parse(args).unwrap().unwrap()
+    }
+
+    #[test]
+    fn delayed_stdio_startup_uses_cli_timeout_without_extending_catalog_budget() {
+        let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("node"))
+            .find(|path| path.is_absolute() && path.is_file())
+            .expect("Node.js is a repository test prerequisite");
+        let logs = Logs::new();
+        let short = delayed_peer(&node, &logs.0.join("default"), None, "6500", "0");
+        let long = delayed_peer(&node, &logs.0.join("extended"), Some("10000"), "6500", "0");
+        let catalog = delayed_peer(&node, &logs.0.join("catalog"), Some("10000"), "0", "6500");
+        actix::System::new().block_on(async {
+            let (short, long, catalog) = tokio::time::timeout(Duration::from_secs(20), async {
+                tokio::join!(run(short), run(long), run(catalog))
+            })
+            .await
+            .expect("startup, discovery, and cleanup remain bounded");
+            assert_eq!(
+                short
+                    .err()
+                    .unwrap()
+                    .downcast_ref::<RuntimeFailure>()
+                    .unwrap()
+                    .code(),
+                FailureCode::McpTimeout
+            );
+            long.unwrap();
+            assert_eq!(
+                catalog.err().unwrap().to_string(),
+                "catalog discovery is incomplete"
+            );
+        });
+        let default = logs.methods("default");
+        assert_eq!(
+            default
+                .iter()
+                .filter(|method| *method == "initialize")
+                .count(),
+            1
+        );
+        assert!(
+            default
+                .iter()
+                .all(|method| matches!(method.as_str(), "initialize" | "notifications/cancelled"))
+        );
+        assert_eq!(
+            logs.methods("extended"),
+            [
+                "initialize",
+                "notifications/initialized",
+                "tools/list",
+                "prompts/list",
+                "resources/list",
+                "resources/templates/list",
+            ]
+        );
+        let catalog = logs.methods("catalog");
+        assert_eq!(
+            catalog
+                .iter()
+                .filter(|method| *method == "tools/list")
+                .count(),
+            1
+        );
+        assert!(catalog.iter().all(|method| matches!(
+            method.as_str(),
+            "initialize"
+                | "notifications/initialized"
+                | "notifications/cancelled"
+                | "tools/list"
+                | "prompts/list"
+                | "resources/list"
+                | "resources/templates/list"
+        )));
     }
 }

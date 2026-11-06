@@ -44,6 +44,20 @@ without userinfo, query parameters, or fragments. `--help` exits before opening 
 store, spawning a child, or contacting an endpoint; invalid arguments produce a
 fixed diagnostic that excludes argument values.
 
+Initialization defaults to 5,000 ms. Set `--connect-timeout-ms N` before the
+transport to allow a slower server to start; accepted values are 1,000–120,000 ms.
+For example, give a context stdio provider that loads local indexes 30 seconds:
+
+```console
+cargo run -p htlk-runtime --example mcp_client --locked -- --connect-timeout-ms 30000 stdio SERVER_NAME SERVER_VERSION /absolute/path/to/context-server ARG
+```
+
+This sets the native client's startup/default timeout, including host callback
+deadlines. Raising it does not extend the explicit five-second catalog traversal
+and subscription budgets or the 20-second overall discovery deadline. A setting
+below 5,000 ms also lowers those operations' effective ceiling through the native
+client limits. It never retries initialization or dispatches extra operations.
+
 ### Persist intent and receive bounded updates
 
 This invocation uses a SQLite store, exposes one advisory root, and monitors one
@@ -55,13 +69,15 @@ cargo run -p htlk-runtime --example mcp_client --locked -- --store ./mcp-client.
 
 The store defaults to in-memory when `--store` is omitted. A file store retains
 interaction evidence and subscription intent across runs; the example acquires a
-180-second owner lease, opens a fresh transport epoch, and on normal completion
-releases its subscription consumer, closes that exact epoch, shuts down the native
-client, and releases ownership. The parent directory for the store must already
-exist. Reopening does not automatically restore old subscriptions or retry uncertain
-operations. Monitoring a retained URI from an earlier epoch reports `Gap` until an
-explicit restoration command binds that record to the new session. A host building
-continuous monitoring should renew ownership and authorize restoration through the
+300-second owner lease, covering the maximum 120-second startup, 20-second discovery,
+60-second watch, bounded subscription requests and cleanup with margin. It opens a
+fresh transport epoch and, on normal completion, releases its subscription consumer,
+closes that exact epoch, shuts down the native client, and releases ownership. The
+parent directory for the store must already exist. Reopening does not automatically
+restore old subscriptions or retry uncertain operations. Monitoring a retained URI
+from an earlier epoch reports `Gap` until an explicit restoration command binds that
+record to the new session. A host building continuous monitoring should renew
+ownership and authorize restoration through the
 [durable subscription APIs](#durable-resource-monitoring).
 
 Each inventory has a five-second traversal budget, 16-page and 512-item ceilings,
