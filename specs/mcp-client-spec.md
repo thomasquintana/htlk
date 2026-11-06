@@ -101,6 +101,24 @@ model. Request IDs, outboxes, and transport acknowledgements do not establish
 global exactly-once external execution. Ownership transfer preserves stable work
 identity while changing authority. Report unknown usage as unknown, not zero.
 
+The native host-work wrapper MUST bind its stable claim to one admitted interaction
+and its existing call/concurrency reservation. Cloning a handle MUST NOT grant a
+second operation. Native child RPC dispatch uses the actual admitting session,
+rechecks durable owner/interaction/attempt authority, and commits a separate single-use
+native intent. It MUST NOT create an independently budgeted workflow. Child callbacks
+on associated HTTP response streams inherit the actual parent interaction, protection,
+depth, deadline and cancellation; these facts are retained with their interaction.
+Ambiguous stdio nesting grants no inferred parent authority.
+
+The I/O owner MUST retain a bounded exact native result/error and delivery envelope
+before returning it to the host mapper, independently of the mapper's waiter. The
+wrapper MUST save the mapped sampling outcome before returning to the callback handler.
+Inspection distinguishes host routing, native outcome, and the callback reply. A known
+saved outcome is reused without constructing another host operation, including after
+callback interruption. Unknown provider completion requires explicit reconciliation.
+The wrapper does not attach arbitrary `Runtime::start_run` calls to ancestor budgets;
+its supported native child operation is the single accounted RPC.
+
 Underlying host/model work delivery is distinct from callback response delivery.
 Recording or acknowledging a JSON-RPC timeout error does not establish that a model
 operation ended. Its unresolved reservation remains charged until explicit trusted
@@ -125,6 +143,13 @@ it neither resumes old remote handles nor reissues the old operation. Subscripti
 restoration requires explicit host action or configured authorization and emits a
 gap/new-epoch event. No delivery guarantee extends over unsupported replay or
 expired retention. Closing a frontend differs from stopping the transport owner.
+
+Absolute request deadlines include local queue time. Deadline expiry MUST attempt
+a correlated cancellation hint while retaining a bounded completion grace; hints
+do not extend the operation's acceptance deadline. Ambiguous run-owned exchanges
+MUST poison their session on the I/O owner even if the caller stopped awaiting the
+reply. Observed outcomes with abandoned runtime waiters are protected late evidence,
+not authority to publish a result into an already expired attempt.
 
 Resource updates and catalog changes become protected host events with stable
 identity and ownership context. They trigger no resource read, model call, catalog
@@ -161,6 +186,9 @@ Neither incoming nor outgoing progress changes an absolute deadline.
   tool-use requests for the server; the client does not automatically execute them.
   Sequential requests share cumulative allowances. Hard token/cost enforcement
   requires a trusted host reservation/metering implementation.
+  Installing both tools and context requires an explicit combined host service;
+  combined requests MUST NOT silently select a partial implementation. Tool names
+  are unique and declared schemas are prepared offline before model dispatch.
 - Form elicitation supports the pinned restricted schema, including enum/multiselect
   forms, validates accepted replies, and distinguishes accept/decline/cancel. URL
   elicitation displays the full server URL for consent without prefetch. Acceptance

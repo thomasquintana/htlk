@@ -41,6 +41,7 @@ impl Wire {
             tokio::time::Instant::now() + Duration::from_millis(self.config.limits.timeout_ms);
         let mut origin_id = associated.clone();
         let mut operation = None;
+        let mut parent_work = None;
         let mut attribution = if associated.is_some() {
             McpAttribution::ResponseStream
         } else {
@@ -53,12 +54,23 @@ impl Wire {
                 .map_err(|_| fail(FailureCode::Invariant))?;
             if origin_id.is_none()
                 && matches!(self.transport, Transport::Stdio { .. })
+                && pending.len() != 1
+                && pending.values().any(|request| request.parent.is_some())
+            {
+                // A waiting ancestor and its native child are both outstanding.
+                // Stdio carries no response-stream proof selecting either one.
+                // Do not turn this into fresh standalone work with a reset parent.
+                return Err(fail(FailureCode::McpIdentity));
+            }
+            if origin_id.is_none()
+                && matches!(self.transport, Transport::Stdio { .. })
                 && pending.len() == 1
             {
                 origin_id = pending.keys().next().cloned();
                 attribution = McpAttribution::SerializedOperation;
             }
             if let Some(parent) = origin_id.as_ref().and_then(|id| pending.get(id)) {
+                parent_work = parent.parent.clone();
                 operation = parent.context.clone();
                 token.parents.push(parent.cancellation.state.clone());
                 token
@@ -130,6 +142,7 @@ impl Wire {
             return Err(fail(FailureCode::McpIdentity));
         }
         let context = McpInteractionContext {
+            work: None,
             progress: None,
             labels: operation
                 .as_ref()
@@ -140,19 +153,22 @@ impl Wire {
             interaction_id: id,
             request_id: request_id.clone(),
             originating_request_id: origin_id,
-            depth: 1,
+            depth: parent_work.as_ref().map_or(1, |parent| parent.depth + 1),
             origin: operation.as_ref().map(|operation| operation.origin.clone()),
             attribution,
             task_id: related
                 .as_ref()
                 .and_then(|record| record.task.as_ref())
                 .map(|state| state.task_id().to_owned()),
-            parent_interaction: None,
+            parent_interaction: parent_work.as_ref().map(|parent| parent.interaction_id),
             deadline_ms: operation.as_ref().map_or(deadline_ms, |operation| {
                 deadline_ms.min(operation.deadline_ms)
             }),
             cancellation: token,
         };
+        if context.depth > self.config.limits.callback_depth {
+            return Err(fail(FailureCode::Budget));
+        }
         if let Some(settings) = self.config.task_receiver {
             let receiver = McpTaskReceiver::new((*self.config).clone(), settings)?;
             let fields = as_map(request.value())?;
@@ -231,6 +247,7 @@ impl Wire {
                 server,
                 session.id,
                 context.origin.clone(),
+                context.parent_interaction,
                 context.labels.clone(),
                 raw,
                 context.deadline_ms,
@@ -262,6 +279,8 @@ impl Wire {
         context.labels = record.labels.clone();
         context.deadline_ms = record.deadline_ms;
         context.origin = record.origin.clone();
+        context.parent_interaction = record.parent_interaction;
+        context.depth = record.depth;
         host.authorize(
             self.owner.host(),
             &self.owner,
@@ -288,31 +307,20 @@ impl Wire {
                     .map_err(|_| error);
             }
         };
+        context.work = Some(McpHostWork::new(
+            host.clone(),
+            self.owner.clone(),
+            record.clone(),
+            context.cancellation.clone(),
+            self.session(),
+        ));
         if context.cancellation.is_cancelled() {
             return Err(fail(FailureCode::Cancelled));
         }
         self.interaction_event(&record, kind, url_id)?;
         let service = match kind {
             McpIncomingKind::Sampling => {
-                let params = as_map(get(as_map(request.value())?, "params")?)?;
-                let tool_history = params.get("messages").is_some_and(|messages| matches!(messages, Value::Array(messages) if messages.iter().any(|message|
-                    as_map(message).ok().and_then(|message| message.get("content")).is_some_and(|content| {
-                        let blocks = match content { Value::Array(values) => values.as_slice(), value => std::slice::from_ref(value) };
-                        blocks.iter().any(|block| as_map(block).is_ok_and(|block| matches!(block.get("type"), Some(Value::Text(kind)) if kind == "tool_use" || kind == "tool_result")))
-                    }))));
-                if params.get("tools").is_some()
-                    || params.get("toolChoice").is_some()
-                    || tool_history
-                {
-                    McpClientService::SamplingTools
-                } else if params
-                    .get("includeContext")
-                    .is_some_and(|value| value != &Value::Text("none".into()))
-                {
-                    McpClientService::SamplingContext
-                } else {
-                    McpClientService::Sampling
-                }
+                protocol::sampling_service(as_map(get(as_map(request.value())?, "params")?)?)
             }
             McpIncomingKind::Form => McpClientService::ElicitationForm,
             McpIncomingKind::Url => McpClientService::ElicitationUrl,

@@ -473,6 +473,18 @@ pub(super) fn validate(
     interaction: &McpStoredInteraction,
     limits: &Limits,
 ) -> Result<(), StoreError> {
+    if let Some(parent) = interaction.parent_interaction {
+        let parent = super::interaction(db, owner, parent, limits)?.ok_or(StoreError::Corrupt)?;
+        if parent.origin != interaction.origin
+            || parent.session != interaction.session
+            || parent.depth.checked_add(1) != Some(interaction.depth)
+            || parent.deadline_ms < interaction.deadline_ms
+        {
+            return Err(StoreError::Corrupt);
+        }
+    } else if interaction.depth != 1 {
+        return Err(StoreError::Corrupt);
+    }
     let McpOwnerScope::Run(run) = owner.scope() else {
         return Err(StoreError::Invalid);
     };

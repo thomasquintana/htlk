@@ -235,7 +235,7 @@ impl Wire {
                 let session = wire.stored_session.as_ref().ok_or_else(|| fail(FailureCode::Profile))?;
                 let persistence = wire.config.persistence.as_ref().ok_or_else(|| fail(FailureCode::Profile))?;
                 let server = wire.server.digest(&wire.limits).map_err(|_| fail(FailureCode::McpIdentity))?;
-                let record = host.receive(&wire.owner, server, session.id, context.origin.clone(), context.labels.clone(), raw.clone(), context.deadline_ms).await?;
+                let record = host.receive(&wire.owner, server, session.id, context.origin.clone(), context.parent_interaction, context.labels.clone(), raw.clone(), context.deadline_ms).await?;
                 let acceptance = receiver.accept(&wire.owner, server, session.id, record.id, &request).await?.ok_or_else(|| fail(FailureCode::McpProtocol))?;
                 context.task_id = Some(acceptance.task.task_id().to_owned());
                 wire.accepted_callbacks.lock().map_err(|_| fail(FailureCode::Invariant))?.insert(context.request_id.clone());

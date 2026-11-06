@@ -262,6 +262,14 @@ after the create RPC ended, including HTTP callbacks on the idle GET stream.
 
 ## Native identity and fixtures
 
+Sampling qualification uses `cargo test -p htlk-runtime --test mcp_sampling --locked`
+and `cargo test --test runtime_mcp_callbacks --locked`. Independent Node peers observe
+multimodal tools/context, advisory hints versus actual routing, native child operations,
+tool-result continuations and lost HTTP reply acceptance. SQLite reopen verifies
+operation claims, original native bytes, known completion reuse and unknown-versus-zero
+usage. Runtime campaigns check every real ancestor and sequential budget exhaustion;
+an independent Node SQLite reader checks late native results after a dropped waiter.
+
 Native implementation identities hash explicit source contributions, package-owned
 model/analyzer contributions, pinned dependencies, and the MCP schema asset. Review
 the Rust manifests in `crates/htlk-executable/src/implementation.rs`,

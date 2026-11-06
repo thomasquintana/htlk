@@ -8,6 +8,15 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Accounted MCP host work now has a stable single-operation claim and a native child
+  RPC wrapper bound to the actual callback session, ancestor reservation, deadline
+  and cancellation. Protected routing/native outcome evidence and known sampling
+  results survive callback interruption and reopen without model redispatch.
+  Combined sampling tools/context has explicit service dispatch; duplicate tool
+  declarations and unresolved tool schemas fail before host work.
+- The MCP I/O owner sends absolute-deadline cancellation hints, poisons ambiguous
+  run sessions independently of dropped caller futures, and retains abandoned
+  correlated outcomes as protected late evidence.
 - Typed, pinned MCP resource/catalog/logging notifications expose capability gates,
   URI subscription state, and explicit ignored dispositions without automatic reads.
   Installed roots providers support bounded roots-change notifications. Progress

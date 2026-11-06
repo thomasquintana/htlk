@@ -80,6 +80,42 @@ or drop each reply after processing it. `raw_result` and `McpRpcError::as_bytes`
 preserve exact payload bytes; their `JsonDocument` views provide canonical values
 separately. Byte-span extraction occurs only after strict full-message admission.
 
+### Accounted sampling and native host work
+
+Sampling handlers receive the full pinned request, including text/image/audio,
+system prompt, advisory model preferences, tools, choice and matching tool history.
+Install `SamplingToolsContext` as well as the three individual sampling services
+when supporting tools and authorized context together. That combined handler owns
+bounded context selection and model routing; hints do not choose the actual model.
+Return the actual selected model in the result and measured usage through `McpUsage`.
+Absent usage remains unknown; `Some(0)` means measured zero. Provider format support
+and hard token/cost enforcement belong to the installed host integration.
+
+Use `context.work` to wrap one actual model operation with `McpHostWork::run`.
+Supply a bounded protected descriptor identifying routing and context/input digests.
+The wrapper commits a stable claim under the interaction's existing reservation,
+then supplies an immutable `McpHostWorkReceipt`. Its `invoke` method can execute one
+native child RPC on the actual callback session. Copies cannot pay for more calls.
+The RPC inherits the parent deadline and cancellation; associated child callbacks
+retain real interaction ancestry and consume additional independently checked
+ancestor reservations. Ambiguous stdio callback nesting is refused rather than
+assigned to an unrelated request.
+
+Native result/error bytes are retained before returning to the model mapper, and
+the mapped sampling result/usage are saved before `run` returns to the callback.
+`McpInteractionHost::inspect_work` inspects routing and actual native outcome evidence;
+`recover_work` retrieves a known sampling outcome after callback interruption or
+store reopen without dispatch. Unknown completion stays uncertain. This wrapper
+supports one accounted native operation; independent child workflows started with
+`Runtime::start_run` do not inherit its budget.
+
+The [sampling campaigns](../crates/htlk-runtime/tests/mcp_sampling.rs) demonstrate
+multimodal tools/context, explicit routing, native child work and HTTP ancestry,
+lost reply acknowledgement, tool-result continuation and interrupted-callback recovery.
+The [runtime campaigns](../tests/runtime_mcp_callbacks.rs) run that work inside a
+waiting graph tool with one graph worker, inspect every ancestor's accounting and
+prove that sequential requests share the cumulative allowance.
+
 ### MCP-server authorization
 
 Install `McpClientConfig::with_credential_provider` for host-managed connection

@@ -69,6 +69,10 @@ impl McpWorkState {
 /// Protected stored callback facts. Values are intentionally absent from Debug.
 #[derive(Clone)]
 pub struct McpStoredInteraction {
+    /// Trusted native child-RPC parent, never inferred from server metadata.
+    pub parent_interaction: Option<Digest>,
+    /// Persisted interaction ancestry depth; top-level callbacks have depth one.
+    pub depth: usize,
     /// Independently checked originating run operation, absent for host/root services.
     pub origin: Option<McpOperationOrigin>,
     /// Stable identity derived from session and typed server request ID.
@@ -569,6 +573,7 @@ impl SqliteStore {
             owner,
             session,
             None,
+            None,
             request,
             labels,
             deadline_ms,
@@ -602,6 +607,34 @@ impl SqliteStore {
             owner,
             session,
             origin,
+            None,
+            request,
+            labels,
+            deadline_ms,
+            now_ms,
+            maximum_records,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn receive_mcp_child_interaction(
+        &self,
+        owner: &McpOwner,
+        session: Digest,
+        origin: Option<McpOperationOrigin>,
+        parent: Option<Digest>,
+        request: Vec<u8>,
+        labels: SecurityLabels,
+        deadline_ms: i64,
+        now_ms: i64,
+        maximum_records: usize,
+    ) -> Result<McpStoredInteraction, StoreError> {
+        self.receive_mcp_interaction_inner(
+            owner,
+            session,
+            origin,
+            parent,
             request,
             labels,
             deadline_ms,
@@ -617,6 +650,7 @@ impl SqliteStore {
         owner: &McpOwner,
         session: Digest,
         origin: Option<McpOperationOrigin>,
+        parent: Option<Digest>,
         request: Vec<u8>,
         labels: SecurityLabels,
         deadline_ms: i64,
@@ -662,11 +696,20 @@ impl SqliteStore {
             let now = authority(&tx, &owner, now_ms)?;
             session_authority(&tx, &owner, session, true)?;
             if let Some(old) = interaction(&tx, &owner, id, &limits)? {
-                if old.request_digest != request_digest || old.origin != origin { return Err(StoreError::IdempotencyConflict); }
+                if old.request_digest != request_digest || old.origin != origin || old.parent_interaction != parent { return Err(StoreError::IdempotencyConflict); }
                 tx.commit()?;
                 return Ok(old);
             }
-            let (labels, deadline_ms) = run::admit(&tx, &owner, session, origin.as_ref(), &method, labels, deadline_ms, now, &limits)?;
+            let (mut labels, mut deadline_ms) = run::admit(&tx, &owner, session, origin.as_ref(), &method, labels, deadline_ms, now, &limits)?;
+            let depth = if let Some(parent) = parent {
+                if parent == id { return Err(StoreError::Invalid); }
+                let previous = interaction(&tx, &owner, parent, &limits)?.ok_or(StoreError::Missing)?;
+                let claimed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='host_operation_claim')", params![owner.key().to_string(), parent.to_string()], |row| row.get(0))?;
+                if !claimed || previous.session != session || previous.origin != origin || previous.state != McpWorkState::Intent || !previous.outstanding || previous.generation != owner.generation() { return Err(StoreError::Fenced); }
+                deadline_ms = deadline_ms.min(previous.deadline_ms);
+                labels = labels.union(&previous.labels, &limits).map_err(|_| StoreError::Invalid)?;
+                previous.depth.checked_add(1).filter(|depth| *depth <= 1024).ok_or(StoreError::Invalid)?
+            } else { 1 };
             let protection = cbor::encode(&labels.to_value(&limits).map_err(|_| StoreError::Invalid)?, &limits)?;
             if protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Invalid); }
             if now >= deadline_ms { return Err(StoreError::Deadline(FailureCode::Timeout)); }
@@ -676,6 +719,9 @@ impl SqliteStore {
                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,'pending',?9,?10,?11,?12)", params![id.to_string(), owner.key().to_string(), session.to_string(), request_digest.to_string(), raw_digest.to_string(), request, protection, owner.generation(), deadline_ms,
                 origin.as_ref().map(|origin| origin.invocation_id.to_string()), origin.as_ref().map(|origin| origin.attempt_id.to_string()), origin.as_ref().map(|origin| origin.run_id.as_str())])?;
             fact(&tx, &owner, Some(id), "interaction_received", now, &Value::Text(request_digest.to_string()), &limits)?;
+            if let Some(parent) = parent {
+                fact(&tx, &owner, Some(id), "interaction_parent", now, &Value::Array(vec![Value::Text(parent.to_string()), Value::Integer(depth as i64)]), &limits)?;
+            }
             let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             tx.commit()?; Ok(record)
         }).await.map_err(StoreError::from_worker)
@@ -714,6 +760,127 @@ impl SqliteStore {
             fact(&tx, &owner, Some(id), "work_intent", now, &Value::Integer(calls), &limits)?;
             let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
             tx.commit()?; Ok(McpWorkClaim::Started(record))
+        }).await.map_err(StoreError::from_worker)
+    }
+
+    /// Claims the single actual host operation covered by an interaction's already
+    /// committed reservation. The protected descriptor records host routing/input
+    /// evidence, never server authority. A second claim cannot dispatch again.
+    ///
+    /// # Errors
+    /// Returns stale ownership/session, expiry, cancellation, an existing claim,
+    /// missing accounting or invalid bounded evidence.
+    pub async fn claim_mcp_host_operation(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+        labels: SecurityLabels,
+        descriptor: JsonDocument,
+        now_ms: i64,
+    ) -> Result<Digest, StoreError> {
+        timestamp(now_ms)?;
+        if descriptor.as_bytes().len() > self.config.limits.max_document_bytes / 8 {
+            return Err(StoreError::Invalid);
+        }
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let now = authority(&tx, &owner, now_ms)?;
+            let old = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            session_authority(&tx, &owner, old.session, true)?;
+            if old.generation != owner.generation() { return Err(StoreError::Fenced); }
+            if old.state != McpWorkState::Intent || !old.call_charged || !old.outstanding { return Err(StoreError::Terminal); }
+            if now >= old.deadline_ms { return Err(StoreError::Deadline(FailureCode::Timeout)); }
+            checked_usage(&tx, &owner)?;
+            let request = JsonDocument::new(&old.request, &limits).map_err(|_| StoreError::Corrupt)?;
+            let Value::Text(method) = field(map(request.value())?, "method")? else { return Err(StoreError::Corrupt); };
+            run::admit(&tx, &owner, old.session, old.origin.as_ref(), method, old.labels.clone(), old.deadline_ms, now, &limits)?;
+            let claimed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='host_operation_claim')", params![owner.key().to_string(), id.to_string()], |row| row.get(0))?;
+            if claimed { return Err(StoreError::Conflict); }
+            let protection = old.labels.union(&labels, &limits).map_err(|_| StoreError::Invalid)?;
+            let protection = cbor::encode(&protection.to_value(&limits).map_err(|_| StoreError::Invalid)?, &limits)?;
+            if protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Invalid); }
+            tx.execute("UPDATE mcp_interactions SET protection=?2,revision=revision+1 WHERE interaction_id=?1", params![id.to_string(), protection])?;
+            let receipt = JsonDocument::from_value(&Value::Array(vec![Value::Text("htlk.mcp-host-work/1".into()), Value::Text(id.to_string()), Value::Text(old.request_digest.to_string())]), &limits).map_err(|_| StoreError::Invalid)?.digest();
+            fact(&tx, &owner, Some(id), "host_operation_claim", now, &Value::Array(vec![Value::Text(receipt.to_string()), descriptor.value().clone()]), &limits)?;
+            tx.commit()?;
+            Ok(receipt)
+        }).await.map_err(StoreError::from_worker)
+    }
+
+    pub(crate) async fn claim_mcp_native_operation(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+        claim: Digest,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        timestamp(now_ms)?;
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let now = authority(&tx, &owner, now_ms)?;
+            let old = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            session_authority(&tx, &owner, old.session, true)?;
+            if old.generation != owner.generation() || old.state != McpWorkState::Intent || !old.outstanding { return Err(StoreError::Fenced); }
+            if now >= old.deadline_ms { return Err(StoreError::Deadline(FailureCode::Timeout)); }
+            let payload: Vec<u8> = tx.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='host_operation_claim'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?.ok_or(StoreError::Missing)?;
+            let Value::Array(values) = cbor::decode(&payload, &limits)? else { return Err(StoreError::Corrupt); };
+            if values.first() != Some(&Value::Text(claim.to_string())) { return Err(StoreError::Fenced); }
+            let existing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='native_operation_intent')", params![owner.key().to_string(), id.to_string()], |row| row.get(0))?;
+            if existing { return Err(StoreError::Conflict); }
+            let request = JsonDocument::new(&old.request, &limits).map_err(|_| StoreError::Corrupt)?;
+            let Value::Text(method) = field(map(request.value())?, "method")? else { return Err(StoreError::Corrupt); };
+            run::admit(&tx, &owner, old.session, old.origin.as_ref(), method, old.labels.clone(), old.deadline_ms, now, &limits)?;
+            fact(&tx, &owner, Some(id), "native_operation_intent", now, &Value::Text(claim.to_string()), &limits)?;
+            tx.commit()?; Ok(())
+        }).await.map_err(StoreError::from_worker)
+    }
+
+    pub(crate) async fn retain_mcp_native_outcome(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+        payload: Value,
+        labels: SecurityLabels,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        timestamp(now_ms)?;
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        if cbor::encode(&payload, &limits)?.len() > limits.max_document_bytes / 8 {
+            return Err(StoreError::Invalid);
+        }
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            let claimed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='native_operation_intent')", params![owner.key().to_string(), id.to_string()], |row| row.get(0))?;
+            if !claimed { return Err(StoreError::Missing); }
+            let protection = record.labels.union(&labels, &limits).map_err(|_| StoreError::Invalid)?;
+            let protection = cbor::encode(&protection.to_value(&limits).map_err(|_| StoreError::Invalid)?, &limits)?;
+            if protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Invalid); }
+            tx.execute("UPDATE mcp_interactions SET protection=?2,revision=revision+1 WHERE interaction_id=?1", params![id.to_string(), protection])?;
+            let old: Option<Vec<u8>> = tx.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='native_operation_outcome'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
+            if let Some(old) = old {
+                if cbor::decode(&old, &limits)? != payload { return Err(StoreError::Conflict); }
+            } else { fact(&tx, &owner, Some(id), "native_operation_outcome", now_ms, &payload, &limits)?; }
+            tx.commit()?; Ok(())
+        }).await.map_err(StoreError::from_worker)
+    }
+
+    pub(crate) async fn mcp_host_work_evidence(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+    ) -> Result<Option<crate::mcp::client::McpHostWorkEvidence>, StoreError> {
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            interaction(db, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            let claim: Option<Vec<u8>> = db.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='host_operation_claim'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
+            let Some(claim) = claim else { return Ok(None); };
+            let Value::Array(claim) = cbor::decode(&claim, &limits)? else { return Err(StoreError::Corrupt); };
+            let [Value::Text(id_text), descriptor] = claim.as_slice() else { return Err(StoreError::Corrupt); };
+            let outcome: Option<Vec<u8>> = db.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='native_operation_outcome'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
+            Ok(Some(crate::mcp::client::McpHostWorkEvidence { claim_id: id_text.parse().map_err(|_| StoreError::Corrupt)?, descriptor: descriptor.clone(), native_outcome: outcome.map(|bytes| cbor::decode(&bytes, &limits)).transpose()? }))
         }).await.map_err(StoreError::from_worker)
     }
 
@@ -1445,7 +1612,24 @@ fn interaction(
         validate_reply(request, reply, limits).map_err(|_| StoreError::Corrupt)?;
     }
     let usage = bounded_blob(row, 12, limits)?;
+    let parent: Option<Vec<u8>> = db.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='interaction_parent'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
+    let (parent_interaction, depth) = if let Some(parent) = parent {
+        match cbor::decode(&parent, limits)? {
+            Value::Array(values) => match values.as_slice() {
+                [Value::Text(parent), Value::Integer(depth)] if *depth > 1 && *depth <= 1024 => (
+                    Some(parent.parse().map_err(|_| StoreError::Corrupt)?),
+                    *depth as usize,
+                ),
+                _ => return Err(StoreError::Corrupt),
+            },
+            _ => return Err(StoreError::Corrupt),
+        }
+    } else {
+        (None, 1)
+    };
     let mut record = McpStoredInteraction {
+        parent_interaction,
+        depth,
         origin: match (
             row.get::<_, Option<String>>(18)?,
             row.get::<_, Option<String>>(19)?,

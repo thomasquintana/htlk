@@ -36,6 +36,15 @@ fn capabilities_describe_only_installed_services_without_dispatching() {
         (vec![], "{}"),
         (vec![Sampling], r#"{"sampling":{}}"#),
         (
+            vec![
+                Sampling,
+                SamplingTools,
+                SamplingContext,
+                SamplingToolsContext,
+            ],
+            r#"{"sampling":{"tools":{},"context":{}}}"#,
+        ),
+        (
             vec![Sampling, SamplingTools],
             r#"{"sampling":{"tools":{}}}"#,
         ),
@@ -68,7 +77,13 @@ fn capabilities_describe_only_installed_services_without_dispatching() {
         );
         assert!(built.event_handler().is_none());
     }
-    for service in [SamplingTools, SamplingContext, RootsChanged] {
+    assert!(config(&[Sampling, SamplingTools, SamplingContext]).is_err());
+    for service in [
+        SamplingTools,
+        SamplingContext,
+        SamplingToolsContext,
+        RootsChanged,
+    ] {
         assert!(config(&[service]).is_err());
     }
 }

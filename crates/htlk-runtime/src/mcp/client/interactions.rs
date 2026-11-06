@@ -129,9 +129,9 @@ pub struct McpInteractionPage {
 #[derive(Clone)]
 pub struct McpInteractionHost {
     config: Arc<McpClientConfig>,
-    persistence: McpClientPersistence,
-    authorizer: Arc<dyn McpClientAuthorizer>,
-    limits: Limits,
+    pub(super) persistence: McpClientPersistence,
+    pub(super) authorizer: Arc<dyn McpClientAuthorizer>,
+    pub(super) limits: Limits,
 }
 impl McpInteractionHost {
     /// Links a checked configuration's persistence and authorization services.
@@ -694,6 +694,7 @@ impl McpInteractionHost {
         server: Digest,
         session: Digest,
         origin: Option<McpOperationOrigin>,
+        parent: Option<Digest>,
         base_labels: SecurityLabels,
         raw: Vec<u8>,
         deadline: i64,
@@ -722,6 +723,24 @@ impl McpInteractionHost {
             },
         )?;
         let now = self.persistence.clock.now_ms()?;
+        if parent.is_some() {
+            return self
+                .persistence
+                .store
+                .receive_mcp_child_interaction(
+                    owner,
+                    session,
+                    origin,
+                    parent,
+                    raw,
+                    labels,
+                    deadline,
+                    now,
+                    self.config.limits.requests_per_session,
+                )
+                .await
+                .map_err(|e| fail(e.code()));
+        }
         match owner.scope() {
             McpOwnerScope::Host(_) => {
                 self.persistence

@@ -42,6 +42,56 @@ for await (const line of createInterface({input:process.stdin})) {
   } else process.exit(22);
 }
 "#;
+
+#[test]
+fn dropped_run_caller_still_sends_deadline_hint_and_poisons_ambiguous_session() {
+    actix::System::new().block_on(async {
+        let (events, mut receive) = tokio::sync::mpsc::channel(8);
+        let client = client(Some(Arc::new(Events(events))), McpClientLimits::default());
+        let limits = Limits::default();
+        let owner = McpOwner::new(
+            HostContext::new("alice".into(), &limits).unwrap(),
+            McpOwnerScope::Run(htlk_runtime::identity::RunId::new("dropped".into(), &limits).unwrap()),
+            1,
+            &limits,
+        ).unwrap();
+        let script = r#"
+            import {createInterface} from 'node:readline';
+            const send=v=>process.stdout.write(JSON.stringify(v)+'\n');let held;
+            for await(const line of createInterface({input:process.stdin})) {
+              const r=JSON.parse(line);
+              if(r.method==='initialize') send({jsonrpc:'2.0',id:r.id,result:{protocolVersion:'2025-11-25',serverInfo:{name:'peer',version:'1'},capabilities:{tools:{}}}});
+              else if(r.method==='tools/call') {held=r.id;send({jsonrpc:'2.0',method:'notifications/message',params:{level:'info',data:'started'}});}
+              else if(r.method==='notifications/cancelled') {
+                if(r.params.requestId!==held)process.exit(41);
+                send({jsonrpc:'2.0',method:'notifications/message',params:{level:'info',data:'cancel-observed'}});
+              } else if(r.method!=='notifications/initialized')process.exit(42);
+            }
+        "#;
+        let session = client.open(owner, server(), McpEndpoint::Stdio {
+            program: "node".into(), arguments: vec!["--input-type=module".into(), "-e".into(), script.into()], environment: BTreeMap::new(),
+        }, limits.clone(), Arc::new(McpCancellation::new())).await.unwrap();
+        let call_session = session.clone();
+        let call = tokio::spawn(async move {
+            call_session.invoke(htlk_runtime::mcp::McpRequest {
+                method: "tools/call".into(), params: document(r#"{"name":"wait"}"#).value().clone(),
+                response_limits: limits, max_response_bytes: 4096, timeout_ms: 150,
+                cancellation_grace_ms: 100, cancellation: Arc::new(McpCancellation::new()), idempotency_key: None,
+            }).await
+        });
+        assert_eq!(receive.recv().await.unwrap().params.value(), document(r#"{"level":"info","data":"started"}"#).value());
+        call.abort();
+        let hint = tokio::time::timeout(Duration::from_secs(2), receive.recv()).await.unwrap().unwrap();
+        assert_eq!(hint.params.value(), document(r#"{"level":"info","data":"cancel-observed"}"#).value());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while session.ended().is_none() { tokio::time::sleep(Duration::from_millis(5)).await; }
+        }).await.unwrap();
+        assert_eq!(session.ended(), Some(McpSessionEnd::Transport));
+        let next = session.request("tools/call", document(r#"{"name":"never"}"#), Arc::new(McpCancellation::new())).await;
+        assert_eq!(next.delivery, McpDelivery::NotSent);
+        client.shutdown().await.unwrap();
+    });
+}
 fn document(raw: &str) -> JsonDocument {
     JsonDocument::new(raw.as_bytes(), &Limits::default()).unwrap()
 }

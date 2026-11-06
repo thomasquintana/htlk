@@ -29,7 +29,8 @@ const server=createServer(async(req,res)=>{
   if(r.method==='initialize')send({protocolVersion:'2025-11-25',serverInfo:{name:'peer',version:'1'},capabilities:{tools:{},tasks:{requests:{tools:{call:{}}},cancel:{}}}});
   else if(r.method==='notifications/initialized' || r.method==='notifications/cancelled')res.writeHead(202).end();
   else if(r.method==='tools/list')send({tools:[{name:'tool',inputSchema:{type:'object'},execution:{taskSupport:'required'}}]});
-  else if(r.method==='tools/call'){
+   else if(r.method==='tools/call' && r.params.name==='host-model')send({sample:{role:'assistant',model:'fixture',content:{type:'text',text:'Answer'}}});
+   else if(r.method==='tools/call'){
     if(!r.params.task || ++creates!==1 || JSON.stringify(r.params.arguments)!=='{}')sendError('frozen task creation must happen once');
     send({task});
   }else if(r.method==='tasks/get')send({...task,status:'input_required'});

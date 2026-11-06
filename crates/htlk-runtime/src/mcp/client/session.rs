@@ -10,7 +10,7 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-mod wire;
+pub(super) mod wire;
 use wire::Wire;
 
 /// Correlated protocol result or protected protocol error, separate from local I/O
@@ -44,7 +44,7 @@ impl fmt::Debug for McpClientReply {
     }
 }
 impl McpClientReply {
-    fn failed(delivery: McpDelivery, code: FailureCode) -> Self {
+    pub(super) fn failed(delivery: McpDelivery, code: FailureCode) -> Self {
         Self::error(delivery, fail(code))
     }
     fn error(delivery: McpDelivery, error: RuntimeFailure) -> Self {
@@ -90,6 +90,8 @@ enum Command {
         reply: oneshot::Sender<Result<Arc<Wire>, RuntimeFailure>>,
     },
     Request {
+        queued_at: std::time::Instant,
+        parent: Option<Arc<McpHostWorkReceipt>>,
         task_key: Option<Digest>,
         wire: Arc<Wire>,
         request: McpRequest,
@@ -132,6 +134,7 @@ impl NativeMcpClient {
         let timeout_ms = config.limits.timeout_ms;
         let authentication = config.authentication.clone();
         let (sender, mut receiver) = mpsc::channel(config.limits.pending_requests);
+        let dispatcher = sender.clone();
         let stop = Arc::new(McpCancellation::new());
         let executors = workers::Executors::launch(&config, stop.clone())?;
         let owner_stop = stop.clone();
@@ -158,20 +161,36 @@ impl NativeMcpClient {
                                 let config = config.clone();
                                 let stop = stop.clone();
                                 let epochs = epochs.clone();
-                                let executors = executors.clone();
+                                 let executors = executors.clone();
+                                 let dispatcher = dispatcher.clone();
                                 jobs.spawn(async move {
-                                    let result = open(registry, config, executors, stop, epochs, owner, server, endpoint, limits, lifetime).await;
+                                     let result = open(registry, config, executors, stop, epochs, owner, server, endpoint, limits, lifetime, dispatcher).await;
                                     let _ = reply.send(result);
                                 });
                             }
-                            Some(Command::Request { wire, request, context, task_key, reply, reservation }) => {
+                             Some(Command::Request { wire, mut request, context, task_key, reply, reservation, parent, queued_at }) => {
                                 if jobs.len() >= config.limits.pending_requests {
                                     let _ = reply.send(McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTransport));
                                     continue;
                                 }
-                                jobs.spawn(async move {
-                                    let outcome = wire.invoke_scoped(request, context, task_key).await.reserved(reservation);
-                                    let _ = reply.send(outcome);
+                                 jobs.spawn(async move {
+                                     let elapsed = queued_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                                     request.timeout_ms = request.timeout_ms.saturating_sub(elapsed);
+                                     if request.timeout_ms == 0 {
+                                         let _ = reply.send(McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTimeout));
+                                         return;
+                                     }
+                                     let outcome = wire.invoke_parent(request, context.clone(), task_key, parent.clone()).await.reserved(reservation);
+                                     if let Some(parent) = parent
+                                         && parent.retain_native_outcome(&outcome).await.is_err()
+                                     {
+                                         wire.stop.cancel();
+                                     }
+                                     if let Err(outcome) = reply.send(outcome) {
+                                         // Persist observations even when the runtime's
+                                         // bounded caller has already stopped awaiting us.
+                                         wire.retain_abandoned_outcome(context.as_ref(), &outcome).await;
+                                     }
                                 });
                             }
                             None => break,
@@ -366,6 +385,21 @@ impl McpClientSession {
         context: Option<McpAttemptContext>,
         task_key: Option<Digest>,
     ) -> McpClientReply {
+        self.invoke_parent(request, context, task_key, None).await
+    }
+    pub(super) async fn invoke_parent(
+        &self,
+        request: McpRequest,
+        context: Option<McpAttemptContext>,
+        task_key: Option<Digest>,
+        parent: Option<Arc<McpHostWorkReceipt>>,
+    ) -> McpClientReply {
+        if [request.timeout_ms, request.cancellation_grace_ms]
+            .into_iter()
+            .any(|ms| crate::mcp::valid_timeout(ms).is_err())
+        {
+            return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Profile);
+        }
         let (reply, receive) = oneshot::channel();
         let cancellation = request.cancellation.clone();
         if cancellation.is_cancelled() || self.wire.stop.is_cancelled() {
@@ -378,6 +412,8 @@ impl McpClientSession {
             }
         };
         let send = self.sender.send(Command::Request {
+            queued_at: std::time::Instant::now(),
+            parent,
             task_key,
             wire: self.wire.clone(),
             request,
@@ -421,6 +457,7 @@ async fn open(
     endpoint: McpEndpoint,
     limits: Limits,
     lifetime: Arc<McpCancellation>,
+    dispatcher: mpsc::Sender<Command>,
 ) -> Result<Arc<Wire>, RuntimeFailure> {
     if lifetime.is_cancelled() || stop.is_cancelled() {
         return Err(fail(FailureCode::Cancelled));
@@ -506,6 +543,7 @@ async fn open(
                 token.clone(),
                 stored_session.clone(),
                 executors,
+                dispatcher,
             )
             .await;
             let wire = match started {

@@ -198,6 +198,23 @@ fn blocks(content: &Value) -> &[Value] {
         block => std::slice::from_ref(block),
     }
 }
+pub(super) fn sampling_service(params: &Map) -> McpClientService {
+    let tools = params.get("tools").is_some()
+        || params.get("toolChoice").is_some()
+        || matches!(params.get("messages"), Some(Value::Array(messages)) if messages.iter().any(|message|
+            as_map(message).ok().and_then(|message| message.get("content")).is_some_and(|content|
+                blocks(content).iter().any(|block| as_map(block).is_ok_and(|block|
+                    matches!(block.get("type"), Some(Value::Text(kind)) if kind == "tool_use" || kind == "tool_result"))))));
+    let context = params
+        .get("includeContext")
+        .is_some_and(|v| v != &Value::Text("none".into()));
+    match (tools, context) {
+        (true, true) => McpClientService::SamplingToolsContext,
+        (true, false) => McpClientService::SamplingTools,
+        (false, true) => McpClientService::SamplingContext,
+        (false, false) => McpClientService::Sampling,
+    }
+}
 fn binary(content: &Value, limits: &Limits) -> Result<(), RuntimeFailure> {
     for block in blocks(content) {
         let block = as_map(block)?;
@@ -214,6 +231,9 @@ fn sampling_request(
     config: &McpClientConfig,
     limits: &Limits,
 ) -> Result<(), RuntimeFailure> {
+    if config.handler(sampling_service(params)).is_none() {
+        return Err(fail(FailureCode::McpProtocol));
+    }
     let tools = config.handler(McpClientService::SamplingTools).is_some();
     if !tools && (params.get("tools").is_some() || params.get("toolChoice").is_some()) {
         return Err(fail(FailureCode::McpProtocol));
@@ -227,6 +247,19 @@ fn sampling_request(
     }
     if !matches!(params.get("maxTokens"), Some(Value::Integer(n)) if *n > 0) {
         return Err(fail(FailureCode::McpProtocol));
+    }
+    if let Some(Value::Array(declarations)) = params.get("tools") {
+        let mut names = BTreeSet::new();
+        for declaration in declarations {
+            let declaration = as_map(declaration)?;
+            if !names.insert(as_text(get(declaration, "name")?)?) {
+                return Err(fail(FailureCode::McpProtocol));
+            }
+            prepare_schema(get(declaration, "inputSchema")?, limits)?;
+            if let Some(schema) = declaration.get("outputSchema") {
+                prepare_schema(schema, limits)?;
+            }
+        }
     }
     let Value::Array(messages) = get(params, "messages")? else {
         return Err(fail(FailureCode::McpProtocol));

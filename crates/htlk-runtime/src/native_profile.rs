@@ -74,6 +74,7 @@ pub fn native_profile(
         include_bytes!("mcp/client/interactions.rs"),
         include_bytes!("mcp/client/url_interactions.rs"),
         include_bytes!("mcp/client/workers.rs"),
+        include_bytes!("mcp/client/work.rs"),
         include_bytes!("mcp/client/session.rs"),
         include_bytes!("mcp/client/session/wire.rs"),
         include_bytes!("mcp/client/session/wire/callbacks.rs"),

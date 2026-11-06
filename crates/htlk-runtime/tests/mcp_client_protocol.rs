@@ -110,6 +110,22 @@ fn tool_sampling_requires_balanced_history_valid_inputs_and_tool_choice_results(
         &format!(r#"{{"messages":{history},"tools":[{TOOL}],"maxTokens":100}}"#),
     );
     validate_client_request(&input, &config, &limits).unwrap();
+    let duplicate = request(
+        "sampling/createMessage",
+        &format!(r#"{{"messages":[],"tools":[{TOOL},{TOOL}],"maxTokens":10}}"#),
+    );
+    assert!(
+        validate_client_request(&duplicate, &config, &limits).is_err(),
+        "duplicate tool names cannot choose an arbitrary declaration"
+    );
+    let remote_schema = request(
+        "sampling/createMessage",
+        r#"{"messages":[],"maxTokens":10,"tools":[{"name":"remote","inputSchema":{"type":"object","$ref":"https://example.invalid/untrusted"}}]}"#,
+    );
+    assert!(
+        validate_client_request(&remote_schema, &config, &limits).is_err(),
+        "unresolved tool schemas fail before model work"
+    );
     validate_client_result(&input, &doc(TEXT), &config, &limits).unwrap();
     let use_tool = doc(
         r#"{"role":"assistant","model":"actual","content":[{"type":"tool_use","id":"next","name":"weather","input":{"city":"Rome"}}],"stopReason":"toolUse"}"#,

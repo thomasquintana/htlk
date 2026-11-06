@@ -51,6 +51,7 @@ pub use tasks::*;
 mod services;
 mod subscriptions;
 mod url_interactions;
+mod work;
 mod workers;
 pub use interactions::{
     McpAwaitReply, McpClientAction, McpClientAuthorization, McpClientAuthorizer,
@@ -74,6 +75,7 @@ pub use url_interactions::{
     McpStoredUrlInteraction, McpStoredUrlRequiredError, McpUrlAddress, McpUrlCompletion,
     McpUrlConsent, McpUrlPage, McpUrlRequest, McpUrlRequiredError, validate_url_completion,
 };
+pub use work::{McpHostWork, McpHostWorkEvidence, McpHostWorkReceipt};
 
 /// Observable reason a session stopped receiving. This remains inspectable even
 /// when the application event queue is full or its consumer is stalled.
@@ -207,6 +209,9 @@ pub struct McpOperationOrigin {
 /// handler dispatch; possession of a copied context grants no acceptance authority.
 #[derive(Clone)]
 pub struct McpInteractionContext {
+    /// Single-operation durable work capability minted after ancestor admission.
+    /// The native wrapper saves completion before returning to the handler.
+    pub work: Option<McpHostWork>,
     /// Live request-bound progress sender, only when the peer requested progress.
     /// Progress never extends this interaction's deadline or implies completion.
     pub progress: Option<McpProgressReporter>,
@@ -441,6 +446,9 @@ pub enum McpClientService {
     SamplingTools,
     /// Authorized context inclusion (soft-deprecated in the selected version).
     SamplingContext,
+    /// Combined tool-enabled and authorized-context sampling. Required when both
+    /// extensions are installed so dispatch cannot silently skip either service.
+    SamplingToolsContext,
     /// Schema-driven form elicitation.
     ElicitationForm,
     /// External URL elicitation.
@@ -742,6 +750,7 @@ impl McpClientConfig {
         use McpClientService::*;
         let has = |s| handlers.contains_key(&s);
         if ((has(SamplingTools) || has(SamplingContext)) && !has(Sampling))
+            || ((has(SamplingTools) && has(SamplingContext)) != has(SamplingToolsContext))
             || (has(RootsChanged) && !has(Roots))
         {
             return Err(fail(FailureCode::Profile));
