@@ -12,7 +12,7 @@ coverage and custom host implementations are distinct.
 | prompts/list, prompts/get | Server prompts | Selected descriptor + retrieval implemented | MCP E2E |
 | resources/list, resources/read | Server resources | Selected descriptor + read implemented | MCP E2E |
 | resources/templates/list, expanded resources/read | Server resources | Selected template + read implemented | MCP E2E |
-| Complete four-category catalog API | Server category capabilities | Pending | All-page completion, bounds, repeated cursor, no effect dispatch |
+| Complete four-category catalog API | Server category capabilities | Bounded page/enumeration APIs implemented; stdio discovery utility covers all advertised inventories | [Service tests](../crates/htlk-runtime/tests/mcp_client_services.rs), [discovery tests](../tools/discover-mcp.test.mjs): incomplete prefixes, opaque/cyclic cursors, page/item/byte/time bounds, zero content/effect calls |
 | Host services and derived client capabilities | Installed service + host policy | Host-owned services implemented; run callback bridge pending | Invalid combinations cannot initialize; [callback tests](../crates/htlk-runtime/tests/mcp_callbacks.rs) |
 | Host-owned sessions | Authenticated owner/generation | Implemented with optional durable ownership/epochs through `McpClientPersistence` | [Client session tests](../crates/htlk-runtime/tests/mcp_client_sessions.rs), [interaction store tests](../crates/htlk-runtime/tests/mcp_interaction_store.rs); restart identity, expiry, isolation, explicit reopen |
 | Idle stdio reception | Transport | Implemented in the shared native client and graph adapter dispatcher | Client session tests: notification observed before next foreground request |
@@ -26,12 +26,12 @@ coverage and custom host implementations are distinct.
 | elicitation/create, form | Client elicitation.form (empty elicitation also means form) | Host-owned addressed replies implemented; run callback bridge pending | Restricted schema, omitted mode, validated addressed replies |
 | elicitation/create, URL; -32042 | Client elicitation.url | Host-owned URL requests implemented; -32042 interaction routing pending | Consent, no prefetch or credential transit; error data retained as evidence |
 | notifications/elicitation/complete | Server to client; known elicitation ID | Pending | Separate consent/completion, ignore unknown/completed IDs |
-| resources/subscribe, resources/unsubscribe | Server resources.subscribe | Pending | Durable intent, lifecycle races, explicit restoration/gaps |
-| notifications/resources/updated | Server to client | Pending | Idle delivery; zero automatic content reads |
-| tools/prompts/resources list_changed | Corresponding server listChanged | Pending | Typed events; zero automatic catalog adoption |
+| resources/subscribe, resources/unsubscribe | Server resources.subscribe | Bounded RPCs and durable host consumer intent/lifecycle implemented | [Subscription tests](../crates/htlk-runtime/tests/mcp_subscriptions.rs): first/last consumers, competing connections, uncertain claims, fenced ACKs, explicit restoration/gaps; service tests cover unsubscribe update races |
+| notifications/resources/updated | Server to client | Generic protected idle event delivery implemented; dedicated typed event pending | Service/subscription tests: idle/update races cause zero resource reads or effect calls |
+| tools/prompts/resources list_changed | Corresponding server listChanged | Generic protected delivery implemented; typed/gated invalidation pending | Service tests: no automatic catalog refresh or adoption; templates share resource catalog invalidation |
 | roots/list, notifications/roots/list_changed | Client roots / roots.listChanged | Pending | Host source, URI constraints, changes |
-| completion/complete | Server completions | Pending | Prompt/template references, contextual arguments, bounds |
-| logging/setLevel, notifications/message | Server logging | Pending | Level validation, protected bounded idle delivery |
+| completion/complete | Server completions | Capability-gated checked request/result API implemented | Service tests: prompt/template references, contextual arguments, bounded response/time, 100-value limit, valid totals, protected errors |
+| logging/setLevel, notifications/message | Server logging | Capability-gated level API and generic protected log delivery implemented; typed log event pending | Service tests: all eight levels, malformed ACKs, unsupported capability, idle log delivery |
 | notifications/progress | Request progressToken; bidirectional | Pending | Token correlation, absolute deadline preserved |
 | Task-augmented tools/call | Server tasks.requests.tools.call + descriptor execution | Pending | Required/optional/forbidden, result vs acceptance, no duplicate create |
 | Task-augmented sampling/elicitation | Corresponding client tasks.requests | Pending | Durable receiver lifecycle and parent attribution |

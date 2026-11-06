@@ -56,6 +56,12 @@ pub(super) struct Wire {
 }
 
 impl Wire {
+    pub fn representation_limits(&self) -> &Limits {
+        &self.limits
+    }
+    pub fn client_limits(&self) -> &McpClientLimits {
+        &self.config.limits
+    }
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         owner: McpOwner,

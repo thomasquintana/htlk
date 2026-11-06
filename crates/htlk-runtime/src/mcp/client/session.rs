@@ -244,6 +244,14 @@ pub struct McpClientSession {
     wire: Arc<Wire>,
 }
 impl McpClientSession {
+    /// Immutable representation limits applied to this initialized session.
+    pub fn representation_limits(&self) -> &Limits {
+        self.wire.representation_limits()
+    }
+    /// Immutable client resource limits governing this session.
+    pub fn client_limits(&self) -> &McpClientLimits {
+        self.wire.client_limits()
+    }
     /// Immutable session owner and generation.
     pub fn owner(&self) -> &McpOwner {
         &self.wire.owner

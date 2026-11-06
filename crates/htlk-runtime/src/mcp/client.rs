@@ -23,6 +23,8 @@ mod session;
 pub use session::{McpClientReply, McpClientSession, NativeMcpClient};
 mod interactions;
 mod protocol;
+mod services;
+mod subscriptions;
 mod workers;
 pub use interactions::{
     McpAwaitReply, McpClientAction, McpClientAuthorization, McpClientAuthorizer,
@@ -31,6 +33,13 @@ pub use interactions::{
 pub use protocol::{
     McpClientValidationError, McpIncomingKind, validate_client_request, validate_client_result,
 };
+pub use services::{
+    McpCatalog, McpCatalogCursor, McpCatalogKind, McpCatalogLimits, McpCatalogPage,
+    McpCatalogStatus, McpCatalogStop, McpCompletion, McpCompletionReference, McpCompletionRequest,
+    McpLoggingLevel, McpResourceSubscriptionAck, McpResourceSubscriptionAction, McpServiceError,
+    McpServiceLimits,
+};
+pub use subscriptions::{McpSubscriptionConsumer, McpSubscriptionHost, McpSubscriptionReport};
 
 /// Observable reason a session stopped receiving. This remains inspectable even
 /// when the application event queue is full or its consumer is stalled.

@@ -8,6 +8,11 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Bounded MCP tool, prompt, resource, and template catalog browsing, capability-gated
+  completion/logging utilities, and four-inventory stdio discovery without content
+  acquisition. Durable host subscriptions share consumer intent, fence acknowledgements,
+  preserve uncertain sends, and require explicit restoration across observable epoch
+  gaps. Private SQLite schema 11 deliberately rejects earlier stores.
 - Run-owned MCP callbacks carry runtime-established invocation/attempt origins and
   atomically charge every containing scope and wrapper before dispatch. Callback
   results preserve ancestor protection and uncertainty through the run journal.

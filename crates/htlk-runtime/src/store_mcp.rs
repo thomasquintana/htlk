@@ -10,6 +10,12 @@ use htlk_executable::{JsonDocument, digest::hash_bytes};
 use tokio_rusqlite::rusqlite::Connection as Db;
 #[path = "store_mcp_run.rs"]
 mod run;
+#[path = "store_mcp_subscriptions.rs"]
+mod subscriptions;
+pub use subscriptions::{
+    McpStoredSubscription, McpSubscriptionAction, McpSubscriptionClaim, McpSubscriptionIntent,
+    McpSubscriptionLimits, McpSubscriptionOperation, McpSubscriptionOutcome, McpSubscriptionState,
+};
 
 /// Durable session identity. Epochs never repeat within a store, and the session
 /// digest includes the store namespace as well as owner and server identity.

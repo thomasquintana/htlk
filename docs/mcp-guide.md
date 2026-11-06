@@ -80,6 +80,72 @@ or drop each reply after processing it. `raw_result` and `McpRpcError::as_bytes`
 preserve exact payload bytes; their `JsonDocument` views provide canonical values
 separately. Byte-span extraction occurs only after strict full-message admission.
 
+### Catalog browsing and utility services
+
+An initialized `McpClientSession` exposes `list_tools`, `list_prompts`,
+`list_resources`, and `list_resource_templates` for one page, plus corresponding
+`enumerate_*` methods for a bounded traversal. Each method checks the advertised
+server category capability. Pages and descriptors are checked against the pinned
+offline analyzer validators; browsing does not invoke tools, retrieve prompt
+messages, read resources, expand templates, or adopt compiler contracts.
+
+`McpServiceLimits` bounds a complete response and its elapsed RPC time.
+`McpCatalogLimits` additionally bounds pages, retained items, and cumulative original
+result-object bytes across the traversal. Session configuration imposes its own
+ceilings. Enumeration keeps complete validated pages in server order, including
+duplicates from changing catalogs. Inspect `McpCatalog::status` before treating the
+result as complete: page/item/byte/deadline exhaustion, cancellation, cursor cycles,
+and later protocol failures retain an explicitly incomplete prefix. Opaque cursors
+preserve empty strings. `next_cursor` identifies the next unadopted page; an absent
+cursor on an incomplete first page does not mean completion.
+
+`complete` accepts a checked `McpCompletionRequest` targeting a prompt or resource
+template, an argument name/prefix, and optional already-resolved arguments. It checks
+the `completions` capability, the pinned request/result shapes, the 100-value ceiling,
+and valid totals. `set_logging_level` accepts a closed `McpLoggingLevel` and requires
+the `logging` capability. Both preserve protected remote errors and delivery facts.
+Logging and resource/catalog notifications arrive through the bounded generic
+`McpClientEvent` surface. Dedicated typed resource/catalog/log events, outgoing roots
+changes, and progress-token correlation remain pending in the
+[conformance inventory](mcp-conformance.md).
+
+### Durable resource monitoring
+
+Use `McpSubscriptionHost` with the same `McpClientPersistence` that opened a durable
+host-owned session. Construct a checked `McpSubscriptionConsumer` from the exact URI
+and a stable local subscriber key. `subscribe` records that consumer's desired
+presence before dispatch; repeating the same key does not add a reference. Other
+consumers share one remote subscription. `unsubscribe` removes only the selected
+consumer's desire and sends the remote request only after the final release.
+Both protocol actions require `resources.subscribe`.
+
+Each report exposes the durable record, attempted RPC count, and any delivery-aware
+failure. Desired consumer count and remote state are independent. States distinguish
+`Inactive`, acknowledged `Active`, `Uncertain`, and an epoch delivery `Gap`.
+Acknowledgements recheck live owner generation, exact epoch, and persisted operation
+identity. A dropped caller, remote error, or ambiguous send cannot blindly dispatch
+the same claim again. A definitely not-sent operation can be attempted by a later
+explicit command. Concurrent desire changes converge through bounded follow-up
+transitions; inspect `converged()` and use explicit `reconcile` when that allowance
+is exhausted. Reconciliation does not retry an uncertain operation.
+
+`disconnect` durably closes the exact epoch and performs bounded transport cleanup,
+while preserving desired consumers. `inspect` and paged `list` remain passive and
+report gaps after closure or generation takeover. Opening a new transport alone
+does not restore monitoring. An explicitly authorized embedding-host call to
+`restore` binds the selected subscription and its previous epoch to the new session;
+the durable journal records both epochs and the gap count. Old uncertainty remains
+historical evidence. Stable consumer keys and intent survive process restart; remote
+replay or uninterrupted delivery is not implied.
+
+`McpSubscriptionLimits` bounds resource rows, consumer tombstones, retained operation
+claims, accounted key/row bytes, and transitions per command. Inspection and mutation
+are trusted embedding-host APIs: authenticate frontends before granting access to
+the session or protected URI inventory. The manager supports host owners; it does
+not borrow run budgets. Updates racing unsubscribe remain ordinary host events,
+including updates already in flight after acknowledgement. They never trigger a
+resource read, model call, catalog refresh/adoption, or workflow mutation.
+
 ### Addressed host interactions
 
 Install `McpClientHandler` implementations for sampling and other services, link
@@ -345,9 +411,10 @@ checks always apply. Existing executables and recovered attempts keep their froz
 revision. `InferenceRevision::difference` reports bounded changed paths. Open-object
 schemas often already accept additional fields; new observations do not mandate adoption.
 
-## Discover tools
+## Discover catalogs
 
-The maintained helper captures actual **stdio tool descriptors** without calling tools:
+The maintained helper captures actual **stdio tool, prompt, resource, and resource-
+template descriptors** from the categories advertised by the server:
 
 ```console
 node tools/discover-mcp.mjs HOST.json NEW_CATALOGS.json
@@ -356,12 +423,20 @@ node tools/discover-mcp.mjs HOST.json NEW_CATALOGS.json
 The host file contains `transport: "stdio"`, `alias`, `deployment_id`, `program`,
 `arguments`, and an optional `environment` overlay. This helper inherits its parent
 environment before applying that overlay; it differs from the live-session runner's
-explicit environment selection. Limits are fixed in
-[`discover-mcp.mjs`](../tools/discover-mcp.mjs).
-Its output contains the three catalog objects, with empty resource/template/prompt
-inventories. It is not a complete HTTP/resource/prompt discovery client. Pagination,
-requests, bytes, and shutdown are bounded and output overwrite is refused. Native
-compiler/runtime admission independently validates captured catalogs and live data.
+explicit environment selection. Optional `discovery_limits` can tighten the defaults:
+128 pages per inventory, 4096 items across all inventories, 2 MiB per frame, 16 MiB
+total stdout bytes, and one 30-second absolute discovery deadline. The fields are
+`pages`, `items`, `frame_bytes`, `total_bytes`, and `timeout_ms`; all must be positive
+integers no larger than their defaults. Shutdown has a separate two-second bound.
+
+The output contains the three compiler catalog objects, including resource
+templates, plus a `.discovery.json` report distinguishing unsupported inventories
+from completed traversals. Empty opaque cursors are preserved; repeated cursors,
+budget exhaustion, and malformed pages fail before publishing partial catalogs.
+Output overwrite is refused. Discovery never calls tools, retrieves prompt messages,
+reads resources, expands templates, or adopts contracts. HTTP discovery uses the
+native session APIs rather than this stdio helper. Native compiler/runtime admission
+independently validates captured catalogs and live data.
 
 ## Run a durable live session
 
