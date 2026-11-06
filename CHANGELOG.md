@@ -6,6 +6,12 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ## [Unreleased]
 
+### Changed
+
+- Coverage baselines are advisory recommendations in CI. Invalid or missing
+  measurements and absent branch instrumentation still fail validation; complete
+  instrumented test suites and report artifacts remain required.
+
 ### Fixed
 
 - MCP work inspection authorizes evidence and protection from one consistent

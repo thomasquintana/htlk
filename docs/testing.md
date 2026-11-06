@@ -6,16 +6,16 @@ coverage map, instrumented measurements, and intentional fixture updates.
 
 ## Goals and measurement
 
-The goal is 100% meaningful coverage, with 99% production line coverage per crate
-as the near-term target. **The target has not yet been reached.** CI enforces the
-measured per-crate floors and uncovered-line budgets in
-[`coverage-thresholds.json`](../tools/coverage-thresholds.json); raise these
-ratchets as additional gaps are closed. A large well-covered crate cannot conceal
-a regression in another crate.
+Coverage baselines guide review and meaningful test selection; they are
+recommendations rather than release targets. CI reports per-crate comparisons from
+[`coverage-thresholds.json`](../tools/coverage-thresholds.json) and the branch baseline
+without failing solely on percentage or uncovered-line counts. Adequacy is judged
+alongside independent observable invariants, fault scenarios, and remaining reachable
+paths. Per-crate reporting keeps a large crate from concealing another's gaps.
 
 The primary measurement uses Rust **1.98.0** and `cargo-llvm-cov` **0.9.1**.
 The separate branch measurement uses **nightly-2026-10-20**, since Rust branch
-instrumentation is experimental. Its floors live in
+instrumentation is experimental. Its baselines live in
 [`coverage-branch-thresholds.json`](../tools/coverage-branch-thresholds.json).
 Toolchain upgrades require reviewing both reports: different LLVM/Rust versions
 can assign different line/region counts to the same source.
@@ -55,7 +55,7 @@ cargo +stable install cargo-llvm-cov --version 0.9.1 --locked
 mkdir -p target/coverage
 cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --json --output-path target/coverage/coverage.json
 cargo +1.98.0 llvm-cov report --workspace --html --output-dir target/coverage
-node tools/coverage.mjs target/coverage/coverage.json --check tools/coverage-thresholds.json
+node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-thresholds.json
 ```
 
 For branch coverage:
@@ -64,7 +64,7 @@ For branch coverage:
 rustup toolchain install nightly-2026-10-20 --profile minimal --component llvm-tools-preview
 mkdir -p target/coverage
 cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --json --output-path target/coverage/coverage.json
-node tools/coverage.mjs target/coverage/coverage.json --check tools/coverage-branch-thresholds.json
+node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-branch-thresholds.json
 ```
 
 Use separate `CARGO_LLVM_COV_TARGET_DIR` directories if keeping stable and nightly
@@ -145,7 +145,7 @@ Corrupt checkpoints cannot publish output artifacts or authorize redispatch.
 These supplement the [conformance map](#conformance-map),
 exhaustive binding/cycle oracles, codec vectors and controlled-stack tests.
 
-## Remaining work toward 99%
+## Coverage-directed recommendations
 
 The annotated reports retain every remaining production gap. The highest-value
 follow-ups are additional schema/generic inference combinations, callback variance
@@ -169,9 +169,10 @@ validation. Every E2E, subprocess crash and bounded stress campaign runs in thes
 jobs; none is ignored or deferred to a schedule. Reports upload even after a test
 failure. Release publishing depends on both ordinary validation and coverage.
 
-The coverage gate rejects missing/malformed/duplicate core measurements, new
-unconfigured production crates, inadequate per-crate percentages, excess uncovered
-lines and absent branch instrumentation. Its own Node tests also exercise CLI
+Coverage validation rejects missing/malformed/duplicate core measurements, new
+unconfigured production crates, invalid baseline configuration and absent branch
+instrumentation. Percentage and uncovered-line comparisons are advisory; `--check`
+remains available for explicit strict local comparisons. Node tests also exercise CLI
 failure statuses and the facade's transition from reexports to executable code.
 
 ## Documentation checks

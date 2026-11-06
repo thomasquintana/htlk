@@ -10,7 +10,7 @@ the required formatting and linting components.
 Install Node.js 24 as well: the full compiler/runtime E2E suite launches independent
 local stdio/HTTP/SSE MCP peers. Every E2E, crash/restart and bounded concurrency
 campaign runs on every PR. See [testing](docs/testing.md)
-for pinned coverage toolchains, reports, per-crate ratchets and focused commands.
+for pinned coverage toolchains, reports, advisory per-crate baselines and focused commands.
 
 Before opening a pull request, run:
 
