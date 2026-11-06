@@ -8,6 +8,13 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Native MCP HTTP credential providers bind exact server/resource/principal and run
+  on every POST, GET/resumption and DELETE. Bounded OAuth/OIDC discovery, PKCE S256,
+  pre-registration, resource indicators, refresh rotation and scope challenges are
+  implemented with host-controlled navigation and secret persistence. Protected
+  structured authentication concerns survive failed initialization; credentials
+  never automatically replay operations. Optional CIMD, dynamic registration and
+  independently versioned authorization extensions are explicitly assessed/deferred.
 - Bounded MCP tool, prompt, resource, and template catalog browsing, capability-gated
   completion/logging utilities, and four-inventory stdio discovery without content
   acquisition. Durable host subscriptions share consumer intent, fence acknowledgements,

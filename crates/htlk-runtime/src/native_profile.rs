@@ -64,6 +64,7 @@ pub fn native_profile(
         include_bytes!("execution/mcp_samples.rs"),
         include_bytes!("mcp.rs"),
         include_bytes!("mcp/client.rs"),
+        include_bytes!("mcp/client/auth.rs"),
         include_bytes!("mcp/client/protocol.rs"),
         include_bytes!("mcp/client/services.rs"),
         include_bytes!("mcp/client/subscriptions.rs"),

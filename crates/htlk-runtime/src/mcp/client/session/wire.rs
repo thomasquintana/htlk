@@ -109,7 +109,17 @@ impl Wire {
             McpEndpoint::Http { url, headers }
                 if server.transport() == McpTransport::StreamableHttp =>
             {
-                (Transport::Http(http::Http::new(url, headers)?), None)
+                (
+                    Transport::Http(http::Http::new(
+                        url,
+                        headers,
+                        &owner,
+                        &server,
+                        &limits,
+                        config.credentials.clone(),
+                    )?),
+                    None,
+                )
             }
             _ => return Err(fail(FailureCode::McpIdentity)),
         };
@@ -240,7 +250,9 @@ impl Wire {
                     result = http.events(&wire) => result,
                 };
                 if let Err(error) = result {
-                    wire.end(if error.code() == FailureCode::McpProtocol {
+                    wire.end(if error.code() == FailureCode::Policy {
+                        McpSessionEnd::Authentication
+                    } else if error.code() == FailureCode::McpProtocol {
                         McpSessionEnd::Protocol
                     } else {
                         McpSessionEnd::Transport
@@ -782,7 +794,7 @@ impl Wire {
                     .await;
                     let _ = child.lock().await.kill().await;
                 }
-                Transport::Http(http) => http.close().await,
+                Transport::Http(http) => http.close(self).await,
             }
         })
         .await;

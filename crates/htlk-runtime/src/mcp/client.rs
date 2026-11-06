@@ -19,6 +19,7 @@ use std::{collections::BTreeMap, fmt, future::Future, pin::Pin, sync::Arc, time:
 /// The sole protocol version implemented by this client profile.
 pub const MCP_VERSION: &str = "2025-11-25";
 
+pub mod auth;
 mod session;
 pub use session::{McpClientReply, McpClientSession, NativeMcpClient};
 mod interactions;
@@ -61,6 +62,8 @@ pub enum McpSessionEnd {
     CallbackFailure,
     /// Server invalidated the HTTP session; reopening requires a new epoch.
     SessionExpired,
+    /// Credentials or an HTTP authorization challenge require host attention.
+    Authentication,
 }
 
 /// Namespace for an authenticated session owner. Equal names in different
@@ -678,6 +681,8 @@ pub struct McpClientConfig {
     listen_for_events: bool,
     persistence: Option<McpClientPersistence>,
     authorizer: Option<Arc<dyn McpClientAuthorizer>>,
+    credentials: Option<Arc<dyn auth::McpCredentialProvider>>,
+    authentication: auth::AuthenticationMonitor,
 }
 impl McpClientConfig {
     /// Freezes a checked service registry and derives its protocol capabilities.
@@ -745,6 +750,8 @@ impl McpClientConfig {
             listen_for_events: true,
             persistence: None,
             authorizer: None,
+            credentials: None,
+            authentication: auth::AuthenticationMonitor::new(),
         })
     }
     /// Checked immutable resource bounds.
@@ -782,5 +789,24 @@ impl McpClientConfig {
     pub fn with_authorizer(mut self, authorizer: Arc<dyn McpClientAuthorizer>) -> Self {
         self.authorizer = Some(authorizer);
         self
+    }
+    /// Installs host-managed exact-server/resource/principal credentials for every
+    /// HTTP request, including control POSTs, SSE GET/resumption and DELETE.
+    /// Static Authorization headers cannot be combined with this provider. Stdio
+    /// continues to use host environment configuration.
+    pub fn with_credential_provider(
+        mut self,
+        provider: Arc<dyn auth::McpCredentialProvider>,
+    ) -> Self {
+        self.credentials = Some(provider);
+        self
+    }
+    /// Watches the latest protected authentication concern across clients using
+    /// this configuration. Sequence gaps expose overwritten concerns; this bounded
+    /// monitor is not an audit archive. Subscribe before open to observe failures
+    /// that prevent a session handle from being created. Host persistence and
+    /// authorization interaction presentation are explicit host responsibilities.
+    pub fn authentication_concerns(&self) -> auth::McpAuthenticationConcerns {
+        self.authentication.subscribe()
     }
 }

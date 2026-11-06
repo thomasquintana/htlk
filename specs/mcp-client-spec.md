@@ -165,6 +165,57 @@ and archival. Event overflow and connection gaps are observable.
   transit the client. Connection credentials are applied on every relevant HTTP
   request and excluded from ordinary evidence and executable meaning.
 
+## Native HTTP authorization profile
+
+The optional native OAuth profile supports pre-registered clients using `none`,
+`client_secret_basic`, or `client_secret_post` token endpoint authentication.
+Registration pins the authorization server and exact redirect URI. Client ID
+Metadata Documents, RFC 7591 dynamic client registration, and independently
+versioned authorization extensions are assessed but not implemented: the former
+requires host HTTPS metadata publication and a draft-version contract; dynamic
+registration requires remote client/secret lifecycle policy. No fallback silently
+registers a client or advertises an unsupported mechanism.
+
+Credential lookup MUST bind the exact compound server digest, trusted owner
+principal and resource URL. The transport MUST acquire credentials before each
+POST, including control messages and callback replies, each GET/resumption, and
+DELETE. Provider-backed destinations are query-free resource URLs. Static
+Authorization headers and a credential provider MUST NOT be combined. Acquisition
+failure MUST precede send and retain `NotSent` for that HTTP attempt; an interrupted
+resumption does not erase an original POST's uncertain delivery. Redirects and
+automatic HTTP request retries are disabled.
+
+Protected-resource discovery MUST use the `WWW-Authenticate` resource metadata URL
+when provided, otherwise path-specific then root RFC 9728 well-known URLs. AS
+discovery MUST attempt OAuth path insertion, OIDC path insertion, then OIDC path
+appending for path issuers, and OAuth then OIDC well-known endpoints for root
+issuers. Only unavailable (404/405) locations fall through; malformed, mismatched,
+untrusted or redirected metadata fails closed. Protected-resource identifiers,
+the pre-registered issuer and metadata issuer MUST agree. Metadata MUST advertise
+S256, code responses and the configured authentication method. Trust approval is
+independent for resource metadata, AS metadata, authorization and token URLs.
+
+The mechanism MUST include the resource indicator in authorization, code exchange
+and refresh, use host-supplied independent cryptographic entropy for PKCE/state,
+and validate state, the registered callback, any resource/issuer echo and a required
+advertised issuer response. Pending authorization is single-use and expires.
+Network time, bytes, discovery requests and per-original-operation challenges are
+finite. Challenge scopes take precedence over protected-resource scope metadata
+without assuming a subset relationship. The host owns navigation, protected token
+storage, trusted expiry restoration, refresh serialization and replacement of
+rotated secrets. Interrupted exchanges/refreshes are not retried automatically.
+
+Native clients MUST retain a structured protected authentication concern for
+credential failures, interrupted acquisition and HTTP 401/403, including malformed
+challenges. The bounded latest-value monitor survives failed initialization and
+ordinary event overflow; configuration-scoped sequence gaps expose overwritten
+concerns. Concerns identify binding, epoch, HTTP method and outgoing RPC ID where
+known, without ordinary Debug/error disclosure of secrets or remote diagnostic
+text. HTTP challenges are not JSON-RPC replies or proof of no effects. Redacted
+`E_POLICY` and conservative delivery evidence remain separate from protected
+concerns. A concern or renewed credential MUST NOT automatically replay an MCP
+operation. Idle GET authorization failure terminates reception explicitly.
+
 ## Generated-schema interpretation
 
 The authoritative MCP TypeScript definition at the

@@ -80,6 +80,73 @@ or drop each reply after processing it. `raw_result` and `McpRpcError::as_bytes`
 preserve exact payload bytes; their `JsonDocument` views provide canonical values
 separately. Byte-span extraction occurs only after strict full-message admission.
 
+### MCP-server authorization
+
+Install `McpClientConfig::with_credential_provider` for host-managed connection
+credentials. The shared native transport asks the provider before every HTTP POST,
+including notifications and callback responses, every GET/SSE resumption, and
+best-effort DELETE. `CredentialBinding::for_server` derives the exact compound
+server digest and binds it to the trusted owner's principal and resource URL.
+Provider-backed endpoints use query-free resource URLs, and combining a provider
+with a static Authorization header is rejected before network dispatch. Stdio
+continues to use the configured host environment.
+
+`mcp::client::auth::OAuthClient` implements the pre-registered OAuth
+authorization-code profile. A host connects it as follows:
+
+1. Subscribe to `authentication_concerns()` on the configuration or native client
+   before opening a session. A failed open has no session handle, but its concern
+   remains available. Inspect the protected binding, epoch, HTTP method, optional
+   outgoing RPC ID, and `McpAuthenticationReason`.
+2. Pass the received `OAuthChallenge` to `OAuthClient::discover`. It uses a
+   header-provided resource metadata URL or the path-specific/root RFC 9728
+   well-known fallbacks, then the registered issuer's OAuth/OIDC metadata. Host
+   `OAuthEndpointPolicy` separately approves resource metadata, AS metadata,
+   authorization navigation and token destinations. HTTPS is required except for
+   an explicit numeric-loopback development exception. Redirects are not followed.
+3. Supply two independently generated CSPRNG 32-byte values through `OAuthEntropy`.
+   Call `begin_authorization`, present its protected URL for host-controlled consent
+   and navigation, and deliver the complete callback URL to `finish_authorization`.
+   The mechanism checks the registered redirect, state, optional resource echo and
+   issuer response, and exchanges the code once using S256 and the resource
+   indicator. The pending transaction is single-use and has a finite lifetime.
+4. Persist `OAuthTokens` in the host's protected store, keyed by server, principal,
+   resource, issuer and client ID. `restore_tokens` imports trusted stored values
+   using a host-computed remaining lifetime; unknown expiry permits refresh but
+   not access-token dispatch. `OAuthTokens` itself is a read-only credential
+   provider. A refreshing host provider serializes `OAuthClient::refresh` and
+   atomically replaces rotated secrets. Mark a persisted refresh token
+   unusable/uncertain before dispatch so an interrupted refresh cannot reuse it.
+5. For an insufficient-scope concern, request the challenge's authoritative scopes
+   through a new authorization flow. Keep an `OAuthChallengeBudget` for the original
+   operation across refreshes/step-ups. No token exchange, refresh or concern
+   automatically dispatches the original MCP request.
+
+Credential acquisition is bounded by the native request/cleanup deadline and
+session timeout. An acquisition failure returns redacted `E_POLICY` before send;
+an interrupted acquisition is a distinct concern. HTTP 401/403 returns `E_POLICY`
+with conservative delivery evidence and retains the parsed challenge (or its
+redacted parsing failure). Neither a challenge nor fresh credentials proves that
+an effectful request was not executed. Existing runtime admission, replay and
+budget checks still govern every explicit retry. An idle GET authentication
+failure ends reception with `McpSessionEnd::Authentication`.
+
+The concern monitor retains only the latest process-local concern, independently
+of the ordinary event queue. Its monotonic sequence exposes overwritten concerns;
+the host controls protected presentation and permanent recording. Debug/errors
+exclude credential values and remote diagnostic text. Credentials are not placed
+in executable meaning, ordinary MCP evidence or request URLs.
+
+Pre-registration supports public clients and confidential clients using
+`client_secret_basic` or `client_secret_post`. Client ID Metadata Documents are
+assessed and deferred pending host HTTPS publication and a draft-version contract.
+Optional dynamic registration is assessed and deferred pending remote-registration
+and secret-lifecycle policy. Independently versioned authorization extensions are
+not implemented. OIDC discovery supplies OAuth endpoints; this profile does not
+perform ID-token login. The [authentication campaigns](../crates/htlk-runtime/tests/mcp_auth.rs)
+exercise these mechanisms against an independent local HTTP implementation,
+including the native transport path.
+
 ### Catalog browsing and utility services
 
 An initialized `McpClientSession` exposes `list_tools`, `list_prompts`,

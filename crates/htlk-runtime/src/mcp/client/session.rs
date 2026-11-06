@@ -90,6 +90,7 @@ pub struct NativeMcpClient {
     timeout_ms: u64,
     stop: Arc<McpCancellation>,
     finished: tokio::sync::watch::Receiver<bool>,
+    authentication: auth::AuthenticationMonitor,
 }
 impl NativeMcpClient {
     /// Starts a bounded transport owner. Host-owned service handlers require
@@ -108,6 +109,7 @@ impl NativeMcpClient {
             htlk_analyzer::mcp_schema_validators().map_err(|_| fail(FailureCode::Profile))?;
         }
         let timeout_ms = config.limits.timeout_ms;
+        let authentication = config.authentication.clone();
         let (sender, mut receiver) = mpsc::channel(config.limits.pending_requests);
         let stop = Arc::new(McpCancellation::new());
         let executors = workers::Executors::launch(&config, stop.clone())?;
@@ -173,6 +175,7 @@ impl NativeMcpClient {
             timeout_ms,
             stop,
             finished: completion,
+            authentication,
         })
     }
 
@@ -228,6 +231,12 @@ impl NativeMcpClient {
             .map_err(|_| fail(FailureCode::McpTimeout))?
             .map(|_| ())
             .map_err(|_| fail(FailureCode::McpTransport))
+    }
+    /// Watches protected credential failures and HTTP challenges, including those
+    /// preventing initialization. Only the latest concern is retained; sequence
+    /// gaps expose loss. Acquiring credentials never automatically replays work.
+    pub fn authentication_concerns(&self) -> auth::McpAuthenticationConcerns {
+        self.authentication.subscribe()
     }
 }
 impl Drop for NativeMcpClient {

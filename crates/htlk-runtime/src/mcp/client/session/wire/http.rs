@@ -4,18 +4,51 @@ use reqwest::{Client, Response, StatusCode};
 
 pub(super) struct Http {
     client: Client,
-    url: String,
+    url: reqwest::Url,
     headers: BTreeMap<String, String>,
+    binding: auth::CredentialBinding,
+    credentials: Option<Arc<dyn auth::McpCredentialProvider>>,
     session: Mutex<Option<String>>,
     streams: AtomicU64,
 }
+struct Acquisition<'a> {
+    http: &'a Http,
+    wire: &'a Wire,
+    method: reqwest::Method,
+    request_id: Option<&'a McpRequestId>,
+    complete: bool,
+}
+impl Drop for Acquisition<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.http.concern(
+                self.wire,
+                self.method.clone(),
+                self.request_id,
+                auth::McpAuthenticationReason::AcquisitionInterrupted,
+            );
+        }
+    }
+}
 impl Http {
-    pub fn new(url: String, headers: BTreeMap<String, String>) -> Result<Self, RuntimeFailure> {
+    pub fn new(
+        url: String,
+        headers: BTreeMap<String, String>,
+        owner: &McpOwner,
+        server: &ServerIdentity,
+        limits: &Limits,
+        credentials: Option<Arc<dyn auth::McpCredentialProvider>>,
+    ) -> Result<Self, RuntimeFailure> {
         let parsed = reqwest::Url::parse(&url).map_err(|_| fail(FailureCode::McpIdentity))?;
         if !matches!(parsed.scheme(), "http" | "https")
             || !parsed.username().is_empty()
             || parsed.password().is_some()
             || parsed.fragment().is_some()
+            || (credentials.is_some()
+                && (parsed.query().is_some()
+                    || headers
+                        .keys()
+                        .any(|name| name.eq_ignore_ascii_case("authorization"))))
             || headers.keys().any(|name| {
                 matches!(
                     name.to_ascii_lowercase().as_str(),
@@ -31,24 +64,61 @@ impl Http {
         }
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .no_gzip()
             .no_brotli()
             .no_deflate()
             .no_zstd()
             .build()
             .map_err(|_| fail(FailureCode::McpTransport))?;
+        // Legacy static-header endpoints may retain a deployment query. OAuth
+        // provider destinations are exact query-free resource indicators.
+        let mut resource = parsed.clone();
+        resource.set_query(None);
+        let binding = auth::CredentialBinding::for_server(
+            server,
+            owner.host().principal().into(),
+            resource,
+            limits,
+        )
+        .map_err(|_| fail(FailureCode::McpIdentity))?;
         Ok(Self {
             client,
-            url,
+            url: parsed,
             headers,
+            binding,
+            credentials,
             session: Mutex::new(None),
             streams: AtomicU64::new(0),
         })
     }
-    fn request(&self, method: reqwest::Method) -> Result<reqwest::RequestBuilder, RuntimeFailure> {
+    fn concern(
+        &self,
+        wire: &Wire,
+        method: reqwest::Method,
+        request_id: Option<&McpRequestId>,
+        reason: auth::McpAuthenticationReason,
+    ) {
+        wire.config
+            .authentication
+            .record(auth::McpAuthenticationConcern {
+                sequence: 0,
+                binding: self.binding.clone(),
+                epoch: wire.epoch,
+                method,
+                request_id: request_id.cloned(),
+                reason,
+            });
+    }
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        wire: &Wire,
+        request_id: Option<&McpRequestId>,
+    ) -> Result<reqwest::RequestBuilder, RuntimeFailure> {
         let mut request = self
             .client
-            .request(method, &self.url)
+            .request(method.clone(), self.url.clone())
             .header("mcp-protocol-version", MCP_VERSION);
         for (name, value) in &self.headers {
             request = request.header(name, value);
@@ -60,6 +130,41 @@ impl Http {
         {
             request = request.header("mcp-session-id", session);
         }
+        if let Some(provider) = &self.credentials {
+            let mut acquisition = Acquisition {
+                http: self,
+                wire,
+                method: method.clone(),
+                request_id,
+                complete: false,
+            };
+            let result = tokio::time::timeout(
+                Duration::from_millis(wire.config.limits.timeout_ms),
+                provider.authorization(&self.binding, &method, &self.url),
+            )
+            .await
+            .unwrap_or(Err(auth::OAuthError::Limit));
+            acquisition.complete = true;
+            match result {
+                Ok(Some(authorization)) => request = authorization.apply(request),
+                Ok(None) => {}
+                Err(error) => {
+                    self.concern(
+                        wire,
+                        method,
+                        request_id,
+                        auth::McpAuthenticationReason::Credential(error),
+                    );
+                    return Err(fail(FailureCode::Policy));
+                }
+            }
+            if method != reqwest::Method::DELETE {
+                wire.check_owner().await?;
+                if wire.stop.is_cancelled() {
+                    return Err(fail(FailureCode::Cancelled));
+                }
+            }
+        }
         Ok(request)
     }
     fn check(
@@ -67,7 +172,36 @@ impl Http {
         response: &Response,
         wire: &Wire,
         initialize: bool,
+        method: reqwest::Method,
+        request_id: Option<&McpRequestId>,
     ) -> Result<(), RuntimeFailure> {
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            let limits = auth::OAuthLimits {
+                bytes: wire.limits.max_document_bytes.min(64 * 1024),
+                ..auth::OAuthLimits::default()
+            };
+            let reason = match auth::OAuthChallenge::from_headers(
+                response.status(),
+                response.headers(),
+                &limits,
+            ) {
+                Ok(challenge) => auth::McpAuthenticationReason::Challenge {
+                    status: response.status().as_u16(),
+                    challenge,
+                },
+                Err(error) => auth::McpAuthenticationReason::InvalidChallenge {
+                    status: response.status().as_u16(),
+                    error,
+                },
+            };
+            self.concern(wire, method, request_id, reason);
+            // An auth response is not a JSON-RPC reply or proof of no effects.
+            // Policy failure also prevents cached callback/control transport retry.
+            return Err(fail(FailureCode::Policy));
+        }
         if response.status() == StatusCode::NOT_FOUND
             && self
                 .session
@@ -103,14 +237,15 @@ impl Http {
     }
     pub async fn control(&self, bytes: &[u8], wire: &Wire) -> Result<(), RuntimeFailure> {
         let mut response = self
-            .request(reqwest::Method::POST)?
+            .request(reqwest::Method::POST, wire, None)
+            .await?
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
             .body(bytes.to_vec())
             .send()
             .await
             .map_err(|_| fail(FailureCode::McpTransport))?;
-        self.check(&response, wire, false)?;
+        self.check(&response, wire, false, reqwest::Method::POST, None)?;
         if response.status() != StatusCode::ACCEPTED
             || response
                 .chunk()
@@ -131,7 +266,8 @@ impl Http {
         sent: &AtomicBool,
     ) -> Result<(), RuntimeFailure> {
         let mut request = self
-            .request(reqwest::Method::POST)?
+            .request(reqwest::Method::POST, wire, Some(id))
+            .await?
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
             .body(bytes.to_vec());
@@ -152,7 +288,13 @@ impl Http {
             .execute(request)
             .await
             .map_err(|_| fail(FailureCode::McpTransport))?;
-        self.check(&response, wire, wire.initialization.get().is_none())?;
+        self.check(
+            &response,
+            wire,
+            wire.initialization.get().is_none(),
+            reqwest::Method::POST,
+            Some(id),
+        )?;
         let mut cursor = None;
         let mut retry = 1000;
         let received = self
@@ -169,8 +311,8 @@ impl Http {
                 return Err(fail(FailureCode::McpProtocol));
             };
             tokio::time::sleep(Duration::from_millis(retry)).await;
-            let response = self.get(Some(last), wire).await?;
-            self.check(&response, wire, false)?;
+            let response = self.get(Some(last), wire, Some(id)).await?;
+            self.check(&response, wire, false, reqwest::Method::GET, Some(id))?;
             let received = self
                 .receive(response, wire, Some(id), &mut cursor, &mut retry)
                 .await;
@@ -178,14 +320,20 @@ impl Http {
         }
         Ok(())
     }
-    async fn get(&self, cursor: Option<&str>, wire: &Wire) -> Result<Response, RuntimeFailure> {
+    async fn get(
+        &self,
+        cursor: Option<&str>,
+        wire: &Wire,
+        request_id: Option<&McpRequestId>,
+    ) -> Result<Response, RuntimeFailure> {
         if self.streams.fetch_add(1, Ordering::Relaxed)
             >= wire.config.limits.requests_per_session as u64
         {
             return Err(fail(FailureCode::McpTransport));
         }
         let mut request = self
-            .request(reqwest::Method::GET)?
+            .request(reqwest::Method::GET, wire, request_id)
+            .await?
             .header("accept", "text/event-stream");
         if let Some(cursor) = cursor {
             request = request.header("last-event-id", cursor);
@@ -200,13 +348,13 @@ impl Http {
         let mut retry = 1000;
         loop {
             let response = self
-                .get(cursor.as_deref().filter(|s| !s.is_empty()), wire)
+                .get(cursor.as_deref().filter(|s| !s.is_empty()), wire, None)
                 .await?;
             if response.status() == StatusCode::METHOD_NOT_ALLOWED {
                 wire.server_events.send_replace(Some(false));
                 return Ok(());
             }
-            self.check(&response, wire, false)?;
+            self.check(&response, wire, false, reqwest::Method::GET, None)?;
             wire.server_events.send_replace(Some(true));
             let received = self
                 .receive(response, wire, None, &mut cursor, &mut retry)
@@ -293,11 +441,12 @@ impl Http {
         }
         decoder.finish()
     }
-    pub async fn close(&self) {
+    pub async fn close(&self, wire: &Wire) {
         if self.session.lock().is_ok_and(|session| session.is_some())
-            && let Ok(request) = self.request(reqwest::Method::DELETE)
+            && let Ok(request) = self.request(reqwest::Method::DELETE, wire, None).await
+            && let Ok(response) = request.send().await
         {
-            let _ = request.send().await;
+            let _ = self.check(&response, wire, false, reqwest::Method::DELETE, None);
         }
     }
 }

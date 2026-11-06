@@ -217,6 +217,16 @@ Test-source references describe coverage; CI artifacts establish results for a c
 | Transaction rollback, fences, CAS/finality, incompatible schema rejection, bounded replay/outbox | SQLite unit tests in `crates/htlk-runtime/src/store*.rs`; integration replay and stress suites. |
 | Concurrent host reply cannot create false invariant failure; stable impossible states still fail | Deterministic interleavings and deadline negative controls in `crates/htlk-runtime/src/execution/step_tests.rs`. |
 
+MCP HTTP authentication is qualified by
+`cargo test -p htlk-runtime --test mcp_auth`. Its independent Node resource/AS peer
+checks OAuth/OIDC discovery priority, S256, registration authentication methods,
+callback/state/resource/issuer validation, refresh rotation and interruption, scope
+step-up, trust/byte/time/loop bounds and secret isolation. Native client campaigns
+refresh credentials on every POST/control/GET/resumption/DELETE, reject conflicting
+static headers before send, retain structured acquisition/challenge concerns, and
+prove that authentication and SSE resumption never automatically replay an
+effectful POST. The test imports the exported production API directly.
+
 ## Native identity and fixtures
 
 Native implementation identities hash explicit source contributions, package-owned
