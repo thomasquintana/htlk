@@ -26,7 +26,7 @@ jobs:
             thresholds: tools/coverage-branch-thresholds.json
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Rust and LLVM tools
         uses: dtolnay/rust-toolchain@master
@@ -35,7 +35,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install Node.js for independent wire peers
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload annotated coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.mode }}-${{ github.sha }}
           path: target/coverage/
