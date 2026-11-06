@@ -8,6 +8,11 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Typed, pinned MCP resource/catalog/logging notifications expose capability gates,
+  URI subscription state, and explicit ignored dispositions without automatic reads.
+  Installed roots providers support bounded roots-change notifications. Progress
+  preserves actual request/token identity and task lifetime, enforces monotonic work
+  and totals, and supports expiring host callback reporters without extending deadlines.
 - Experimental MCP tasks now execute in both directions: bounded tool task creation,
   polling/results/list/cancel, and durable deferred sampling/elicitation on independent
   control capacity. Task-required graph tools use explicit frozen deployment policy;

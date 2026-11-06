@@ -111,6 +111,8 @@ pub struct NativeMcpClient {
 impl NativeMcpClient {
     /// Starts a bounded transport owner. Host-owned service handlers require
     /// persistence and authorization, and execute on separate bounded workers.
+    /// Prepares pinned offline protocol validators before transport startup and
+    /// request deadlines, including clients without callback handlers.
     ///
     /// # Errors
     /// Returns unsupported service configuration or inability to launch the I/O owner.
@@ -124,9 +126,9 @@ impl NativeMcpClient {
         {
             return Err(fail(FailureCode::Profile));
         }
-        if !config.handlers.is_empty() {
-            htlk_analyzer::mcp_schema_validators().map_err(|_| fail(FailureCode::Profile))?;
-        }
+        // Prepare pinned notification validators before any transport deadline or
+        // idle reception begins, including catalog-only clients without handlers.
+        htlk_analyzer::mcp_schema_validators().map_err(|_| fail(FailureCode::Profile))?;
         let timeout_ms = config.limits.timeout_ms;
         let authentication = config.authentication.clone();
         let (sender, mut receiver) = mpsc::channel(config.limits.pending_requests);
@@ -272,6 +274,18 @@ pub struct McpClientSession {
     wire: Arc<Wire>,
 }
 impl McpClientSession {
+    /// Announces changed host roots when a roots provider and its change service
+    /// were installed before initialization. The notification performs no roots
+    /// read and no filesystem access; the peer can explicitly request roots/list.
+    ///
+    /// # Errors
+    /// Returns unsupported configuration, cancellation, capacity or owner failure.
+    pub async fn roots_changed(
+        &self,
+        cancellation: Arc<McpCancellation>,
+    ) -> Result<McpNotificationReply, RuntimeFailure> {
+        self.wire.roots_changed(cancellation).await
+    }
     pub(crate) fn persistence(&self) -> Option<&McpClientPersistence> {
         self.wire.persistence()
     }

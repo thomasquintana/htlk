@@ -131,6 +131,26 @@ identity and ownership context. They trigger no resource read, model call, catal
 adoption, executable change or workflow mutation. Hosts own notification presentation
 and archival. Event overflow and connection gaps are observable.
 
+Recognized resource/catalog/logging notifications are pinned-schema validated and
+capability-gated before typed delivery. Unsupported categories/sub-capabilities have
+an explicit ignored disposition; malformed supported messages fail protocol admission.
+Resource updates distinguish unknown/unsolicited URIs, subscription transitions,
+acknowledged state and uncertainty within the source epoch. Receipt performs no read
+or adoption even when a URI is subscribed. HTTP stream ordering can race RPC ACKs.
+
+Progress tokens preserve integer/string identity and are single-use for outgoing
+requests within an epoch. Correlation uses the actual registered request/token, never
+an unrelated active operation. Progress is finite and nonnegative, increases between
+accepted updates, and cannot exceed a known total; totals cannot decrease and omitted
+totals preserve prior knowledge. Unknown, expired, wrong-stream and non-monotonic
+updates are explicitly ignored. Accepted tasks can retain their original creation
+token until terminal observation, TTL, cancellation or the original deadline. This
+retention grants no task-adoption or completion authority. Host callback reporters
+bind the actual admitted request and expire at handler completion or cancellation.
+Outgoing callback progress rechecks current disclosure authorization and unions its
+classification with the admitted request's protection before transmission.
+Neither incoming nor outgoing progress changes an absolute deadline.
+
 ## Protocol services
 
 - Discovery enumerates tools, prompts, resources and templates with page, item,
@@ -147,7 +167,9 @@ and archival. Event overflow and connection gaps are observable.
   and optional completion are separate facts. Unknown/completed completion IDs are
   ignored. Error -32042 retains its required interactions. Completion cannot bypass
   ordinary retry authorization and budgets.
-- Roots are host-provided protocol boundaries, not an OS sandbox. Completion,
+- Roots are host-provided protocol boundaries with pinned `file://` URI rules, not
+  an OS sandbox. Explicit roots-change notifications require the installed provider
+  and advertised change service and do not invoke the provider or read files. Completion,
   logging and progress are capability-aware, bounded services. Progress correlates
   by its token and does not imply completion.
 - Tasks are experimental and independently negotiated by direction/request category.

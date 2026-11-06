@@ -9,9 +9,14 @@ use std::{
 
 mod callbacks;
 mod http;
+mod notifications;
 mod payload;
 mod sse;
 mod tasks;
+use crate::mcp::client::notifications::{ProgressCursor, request_token};
+use notifications::{
+    CallbackProgress, ControlCommand, SubscriptionObservation, SubscriptionRequest, TaskProgress,
+};
 
 enum Transport {
     Stdio {
@@ -22,6 +27,10 @@ enum Transport {
 }
 
 struct PendingRequest {
+    task_creation: bool,
+    task_target: Option<(String, bool)>,
+    progress: Option<(McpProgressToken, ProgressCursor)>,
+    subscription: Option<SubscriptionRequest>,
     task_key: Option<Digest>,
     reply: oneshot::Sender<McpClientReply>,
     limits: Limits,
@@ -31,7 +40,12 @@ struct PendingRequest {
     context: Option<McpAttemptContext>,
 }
 type Pending = BTreeMap<McpRequestId, PendingRequest>;
-type QueuedEvent = (String, JsonDocument, tokio::sync::OwnedSemaphorePermit);
+type QueuedEvent = (
+    String,
+    JsonDocument,
+    Option<McpNotification>,
+    tokio::sync::OwnedSemaphorePermit,
+);
 
 // Once a correlated outcome is admitted, cancellation of independent URL storage
 // must not downgrade it to a transport failure or discard its protected bytes.
@@ -83,6 +97,12 @@ pub(super) struct Wire {
     _task_cancel_memory: Option<tokio::sync::OwnedSemaphorePermit>,
     accepted_callbacks: Mutex<std::collections::BTreeSet<McpRequestId>>,
     task_waits: Mutex<BTreeMap<McpRequestId, (Digest, Arc<McpCancellation>)>>,
+    used_progress: Mutex<BTreeMap<Digest, tokio::sync::OwnedSemaphorePermit>>,
+    subscriptions: Mutex<BTreeMap<String, SubscriptionObservation>>,
+    callback_progress: Mutex<BTreeMap<McpRequestId, CallbackProgress>>,
+    task_progress: Mutex<BTreeMap<McpProgressToken, TaskProgress>>,
+    controls: mpsc::Sender<ControlCommand>,
+    control_sequence: AtomicU64,
 }
 
 impl Wire {
@@ -171,6 +191,7 @@ impl Wire {
             _ => return Err(fail(FailureCode::McpIdentity)),
         };
         let (events, receiver) = mpsc::channel(config.limits.events);
+        let (controls, control_receiver) = mpsc::channel(config.limits.pending_requests);
         let memory = Arc::new(tokio::sync::Semaphore::new(config.limits.retained_bytes));
         // Reserve cancellation bytes before any application/control saturation.
         // Wire task-cancel requests have a separate 4 KiB ingress ceiling; their
@@ -218,7 +239,14 @@ impl Wire {
             cleanup: tokio::sync::Mutex::new(()),
             executors,
             incoming: Mutex::new(BTreeMap::new()),
+            used_progress: Mutex::new(Default::default()),
+            subscriptions: Mutex::new(Default::default()),
+            callback_progress: Mutex::new(Default::default()),
+            task_progress: Mutex::new(Default::default()),
+            controls,
+            control_sequence: AtomicU64::new(0),
         });
+        wire.start_controls(control_receiver);
         let reader = wire.clone();
         tokio::spawn(async move {
             let result = tokio::select! {
@@ -297,14 +325,14 @@ impl Wire {
             return Err(fail(FailureCode::McpIdentity));
         }
         as_map(get(fields, "capabilities")?)?;
+        self.initialization
+            .set(result)
+            .map_err(|_| fail(FailureCode::Invariant))?;
         self.send(obj([
             ("jsonrpc", Value::Text("2.0".into())),
             ("method", Value::Text("notifications/initialized".into())),
         ])?)
         .await?;
-        self.initialization
-            .set(result)
-            .map_err(|_| fail(FailureCode::Invariant))?;
         if matches!(self.transport, Transport::Http(_)) && self.config.listen_for_events {
             let wire = self.clone();
             tokio::spawn(async move {
@@ -436,6 +464,10 @@ impl Wire {
                 return McpClientReply::error(McpDelivery::NotSent, error);
             }
         };
+        let progress = match request_token(&request.params) {
+            Ok(token) => token,
+            Err(_) => return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Input),
+        };
         let (reply, mut receive) = oneshot::channel();
         let sent_state = Arc::new(AtomicBool::new(false));
         {
@@ -445,9 +477,47 @@ impl Wire {
             if pending.len() >= self.config.limits.pending_requests {
                 return McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTransport);
             }
+            if let Some(token) = &progress {
+                let digest = match JsonDocument::from_value(&token.to_value(), &self.limits) {
+                    Ok(document) => document.digest(),
+                    Err(_) => {
+                        return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Input);
+                    }
+                };
+                let Ok(mut used) = self.used_progress.lock() else {
+                    return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Invariant);
+                };
+                if used.contains_key(&digest) {
+                    return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Input);
+                }
+                let memory = match self.reserve(128) {
+                    Ok(memory) => memory,
+                    Err(error) => return McpClientReply::error(McpDelivery::NotSent, error),
+                };
+                used.insert(digest, memory);
+            }
+            let subscription = match self.begin_subscription(method, &request.params) {
+                Ok(value) => value,
+                Err(error) => return McpClientReply::error(McpDelivery::NotSent, error),
+            };
             pending.insert(
                 key.clone(),
                 PendingRequest {
+                    task_creation: method == "tools/call"
+                        && as_map(&request.params)
+                            .is_ok_and(|p| matches!(p.get("task"), Some(Value::Map(_)))),
+                    task_target: if matches!(method, "tasks/get" | "tasks/result" | "tasks/cancel")
+                    {
+                        as_map(&request.params)
+                            .ok()
+                            .and_then(|p| p.get("taskId"))
+                            .and_then(|v| as_text(v).ok())
+                            .map(|id| (id.into(), method == "tasks/result"))
+                    } else {
+                        None
+                    },
+                    progress: progress.map(|token| (token, ProgressCursor::default())),
+                    subscription,
                     task_key,
                     reply,
                     limits,
@@ -524,8 +594,14 @@ impl Wire {
                 }
             }
         }).await.unwrap_or_else(|_| Err(fail(FailureCode::McpTimeout)));
-        if let Ok(mut pending) = self.pending.lock() {
-            pending.remove(&key);
+        if let Ok(mut pending) = self.pending.lock()
+            && let Some(request) = pending.remove(&key)
+        {
+            self.finish_subscription(
+                request.subscription,
+                None,
+                sent_state.load(Ordering::Acquire),
+            );
         }
         match result {
             Ok(reply) => reply,
@@ -811,6 +887,7 @@ impl Wire {
                     }
                     return Ok(());
                 }
+                let notification = self.notification(method, &document, associated)?;
                 let params = fields.get("params").cloned().unwrap_or(obj([])?);
                 if !matches!(params, Value::Map(_)) {
                     return Err(fail(FailureCode::McpProtocol));
@@ -845,7 +922,7 @@ impl Wire {
                         self.end(McpSessionEnd::EventOverflow);
                     })?;
                     self.events
-                        .try_send((method.into(), params, reservation))
+                        .try_send((method.into(), params, notification, reservation))
                         .map_err(|_| {
                             self.end(McpSessionEnd::EventOverflow);
                             fail(FailureCode::McpTransport)
@@ -904,7 +981,22 @@ impl Wire {
                 .lock()
                 .map_err(|_| fail(FailureCode::Invariant))?
                 .remove(&id);
-            if let Some(request) = request {
+            if let Some(mut request) = request {
+                if let Some((task_id, final_result)) = &request.task_target
+                    && let Ok(document) = &result
+                {
+                    let terminal = McpTaskState::from_document(document.clone(), &self.limits)
+                        .is_ok_and(|s| s.task_id() == task_id && s.status().is_terminal());
+                    let final_result = *final_result
+                        && crate::validate_mcp_tool_result(document, &self.limits).is_ok()
+                        && mcp_related_task_id(document.value()).ok().flatten()
+                            == Some(task_id.as_str());
+                    if final_result || terminal {
+                        self.finish_task_progress(task_id);
+                    }
+                }
+                let mut task_progress = self.take_task_progress(&id, &mut request);
+                self.finish_subscription(request.subscription, Some(&result), true);
                 let mut observed = ObservedReply {
                     sender: Some(request.reply),
                     reply: Some(McpClientReply::correlated(result, raw_result)),
@@ -914,6 +1006,7 @@ impl Wire {
                 let reply = observed.reply.as_mut().expect("observed reply");
                 reply.request_id = Some(id.clone());
                 if let Some(key) = request.task_key {
+                    let mut progress_task = None;
                     let registration = async {
                         let persistence = self
                             .config
@@ -934,6 +1027,12 @@ impl Wire {
                                 &self.limits,
                             )
                             .map_err(|_| fail(FailureCode::McpProtocol))?;
+                            // A concurrent idle stream can report progress while
+                            // durable acceptance is being stored. Preserve the
+                            // actual request's token/cursor across that await;
+                            // this observation grants no task-adoption authority.
+                            progress_task = Some(state.task_id().to_owned());
+                            self.install_task_progress(&id, task_progress.take(), &state);
                             persistence
                                 .store
                                 .accept_mcp_remote_task(
@@ -943,7 +1042,7 @@ impl Wire {
                                         .digest(&self.limits)
                                         .map_err(|_| fail(FailureCode::McpIdentity))?,
                                     key,
-                                    state,
+                                    state.clone(),
                                     reply
                                         .raw_result
                                         .clone()
@@ -975,6 +1074,21 @@ impl Wire {
                             .await
                             .unwrap_or_else(|_| Err(fail(FailureCode::McpTimeout))),
                     );
+                    if matches!(reply.task_registration, Some(Err(_)))
+                        && let Some(task) = progress_task
+                    {
+                        self.finish_task_progress(&task);
+                    }
+                } else if request.task_creation
+                    && let Ok(Ok(document)) = &reply.result
+                    && let Some(task) = as_map(document.value())?.get("task")
+                    && let Ok(state) = McpTaskState::from_document(
+                        JsonDocument::from_value(task, &self.limits)
+                            .map_err(|_| fail(FailureCode::McpProtocol))?,
+                        &self.limits,
+                    )
+                {
+                    self.install_task_progress(&id, task_progress.take(), &state);
                 }
                 if let Ok(Err(error)) = &reply.result
                     && error.code() == -32042
@@ -1043,7 +1157,7 @@ impl Wire {
             .map_err(|_| fail(FailureCode::McpProtocol))?;
         let reservation = self.reserve(params.as_bytes().len())?;
         self.events
-            .try_send((method.into(), params, reservation))
+            .try_send((method.into(), params, None, reservation))
             .map_err(|_| {
                 self.end(McpSessionEnd::EventOverflow);
                 fail(FailureCode::Budget)
@@ -1064,7 +1178,7 @@ impl Wire {
                 self.end(McpSessionEnd::Cancelled);
                 break;
             }
-            let _reservation = event.2;
+            let _reservation = event.3;
             let sequence = self.event_sequence.fetch_add(1, Ordering::Relaxed);
             let identity = Value::Array(vec![
                 Value::Text("htlk.mcp-event/1".into()),
@@ -1081,6 +1195,7 @@ impl Wire {
                 break;
             };
             let event = McpClientEvent {
+                notification: event.2,
                 owner: self.owner.clone(),
                 server: self.server.clone(),
                 epoch: self.epoch,
@@ -1115,6 +1230,11 @@ impl Wire {
     fn fail_pending(&self, code: FailureCode) {
         if let Ok(mut pending) = self.pending.lock() {
             for (_, request) in std::mem::take(&mut *pending) {
+                self.finish_subscription(
+                    request.subscription,
+                    None,
+                    request.sent.load(Ordering::Acquire),
+                );
                 let delivery = if request.sent.load(Ordering::Acquire) {
                     McpDelivery::PossiblySent
                 } else {

@@ -60,6 +60,10 @@ message_kinds! {
     LoggingNotification => "LoggingMessageNotification", "Structured server log notification.";
     ProgressNotification => "ProgressNotification", "Correlated progress notification.";
     ResourceUpdated => "ResourceUpdatedNotification", "Resource-update notification.";
+    ToolsChanged => "ToolListChangedNotification", "Tool catalog invalidation notification.";
+    PromptsChanged => "PromptListChangedNotification", "Prompt catalog invalidation notification.";
+    ResourcesChanged => "ResourceListChangedNotification", "Resource and template catalog invalidation notification.";
+    RootsChanged => "RootsListChangedNotification", "Client roots invalidation notification.";
     ElicitationComplete => "ElicitationCompleteNotification", "URL elicitation completion notification.";
     Task => "Task", "Experimental task state.";
     CreateTaskResult => "CreateTaskResult", "Experimental task-acceptance result.";

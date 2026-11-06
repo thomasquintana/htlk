@@ -189,6 +189,8 @@ struct HttpStep {
     new_session: Option<&'static str>,
 }
 fn lifecycle_peer(steps: Vec<HttpStep>) -> (String, std::thread::JoinHandle<()>) {
+    // Process-wide offline preparation precedes the independent peer's I/O window.
+    htlk_analyzer::mcp_schema_validators().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/mcp", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
@@ -385,6 +387,8 @@ fn discovery_rejects_malformed_identity_capabilities_and_inventory_before_tool_d
 // A deliberately independent HTTP peer uses raw bytes, so duplicate keys and
 // unsafe numbers reach the adapter without an intermediary JSON parser.
 fn http_peer(result: String, sse: bool) -> (String, std::thread::JoinHandle<()>, Arc<AtomicBool>) {
+    // Measure bounded transport work after preparing the pinned protocol profile.
+    htlk_analyzer::mcp_schema_validators().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/mcp", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();

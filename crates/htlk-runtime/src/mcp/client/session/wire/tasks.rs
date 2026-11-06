@@ -283,6 +283,7 @@ impl Wire {
             if let Ok(mut incoming) = wire.incoming.lock() {
                 incoming.remove(&context.request_id);
             }
+            wire.clear_progress(&context.request_id);
         });
     }
 }

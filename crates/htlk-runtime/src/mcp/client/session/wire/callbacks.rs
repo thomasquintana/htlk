@@ -130,6 +130,7 @@ impl Wire {
             return Err(fail(FailureCode::McpIdentity));
         }
         let context = McpInteractionContext {
+            progress: None,
             labels: operation
                 .as_ref()
                 .map_or_else(Default::default, |operation| operation.labels.clone()),
@@ -200,6 +201,7 @@ impl Wire {
             if let Ok(mut incoming) = wire.incoming.lock() {
                 incoming.remove(&request_id);
             }
+            wire.clear_progress(&request_id);
         });
         Ok(())
     }
@@ -320,7 +322,9 @@ impl Wire {
             .config
             .handler(service)
             .ok_or_else(|| fail(FailureCode::Profile))?;
+        context.progress = self.progress_reporter(&request, &context)?;
         let outcome = handler.handle(&context, &request).await;
+        self.clear_progress(&context.request_id);
         if context.cancellation.is_cancelled()
             && let Some(persistence) = &self.config.persistence
             && let Ok(now) = persistence.clock.now_ms()
@@ -378,7 +382,7 @@ impl Wire {
         .map_err(|_| fail(FailureCode::McpProtocol))?;
         let reserved = self.reserve(params.as_bytes().len())?;
         self.events
-            .try_send(("htlk/interaction".into(), params, reserved))
+            .try_send(("htlk/interaction".into(), params, None, reserved))
             .map_err(|_| fail(FailureCode::Budget))
     }
     async fn await_callback(

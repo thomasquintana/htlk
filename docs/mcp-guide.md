@@ -171,10 +171,53 @@ template, an argument name/prefix, and optional already-resolved arguments. It c
 the `completions` capability, the pinned request/result shapes, the 100-value ceiling,
 and valid totals. `set_logging_level` accepts a closed `McpLoggingLevel` and requires
 the `logging` capability. Both preserve protected remote errors and delivery facts.
-Logging and resource/catalog notifications arrive through the bounded generic
-`McpClientEvent` surface. Dedicated typed resource/catalog/log events, outgoing roots
-changes, and progress-token correlation remain pending in the
-[conformance inventory](mcp-conformance.md).
+Notifications arrive through the bounded `McpClientEvent` surface. Its
+`notification` field contains a checked `McpNotification` for resource updates,
+catalog changes, structured logging, and progress. Resource updates require
+`resources.subscribe`; catalog changes require the corresponding `listChanged`
+bit; logs require `logging`. Unsupported recognized events have an explicit
+`Ignored` disposition, while malformed supported notifications fail pinned protocol
+admission. Other protocol and local events, including task and addressed URL events,
+retain their existing method/params representation. No event refreshes catalogs or
+adopts compiler contracts.
+
+### Roots and progress
+
+Install a `McpClientService::Roots` handler that returns a bounded `roots` array.
+The native callback path validates both the request and result against the pinned
+protocol and enforces `file://` root URIs without accessing the filesystem. Roots
+are advisory protocol boundaries, not a sandbox or permission to read files. The
+handler uses the configured persistence, current authorizer, and bounded host worker
+execution. Installing `RootsChanged` alongside `Roots` advertises `roots.listChanged`.
+Call `McpClientSession::roots_changed` explicitly when host roots change. It sends
+one bounded notification; it neither invokes the provider nor fetches any roots.
+The peer can subsequently request `roots/list` through that installed handler.
+
+Request progress by supplying `_meta.progressToken` in an explicit outgoing RPC.
+`McpProgressToken` preserves integer versus string identity, including empty strings.
+Outgoing tokens are single-use within a session epoch, preventing late updates from
+aliasing a later operation. A typed progress event identifies the actual outgoing
+request ID and carries a run origin only when that request already had verified
+runtime context. Idle notifications never borrow the most recently active origin.
+Unknown, late, wrong-response-stream, expired, and non-monotonic updates have explicit
+ignored dispositions. Finite progress must increase, totals cannot decrease, and
+work cannot exceed the last known total. Omitting a total preserves the known value.
+Progress never proves completion or extends an absolute request deadline.
+
+Accepted task progress retains the original creation request/token and monotonic
+cursor until a terminal result/status observation, TTL, cancellation or the original
+deadline. It can arrive on an idle stream or a matching task-control response stream;
+it never adopts a task or changes its recorded state. Progress retention failures
+are reported separately and cannot replace persisted acceptance or correlated errors.
+
+For an incoming host callback that requested progress, `McpInteractionContext::progress`
+contains an opaque `McpProgressReporter`. Construct a checked `McpProgress` with its
+exact token and call `report`; clones share one monotonic cursor. The dispatcher
+checks the actual admitted request, epoch, cancellation and deadline before sending
+on separate bounded I/O-control capacity, with current disclosure authorization and
+unioned request/progress protection. A reporter becomes unusable when its
+handler completes or expires. Notifications return `McpNotificationReply`: success
+means local flush or HTTP acceptance, not an RPC reply or proof of consumption.
 
 ### Durable resource monitoring
 
@@ -212,6 +255,11 @@ the session or protected URI inventory. The manager supports host owners; it doe
 not borrow run budgets. Updates racing unsubscribe remain ordinary host events,
 including updates already in flight after acknowledgement. They never trigger a
 resource read, model call, catalog refresh/adoption, or workflow mutation.
+Typed resource-update events also expose session-local subscription knowledge:
+unknown/unsolicited URI, subscribe in flight, subscribed, unsubscribe in flight,
+unsubscribed, or uncertain after failed/overlapping RPCs. Those observations remain
+separate from durable desired consumers and never grant read authority. Independent
+HTTP streams can race an acknowledgement; the event reflects state known at receipt.
 
 ### Experimental protocol tasks
 

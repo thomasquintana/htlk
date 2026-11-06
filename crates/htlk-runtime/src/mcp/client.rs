@@ -42,6 +42,7 @@ pub mod auth;
 mod session;
 pub use session::{McpClientReply, McpClientSession, NativeMcpClient};
 mod interactions;
+mod notifications;
 mod protocol;
 mod task_receiver;
 mod tasks;
@@ -54,6 +55,10 @@ mod workers;
 pub use interactions::{
     McpAwaitReply, McpClientAction, McpClientAuthorization, McpClientAuthorizer,
     McpInteractionHost, McpInteractionPage, McpInteractionReceipt, McpInteractionView,
+};
+pub use notifications::{
+    McpCatalogChanged, McpNotification, McpNotificationIgnored, McpNotificationReply, McpProgress,
+    McpProgressReporter, McpProgressToken, McpResourceUpdateState,
 };
 pub use protocol::{
     McpClientValidationError, McpIncomingKind, validate_client_request, validate_client_result,
@@ -202,6 +207,9 @@ pub struct McpOperationOrigin {
 /// handler dispatch; possession of a copied context grants no acceptance authority.
 #[derive(Clone)]
 pub struct McpInteractionContext {
+    /// Live request-bound progress sender, only when the peer requested progress.
+    /// Progress never extends this interaction's deadline or implies completion.
+    pub progress: Option<McpProgressReporter>,
     /// Frozen minimum protection of the request, parent work, and host policy.
     pub labels: crate::records::SecurityLabels,
     /// Authenticated durable owner and generation.
@@ -336,11 +344,14 @@ pub struct McpClientLimits {
     /// Maximum raw JSON message or incomplete SSE frame bytes.
     pub frame_bytes: usize,
     /// Maximum reserved request, original/canonical reply, and queued event bytes.
+    /// Session-local subscription keys and single-use progress-token fingerprints
+    /// also reserve this capacity until their observation/epoch is released.
     /// At least three frame ceilings are required to admit one full-size RPC.
     pub retained_bytes: usize,
     /// Cumulative admitted requests per epoch, bounding ID/replay retention.
     pub requests_per_session: usize,
     /// Maximum received frames per epoch, bounding even ignored notification work.
+    /// Separately caps outgoing roots/progress notification attempts in that epoch.
     pub messages_per_session: usize,
     /// Maximum active callback ancestry. Without explicit parent attribution this
     /// conservatively bounds active callbacks globally, including parallel requests.
@@ -603,6 +614,9 @@ pub trait McpClientHandler: Send + Sync {
 /// lifecycle event. No event authorizes content acquisition or workflow mutation.
 #[derive(Clone)]
 pub struct McpClientEvent {
+    /// Checked protocol notification observation. None denotes another protocol or
+    /// local lifecycle event (including task and addressed URL events).
+    pub notification: Option<McpNotification>,
     /// Durable owner context, without fabricated operation attribution.
     pub owner: McpOwner,
     /// Exact server identity.
