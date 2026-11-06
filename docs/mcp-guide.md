@@ -891,6 +891,9 @@ stdio/HTTP transports, including real browser, search, model, context, and sandb
 operations. It records the refreshed OpenAI results, actual Chrome roots/list-change
 delivery, independent durable evidence and cleanup, upstream failures, and the bounded
 startup-timeout example improvement. Unsupported services are not counted as passes.
+The [complete context-tool follow-up](context-mcp-interoperability-2026-11-06.md)
+subsequently verified all 23 advertised context tools with real providers, including
+actual upload transfer, media output, cancellation, and repaired-job retry.
 
 The 2026-10-29 campaign exercised 75 advertised tools; 73 had successful normal
 cases. These observations are version-specific samples, not exhaustive support claims:
