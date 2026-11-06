@@ -10,6 +10,12 @@ use htlk_executable::{JsonDocument, digest::hash_bytes};
 use tokio_rusqlite::rusqlite::Connection as Db;
 #[path = "store_mcp_run.rs"]
 mod run;
+#[path = "store_mcp_tasks.rs"]
+mod tasks;
+pub use tasks::*;
+#[path = "store_mcp_remote_tasks.rs"]
+mod remote_tasks;
+pub use remote_tasks::*;
 #[path = "store_mcp_subscriptions.rs"]
 mod subscriptions;
 #[path = "store_mcp_url.rs"]

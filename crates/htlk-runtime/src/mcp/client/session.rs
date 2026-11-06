@@ -16,6 +16,9 @@ use wire::Wire;
 /// Correlated protocol result or protected protocol error, separate from local I/O
 /// failure and conservative delivery evidence.
 pub struct McpClientReply {
+    /// Independent durable task acceptance registration, when this was a task
+    /// creation. Failure never replaces correlated delivery or protected bytes.
+    pub task_registration: Option<Result<(), RuntimeFailure>>,
     /// Exact correlated outgoing RPC identity, available for addressed error
     /// evidence inspection. Absent when no correlated response was admitted.
     pub request_id: Option<McpRequestId>,
@@ -46,6 +49,7 @@ impl McpClientReply {
     }
     fn error(delivery: McpDelivery, error: RuntimeFailure) -> Self {
         Self {
+            task_registration: None,
             request_id: None,
             delivery,
             result: Err(error),
@@ -56,6 +60,7 @@ impl McpClientReply {
     }
     fn correlated(result: Result<JsonDocument, McpRpcError>, raw_result: Option<Vec<u8>>) -> Self {
         Self {
+            task_registration: None,
             request_id: None,
             delivery: McpDelivery::ResponseReceived,
             result: Ok(result),
@@ -85,6 +90,7 @@ enum Command {
         reply: oneshot::Sender<Result<Arc<Wire>, RuntimeFailure>>,
     },
     Request {
+        task_key: Option<Digest>,
         wire: Arc<Wire>,
         request: McpRequest,
         context: Option<McpAttemptContext>,
@@ -109,6 +115,9 @@ impl NativeMcpClient {
     /// # Errors
     /// Returns unsupported service configuration or inability to launch the I/O owner.
     pub fn new(config: McpClientConfig) -> Result<Self, RuntimeFailure> {
+        if let Some(settings) = config.task_receiver {
+            McpTaskReceiver::new(config.clone(), settings)?;
+        }
         // A declaration alone must never advertise a nonfunctional service.
         if !config.handlers.is_empty()
             && (config.persistence.is_none() || config.authorizer.is_none())
@@ -153,13 +162,13 @@ impl NativeMcpClient {
                                     let _ = reply.send(result);
                                 });
                             }
-                            Some(Command::Request { wire, request, context, reply, reservation }) => {
+                            Some(Command::Request { wire, request, context, task_key, reply, reservation }) => {
                                 if jobs.len() >= config.limits.pending_requests {
                                     let _ = reply.send(McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTransport));
                                     continue;
                                 }
                                 jobs.spawn(async move {
-                                    let outcome = wire.invoke_context(request, context).await.reserved(reservation);
+                                    let outcome = wire.invoke_scoped(request, context, task_key).await.reserved(reservation);
                                     let _ = reply.send(outcome);
                                 });
                             }
@@ -263,6 +272,12 @@ pub struct McpClientSession {
     wire: Arc<Wire>,
 }
 impl McpClientSession {
+    pub(crate) fn persistence(&self) -> Option<&McpClientPersistence> {
+        self.wire.persistence()
+    }
+    pub(crate) fn fresh_task_key(&self) -> Digest {
+        self.wire.fresh_task_key()
+    }
     /// Immutable representation limits applied to this initialized session.
     pub fn representation_limits(&self) -> &Limits {
         self.wire.representation_limits()
@@ -329,6 +344,14 @@ impl McpClientSession {
         request: McpRequest,
         context: Option<McpAttemptContext>,
     ) -> McpClientReply {
+        self.invoke_task_context(request, context, None).await
+    }
+    pub(crate) async fn invoke_task_context(
+        &self,
+        request: McpRequest,
+        context: Option<McpAttemptContext>,
+        task_key: Option<Digest>,
+    ) -> McpClientReply {
         let (reply, receive) = oneshot::channel();
         let cancellation = request.cancellation.clone();
         if cancellation.is_cancelled() || self.wire.stop.is_cancelled() {
@@ -341,6 +364,7 @@ impl McpClientSession {
             }
         };
         let send = self.sender.send(Command::Request {
+            task_key,
             wire: self.wire.clone(),
             request,
             context,

@@ -242,6 +242,24 @@ idle GET SSE, and coalesced POST SSE frames. Interactive and polling frontends u
 the same authenticated APIs. Peer counters verify zero URL/metadata fetches and
 zero automatic retries; events disclose opaque local identities only.
 
+## Experimental task qualification
+
+```console
+cargo test -p htlk-runtime --test mcp_tasks --test mcp_task_receiver
+cargo test --test runtime_mcp_callbacks
+```
+
+These tests import the exported production APIs directly. Independent Node peers
+exercise stdio, HTTP JSON with idle GET, and POST SSE. Receiver campaigns use one
+execution worker while get/list/result/cancel progress, replay acceptance and simulate
+lost HTTP acceptance without another model call. SQLite campaigns use independent
+connections, inject a failed terminal write, race completion/cancellation, reopen
+all connections, and verify original bytes and uncertain accounting independently.
+Outbound campaigns retain intent/acceptance/final evidence across client restart and
+prove one task creation after a lost ACK. Runtime campaigns compile task-required
+tools and verify final normalization and real ancestor-accounted callback origins
+after the create RPC ended, including HTTP callbacks on the idle GET stream.
+
 ## Native identity and fixtures
 
 Native implementation identities hash explicit source contributions, package-owned

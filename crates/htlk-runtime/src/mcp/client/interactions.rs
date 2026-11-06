@@ -1001,11 +1001,32 @@ pub(super) fn response(
         Ok(result) => ("result", result.value()),
         Err(error) => ("error", error.document().value()),
     };
+    let method = as_map(request.value())?.get("method").and_then(|v| {
+        if let Value::Text(v) = v {
+            Some(v.as_str())
+        } else {
+            None
+        }
+    });
+    let payload =
+        JsonDocument::from_value(value, limits).map_err(|_| fail(FailureCode::McpProtocol))?;
+    let payload = if !method.is_some_and(|method| method.starts_with("tasks/"))
+        && !as_map(value)?
+            .get("task")
+            .is_some_and(|task| matches!(task, Value::Map(_)))
+        && let Some(params) = as_map(request.value())?.get("params")
+        && let Some(task) =
+            mcp_related_task_id(params).map_err(|_| fail(FailureCode::McpProtocol))?
+    {
+        mcp_with_received_task_metadata(&payload, task, limits)?
+    } else {
+        payload
+    };
     JsonDocument::from_value(
         &obj([
             ("jsonrpc", Value::Text("2.0".into())),
             ("id", id),
-            (key, value.clone()),
+            (key, payload.value().clone()),
         ])?,
         limits,
     )

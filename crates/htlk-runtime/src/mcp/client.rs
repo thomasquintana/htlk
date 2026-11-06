@@ -19,11 +19,34 @@ use std::{collections::BTreeMap, fmt, future::Future, pin::Pin, sync::Arc, time:
 /// The sole protocol version implemented by this client profile.
 pub const MCP_VERSION: &str = "2025-11-25";
 
+/// Frozen native graph-tool task selection, independent of authored arguments.
+/// Enabling deferred execution requires the runtime's actual durable store/clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum McpGraphTaskPolicy {
+    /// Ordinary calls only; required task tools fail before dispatch.
+    #[default]
+    Reject,
+    /// Use tasks only when required by the exact pinned descriptor.
+    Required {
+        /// Requested finite remote retention in milliseconds.
+        ttl_ms: u64,
+    },
+    /// Prefer tasks for optional descriptors too; forbidden descriptors stay inline.
+    Prefer {
+        /// Requested finite remote retention in milliseconds.
+        ttl_ms: u64,
+    },
+}
+
 pub mod auth;
 mod session;
 pub use session::{McpClientReply, McpClientSession, NativeMcpClient};
 mod interactions;
 mod protocol;
+mod task_receiver;
+mod tasks;
+pub use task_receiver::*;
+pub use tasks::*;
 mod services;
 mod subscriptions;
 mod url_interactions;
@@ -688,6 +711,8 @@ pub struct McpClientConfig {
     authorizer: Option<Arc<dyn McpClientAuthorizer>>,
     credentials: Option<Arc<dyn auth::McpCredentialProvider>>,
     authentication: auth::AuthenticationMonitor,
+    task_receiver: Option<McpTaskReceiverSettings>,
+    graph_tasks: McpGraphTaskPolicy,
 }
 impl McpClientConfig {
     /// Freezes a checked service registry and derives its protocol capabilities.
@@ -757,6 +782,8 @@ impl McpClientConfig {
             authorizer: None,
             credentials: None,
             authentication: auth::AuthenticationMonitor::new(),
+            task_receiver: None,
+            graph_tasks: McpGraphTaskPolicy::Reject,
         })
     }
     /// Checked immutable resource bounds.
@@ -794,6 +821,54 @@ impl McpClientConfig {
     pub fn with_authorizer(mut self, authorizer: Arc<dyn McpClientAuthorizer>) -> Self {
         self.authorizer = Some(authorizer);
         self
+    }
+    /// Installs the durable experimental receiving task service and derives its
+    /// capabilities from installed handlers. Persistence and authorization must
+    /// already be configured. Configuration is rechecked when the client starts.
+    ///
+    /// # Errors
+    /// Returns inconsistent handlers, persistence or finite receiver bounds.
+    pub fn with_task_receiver(
+        mut self,
+        settings: McpTaskReceiverSettings,
+    ) -> Result<Self, RuntimeFailure> {
+        McpTaskReceiver::new(self.clone(), settings)?;
+        let mut entries: Vec<_> = super::as_map(self.capabilities.value())?
+            .iter()
+            .filter(|(key, _)| *key != "tasks")
+            .map(|(key, value)| (key.to_owned(), value.clone()))
+            .collect();
+        entries.push((
+            "tasks".into(),
+            settings.capabilities(&Limits::default())?.value().clone(),
+        ));
+        self.capabilities = JsonDocument::from_value(
+            &Value::Map(Map::try_from_entries(entries).map_err(|_| fail(FailureCode::Profile))?),
+            &Limits::default(),
+        )
+        .map_err(|_| fail(FailureCode::Profile))?;
+        self.task_receiver = Some(settings);
+        Ok(self)
+    }
+    /// Freezes deployment task selection for graph tools. Install persistence
+    /// first, sharing the runtime's real store and clock; no syntax or authored
+    /// argument is changed by this policy.
+    ///
+    /// # Errors
+    /// Returns missing persistence or invalid finite requested TTL.
+    pub fn with_graph_tasks(mut self, policy: McpGraphTaskPolicy) -> Result<Self, RuntimeFailure> {
+        if let McpGraphTaskPolicy::Required { ttl_ms } | McpGraphTaskPolicy::Prefer { ttl_ms } =
+            policy
+            && (self.persistence.is_none() || ttl_ms == 0 || ttl_ms > i64::MAX as u64)
+        {
+            return Err(fail(FailureCode::Profile));
+        }
+        self.graph_tasks = policy;
+        Ok(self)
+    }
+    /// Immutable native graph task selection used before operation admission.
+    pub fn graph_task_policy(&self) -> McpGraphTaskPolicy {
+        self.graph_tasks
     }
     /// Installs host-managed exact-server/resource/principal credentials for every
     /// HTTP request, including control POSTs, SSE GET/resumption and DELETE.

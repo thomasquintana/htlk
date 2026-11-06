@@ -21,6 +21,7 @@ impl Wire {
         raw: Vec<u8>,
         request_id: McpRequestId,
         associated: Option<McpRequestId>,
+        related: Option<crate::store::McpRemoteTaskRecord>,
     ) -> Result<(), RuntimeFailure> {
         let persistence = self
             .config
@@ -45,7 +46,7 @@ impl Wire {
         } else {
             McpAttribution::Session
         };
-        {
+        if related.is_none() {
             let pending = self
                 .pending
                 .lock()
@@ -66,6 +67,22 @@ impl Wire {
                 deadline = deadline.min(parent.deadline);
             }
         }
+        if let Some(related) = &related {
+            attribution = McpAttribution::RelatedTask;
+            origin_id = None;
+            let now = persistence.clock.now_ms()?;
+            let remaining = related.deadline_ms.saturating_sub(now).max(0) as u64;
+            deadline = deadline.min(tokio::time::Instant::now() + Duration::from_millis(remaining));
+            operation = related.origin.clone().map(|origin| McpAttemptContext {
+                origin,
+                server: self
+                    .server
+                    .digest(&self.limits)
+                    .expect("validated identity"),
+                deadline_ms: related.deadline_ms,
+                labels: related.labels.clone(),
+            });
+        }
         let token = Arc::new(token);
         {
             let mut incoming = self
@@ -75,6 +92,14 @@ impl Wire {
             if let Some((digest, _)) = incoming.get(&request_id) {
                 if *digest != request.digest() {
                     return Err(fail(FailureCode::McpProtocol));
+                }
+                if self
+                    .accepted_callbacks
+                    .lock()
+                    .map_err(|_| fail(FailureCode::Invariant))?
+                    .contains(&request_id)
+                {
+                    self.replay_task_acceptance(request.clone(), id)?;
                 }
                 return Ok(());
             }
@@ -117,13 +142,38 @@ impl Wire {
             depth: 1,
             origin: operation.as_ref().map(|operation| operation.origin.clone()),
             attribution,
-            task_id: None,
+            task_id: related
+                .as_ref()
+                .and_then(|record| record.task.as_ref())
+                .map(|state| state.task_id().to_owned()),
             parent_interaction: None,
             deadline_ms: operation.as_ref().map_or(deadline_ms, |operation| {
                 deadline_ms.min(operation.deadline_ms)
             }),
             cancellation: token,
         };
+        if let Some(settings) = self.config.task_receiver {
+            let receiver = McpTaskReceiver::new((*self.config).clone(), settings)?;
+            let fields = as_map(request.value())?;
+            let method = as_text(get(fields, "method")?)?;
+            if receiver.supports(method)
+                && fields
+                    .get("params")
+                    .and_then(|p| as_map(p).ok())
+                    .is_some_and(|p| p.get("task").is_some())
+            {
+                self.start_task_callback(
+                    host,
+                    context,
+                    request,
+                    raw,
+                    deadline,
+                    reservation,
+                    receiver,
+                );
+                return Ok(());
+            }
+        }
         let work_context = context.clone();
         let work_request = request.clone();
         let work_host = host.clone();
@@ -153,7 +203,7 @@ impl Wire {
         });
         Ok(())
     }
-    async fn run_callback(
+    pub(super) async fn run_callback(
         self: &Arc<Self>,
         host: McpInteractionHost,
         mut context: McpInteractionContext,

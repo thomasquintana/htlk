@@ -165,6 +165,56 @@ and archival. Event overflow and connection gaps are observable.
   transit the client. Connection credentials are applied on every relevant HTTP
   request and excluded from ordinary evidence and executable meaning.
 
+## Native experimental tasks
+
+Task dispatch MUST distinguish creation intent, accepted identity, status observations,
+and the underlying result/error. With persistence configured, the native client MUST
+commit a logical creation intent before send and register a valid accepted identity
+before delivering that RPC response or processing later messages. Reusing that owner/
+server-scoped key MUST NOT send another creation, including after a lost response or
+transport-owner restart. Protected original acceptance, creation error and deferred
+result/error bytes MUST remain separate and integrity checked.
+
+Native graph task dispatch requires explicit `McpGraphTaskPolicy` plus the runtime's
+actual persistence/clock. Descriptor and policy selection MUST freeze before dispatch;
+authored arguments MUST NOT change. A creation response MUST NOT be normalized as tool
+output. Only the underlying deferred tool result enters ordinary tool-result admission.
+Polling/result retrieval share the original absolute attempt deadline and response
+bounds. Cancellation MUST use `tasks/cancel`, not only RPC wait cancellation.
+
+Related-task callbacks MUST resolve against the retained owner/server/session/generation
+registry, including when the original creating RPC is no longer pending. Its recorded
+run/invocation/attempt, deadline and protection MUST be used; unrelated pending work MUST
+NOT supply attribution. Run admission MUST independently recheck the actual outstanding
+attempt and ancestor accounting. Unknown, expired or terminal associations grant no work
+authority. New epochs do not automatically inherit old task association authority.
+
+The installed client receiver MUST commit its own opaque identity against an admitted
+interaction before execution intent and CreateTaskResult delivery. It MUST derive its
+capabilities from installed handlers, persistence, authorization and finite quotas.
+Unsupported augmentation MUST be removed from semantic validation, even if malformed,
+while original request bytes remain protected evidence. Task controls MUST use bounded
+capacity separate from execution workers and the reader; cancellation capacity MUST
+remain available while result waits occupy other control slots.
+The native wire reserves 64 KiB for cancellation, with a 4 KiB cancel-request and
+8 KiB cancel-response ceiling independently of ordinary task-control saturation.
+
+Receiver cancellation MUST atomically commit terminal task state and cancellation of
+the wrapped interaction before responding, without releasing uncertain work reservations
+or refunding calls. An identical cancellation RPC replays its committed receipt; a new
+RPC against a terminal task returns -32602. Late completion cannot replace that result.
+The receiver MUST return saved underlying payloads with matching related-task metadata,
+and MUST retain original interaction reply bytes separately. Initial acceptance delivery
+MUST NOT be recorded as delivery of the underlying reply. Result wait cancellation does
+not itself cancel the task. Both directions MUST work without status notifications.
+
+Finite TTL controls retrievability, not proof of work cancellation. Receiver IDs and
+bounded result-capacity reservations remain quota-counted tombstones after expiry, so
+eviction cannot authorize duplicate work. Remote identities persist for protected
+inspection, but recovery does not dispatch, recreate work, or silently adopt a new epoch.
+Explicit cross-epoch remote-task adoption/reconciliation remains a host integration
+responsibility; no automatic graph task recovery is claimed.
+
 ## Native URL elicitation lifecycle
 
 The native client MUST bind completion identities to the authenticated owner,

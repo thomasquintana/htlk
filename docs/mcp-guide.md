@@ -213,6 +213,70 @@ not borrow run budgets. Updates racing unsubscribe remain ordinary host events,
 including updates already in flight after acknowledgement. They never trigger a
 resource read, model call, catalog refresh/adoption, or workflow mutation.
 
+### Experimental protocol tasks
+
+MCP 2025-11-25 tasks are remote execution handles, separate from HTLK workflow
+`task` declarations. For host tool calls, choose `McpToolTaskMode` explicitly with
+`McpClientSession::prepare_tool_task_call`, then consume its `dispatch`. The API
+checks server capabilities and descriptor required/optional/forbidden rules before
+send. An `Accepted` reply is a handle, not tool output: use its bounded `get`,
+`poll`, `result`, `cancel` or `wait` operations. `input_required` opens the result
+stream for related callbacks; optional status events are unnecessary.
+
+Link persistence before creation. Give retryable host commands a stable work key
+using `McpPreparedToolCall::with_logical_key`; durable intent rejects another create
+under that key after uncertain delivery or restart. Preparing a fresh key denotes
+a new operation. Inspect retained acceptance, creation errors and final bytes through
+the trusted store's `inspect_mcp_remote_task_intent` under your host authorization.
+No restart or list scan automatically recreates an unacknowledged task.
+Durable sessions reject raw task-augmented `tools/call` sends that bypass the
+prepared descriptor/intent API.
+
+Graph tools keep ordinary execution by default. To enable task-required descriptors,
+share the runtime's actual store/clock and select deployment policy before constructing
+the native adapter. This configuration fragment assumes persistence is already linked:
+
+```rust
+let config = config.with_graph_tasks(
+    McpGraphTaskPolicy::Required { ttl_ms: 60_000 },
+)?;
+```
+
+`Prefer` also selects tasks for optional descriptors. The exact descriptor/policy
+choice freezes during discovery. Authored arguments remain unchanged; only final
+`tasks/result` output reaches normal tool admission/normalization. Related callbacks
+resolve their original invocation/attempt from durable identity, including on HTTP
+idle GET after the creation RPC ended, and retain ordinary ancestor budget checks.
+Automatic cross-epoch graph-task recovery is not implemented; retained identities
+support explicit host reconciliation without permitting another create.
+
+For incoming sampling/elicitation tasks, install ordinary handlers, persistence and
+authorization, then call `with_task_receiver` with checked `McpTaskReceiverSettings`.
+Set request-type flags explicitly; derived capabilities include only those installed
+methods. The receiver saves acceptance before dispatching work, while get/list/result/
+cancel use separate bounded control capacity. `tasks/cancel` persists cancellation
+before replying and propagates a cooperative signal; uncertain underlying work stays
+charged until explicit reconciliation. Cancelling a result wait alone leaves work
+running. Unsupported task augmentation is ignored even when malformed.
+
+Configure receiver result capacity at least `store.max_document_bytes / 8 + 256`,
+control response capacity at least another 256 bytes larger, and client `frame_bytes`
+large enough for that response. Retained row quotas reserve payload capacity plus
+1 KiB per identity. For the default 16 MiB store limit, a 4 MiB client frame and
+32 MiB client retained-byte budget can admit a full callback and bounded controls;
+choose task row/retained quotas independently. Expired identities remain bounded
+deduplication tombstones and continue counting toward those quotas. Expiry does not
+prove that external work stopped.
+
+The live dispatcher reserves 64 KiB of that budget for cancellation independently
+of other task controls. Wire `tasks/cancel` requests are limited to 4 KiB and their
+generated correlated responses to 8 KiB, so waiting result requests cannot consume
+the bytes needed to confirm cancellation.
+
+See [task qualification](testing.md#experimental-task-qualification) for runnable
+independent-peer campaigns and the [task contract](../specs/mcp-client-spec.md#native-experimental-tasks)
+for persistence, isolation and terminal-state guarantees.
+
 ### Addressed host interactions
 
 Install `McpClientHandler` implementations for sampling and other services, link

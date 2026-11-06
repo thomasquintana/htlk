@@ -11,6 +11,7 @@ mod callbacks;
 mod http;
 mod payload;
 mod sse;
+mod tasks;
 
 enum Transport {
     Stdio {
@@ -21,6 +22,7 @@ enum Transport {
 }
 
 struct PendingRequest {
+    task_key: Option<Digest>,
     reply: oneshot::Sender<McpClientReply>,
     limits: Limits,
     sent: Arc<AtomicBool>,
@@ -37,12 +39,16 @@ struct ObservedReply {
     sender: Option<oneshot::Sender<McpClientReply>>,
     reply: Option<McpClientReply>,
     registering_urls: bool,
+    registering_tasks: bool,
 }
 impl Drop for ObservedReply {
     fn drop(&mut self) {
         if let (Some(sender), Some(mut reply)) = (self.sender.take(), self.reply.take()) {
             if self.registering_urls && reply.url_interactions.is_none() {
                 reply.url_interactions = Some(Err(fail(FailureCode::Cancelled)));
+            }
+            if self.registering_tasks && reply.task_registration.is_none() {
+                reply.task_registration = Some(Err(fail(FailureCode::Cancelled)));
             }
             let _ = sender.send(reply);
         }
@@ -64,6 +70,7 @@ pub(super) struct Wire {
     transport: Transport,
     pending: Mutex<Pending>,
     next: AtomicU64,
+    task_sequence: AtomicU64,
     events: mpsc::Sender<QueuedEvent>,
     event_sequence: AtomicU64,
     received: AtomicU64,
@@ -71,9 +78,31 @@ pub(super) struct Wire {
     cleanup: tokio::sync::Mutex<()>,
     executors: workers::Executors,
     incoming: Mutex<BTreeMap<McpRequestId, (Digest, Arc<McpCancellation>)>>,
+    task_controls: Arc<tokio::sync::Semaphore>,
+    task_cancel_controls: Arc<tokio::sync::Semaphore>,
+    _task_cancel_memory: Option<tokio::sync::OwnedSemaphorePermit>,
+    accepted_callbacks: Mutex<std::collections::BTreeSet<McpRequestId>>,
+    task_waits: Mutex<BTreeMap<McpRequestId, (Digest, Arc<McpCancellation>)>>,
 }
 
 impl Wire {
+    pub fn persistence(&self) -> Option<&McpClientPersistence> {
+        self.config.persistence.as_ref()
+    }
+    pub fn fresh_task_key(&self) -> Digest {
+        htlk_executable::digest::hash_bytes(
+            format!(
+                "htlk.remote-task/1:{}:{}:{}:{}",
+                self.owner.key(),
+                self.epoch,
+                self.server
+                    .digest(&self.limits)
+                    .expect("initialized server identity"),
+                self.task_sequence.fetch_add(1, Ordering::Relaxed)
+            )
+            .as_bytes(),
+        )
+    }
     pub fn representation_limits(&self) -> &Limits {
         &self.limits
     }
@@ -142,6 +171,20 @@ impl Wire {
             _ => return Err(fail(FailureCode::McpIdentity)),
         };
         let (events, receiver) = mpsc::channel(config.limits.events);
+        let memory = Arc::new(tokio::sync::Semaphore::new(config.limits.retained_bytes));
+        // Reserve cancellation bytes before any application/control saturation.
+        // Wire task-cancel requests have a separate 4 KiB ingress ceiling; their
+        // generated Task/error replies fit 8 KiB, including the correlated ID.
+        let task_cancel_memory = if config.task_receiver.is_some() {
+            Some(
+                memory
+                    .clone()
+                    .try_acquire_many_owned(64 * 1024)
+                    .map_err(|_| fail(FailureCode::Budget))?,
+            )
+        } else {
+            None
+        };
         let wire = Arc::new(Self {
             owner,
             server,
@@ -157,12 +200,18 @@ impl Wire {
                 None
             })
             .0,
-            memory: Arc::new(tokio::sync::Semaphore::new(config.limits.retained_bytes)),
+            memory,
+            _task_cancel_memory: task_cancel_memory,
+            task_controls: Arc::new(tokio::sync::Semaphore::new(config.limits.pending_requests)),
+            task_cancel_controls: Arc::new(tokio::sync::Semaphore::new(2)),
+            accepted_callbacks: Mutex::new(Default::default()),
+            task_waits: Mutex::new(Default::default()),
             config,
             limits,
             transport,
             pending: Mutex::new(BTreeMap::new()),
             next: AtomicU64::new(1),
+            task_sequence: AtomicU64::new(1),
             events,
             event_sequence: AtomicU64::new(1),
             received: AtomicU64::new(0),
@@ -307,6 +356,14 @@ impl Wire {
         request: McpRequest,
         context: Option<McpAttemptContext>,
     ) -> McpClientReply {
+        self.invoke_scoped(request, context, None).await
+    }
+    pub async fn invoke_scoped(
+        self: &Arc<Self>,
+        request: McpRequest,
+        context: Option<McpAttemptContext>,
+        task_key: Option<Digest>,
+    ) -> McpClientReply {
         if let Some(context) = &context
             && (self.server.digest(&self.limits).ok() != Some(context.server)
                 || !matches!(self.owner.scope(), McpOwnerScope::Run(run) if run == &context.origin.run_id))
@@ -335,6 +392,14 @@ impl Wire {
         }
         if method.is_empty() || !matches!(request.params, Value::Map(_)) {
             return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Input);
+        }
+        if method == "tools/call"
+            && self.config.persistence.is_some()
+            && as_map(&request.params).is_ok_and(|params| params.get("task").is_some())
+            && task_key.is_none()
+        {
+            // A raw request cannot bypass durable task intent/descriptor admission.
+            return McpClientReply::failed(McpDelivery::NotSent, FailureCode::Profile);
         }
         if self.initialization.get().is_some() && method == "initialize"
             || method.starts_with("notifications/")
@@ -383,6 +448,7 @@ impl Wire {
             pending.insert(
                 key.clone(),
                 PendingRequest {
+                    task_key,
                     reply,
                     limits,
                     sent: sent_state.clone(),
@@ -635,9 +701,51 @@ impl Wire {
             }
             if let Some(id) = fields.get("id") {
                 let id = McpRequestId::from_value(id)?;
+                if self.initialization.get().is_some()
+                    && self.config.task_receiver.is_some()
+                    && matches!(
+                        method,
+                        "tasks/get" | "tasks/list" | "tasks/result" | "tasks/cancel"
+                    )
+                {
+                    return self.start_task_control(document);
+                }
                 if self.initialization.get().is_some() && self.callback_supported(method) {
+                    let related = if let Some(params) = fields.get("params") {
+                        if let Some(task_id) = mcp_related_task_id(params)
+                            .map_err(|_| fail(FailureCode::McpProtocol))?
+                        {
+                            let persistence = self
+                                .config
+                                .persistence
+                                .as_ref()
+                                .ok_or_else(|| fail(FailureCode::McpProtocol))?;
+                            Some(
+                                persistence
+                                    .store
+                                    .resolve_mcp_remote_task(
+                                        &self.owner,
+                                        self.stored_session
+                                            .as_ref()
+                                            .ok_or_else(|| fail(FailureCode::Profile))?
+                                            .id,
+                                        self.server
+                                            .digest(&self.limits)
+                                            .map_err(|_| fail(FailureCode::McpIdentity))?,
+                                        task_id,
+                                        persistence.clock.now_ms()?,
+                                    )
+                                    .await
+                                    .map_err(|e| fail(e.code()))?,
+                            )
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                     return self
-                        .start_callback(document, bytes.to_vec(), id, associated.cloned())
+                        .start_callback(document, bytes.to_vec(), id, associated.cloned(), related)
                         .inspect_err(|_| self.end(McpSessionEnd::CallbackFailure));
                 }
                 let (kind, result) = if method == "ping"
@@ -710,6 +818,21 @@ impl Wire {
                 if method == "notifications/cancelled"
                     && let Some(id) = as_map(&params)?.get("requestId")
                     && let Ok(id) = McpRequestId::from_value(id)
+                    && let Some(signal) = self
+                        .task_waits
+                        .lock()
+                        .ok()
+                        .and_then(|waits| waits.get(&id).map(|(_, signal)| signal.clone()))
+                {
+                    signal.cancel();
+                }
+                if method == "notifications/cancelled"
+                    && let Some(id) = as_map(&params)?.get("requestId")
+                    && let Ok(id) = McpRequestId::from_value(id)
+                    && !self
+                        .accepted_callbacks
+                        .lock()
+                        .is_ok_and(|accepted| accepted.contains(&id))
                     && let Ok(incoming) = self.incoming.lock()
                     && let Some((_, signal)) = incoming.get(&id)
                 {
@@ -786,9 +909,73 @@ impl Wire {
                     sender: Some(request.reply),
                     reply: Some(McpClientReply::correlated(result, raw_result)),
                     registering_urls: false,
+                    registering_tasks: request.task_key.is_some(),
                 };
                 let reply = observed.reply.as_mut().expect("observed reply");
                 reply.request_id = Some(id.clone());
+                if let Some(key) = request.task_key {
+                    let registration = async {
+                        let persistence = self
+                            .config
+                            .persistence
+                            .as_ref()
+                            .ok_or_else(|| fail(FailureCode::Profile))?;
+                        let session = self
+                            .stored_session
+                            .as_ref()
+                            .ok_or_else(|| fail(FailureCode::Profile))?;
+                        if let Ok(Ok(document)) = &reply.result {
+                            let task = as_map(document.value())?
+                                .get("task")
+                                .ok_or_else(|| fail(FailureCode::McpProtocol))?;
+                            let state = McpTaskState::from_document(
+                                JsonDocument::from_value(task, &self.limits)
+                                    .map_err(|_| fail(FailureCode::McpProtocol))?,
+                                &self.limits,
+                            )
+                            .map_err(|_| fail(FailureCode::McpProtocol))?;
+                            persistence
+                                .store
+                                .accept_mcp_remote_task(
+                                    &self.owner,
+                                    session.id,
+                                    self.server
+                                        .digest(&self.limits)
+                                        .map_err(|_| fail(FailureCode::McpIdentity))?,
+                                    key,
+                                    state,
+                                    reply
+                                        .raw_result
+                                        .clone()
+                                        .ok_or_else(|| fail(FailureCode::McpProtocol))?,
+                                    persistence.clock.now_ms()?,
+                                )
+                                .await
+                                .map_err(|e| fail(e.code()))?;
+                        } else if let Ok(Err(error)) = &reply.result {
+                            persistence
+                                .store
+                                .record_mcp_remote_task_create_error(
+                                    &self.owner,
+                                    session.id,
+                                    self.server
+                                        .digest(&self.limits)
+                                        .map_err(|_| fail(FailureCode::McpIdentity))?,
+                                    key,
+                                    error.as_bytes().to_vec(),
+                                    persistence.clock.now_ms()?,
+                                )
+                                .await
+                                .map_err(|e| fail(e.code()))?;
+                        }
+                        Ok(())
+                    };
+                    reply.task_registration = Some(
+                        tokio::time::timeout_at(request.deadline, registration)
+                            .await
+                            .unwrap_or_else(|_| Err(fail(FailureCode::McpTimeout))),
+                    );
+                }
                 if let Ok(Err(error)) = &reply.result
                     && error.code() == -32042
                     && self.initialization.get().is_some()

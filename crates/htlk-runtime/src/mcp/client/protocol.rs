@@ -62,6 +62,11 @@ pub fn validate_client_request(
     config: &McpClientConfig,
     limits: &Limits,
 ) -> Result<McpIncomingKind, McpClientValidationError> {
+    // Task augmentation is validated by the installed durable receiver. It must
+    // be ignored for otherwise supported methods when that service is absent.
+    let underlying = mcp_without_task_augmentation(request, limits)
+        .map_err(|_| McpClientValidationError::InvalidRequest)?;
+    let request = &underlying;
     let invalid = McpClientValidationError::InvalidRequest;
     let fields = as_map(request.value()).map_err(|_| invalid)?;
     let method = fields

@@ -9,6 +9,7 @@ pub(super) struct NativeSessions {
     client: NativeMcpClient,
     endpoints: BTreeMap<String, McpEndpoint>,
     timeout_ms: u64,
+    task_policy: client::McpGraphTaskPolicy,
 }
 impl NativeSessions {
     pub fn launch(
@@ -33,10 +34,12 @@ impl NativeSessions {
         config: McpClientConfig,
     ) -> Result<Self, RuntimeFailure> {
         let timeout_ms = config.limits().timeout_ms;
+        let task_policy = config.graph_task_policy();
         Ok(Self {
             client: NativeMcpClient::new(config)?,
             endpoints,
             timeout_ms,
+            task_policy,
         })
     }
     pub async fn shutdown(&self) -> Result<(), RuntimeFailure> {
@@ -82,6 +85,7 @@ impl NativeSessions {
         let prepared = self.prepare(&session, binding, context, limits).await;
         match prepared {
             Ok(descriptor) => Ok(NativeLease {
+                task_mode: self.select_task_mode(&session, &descriptor, binding)?,
                 session,
                 descriptor,
                 lifetime: context.cancellation.clone(),
@@ -94,6 +98,48 @@ impl NativeSessions {
                 Err(error)
             }
         }
+    }
+    fn select_task_mode(
+        &self,
+        session: &McpClientSession,
+        descriptor: &JsonDocument,
+        binding: &McpBinding,
+    ) -> Result<client::McpToolTaskMode, RuntimeFailure> {
+        if !matches!(binding.kind(), McpBindingKind::Tool { .. }) {
+            return Ok(client::McpToolTaskMode::Inline);
+        }
+        let support = as_map(descriptor.value())?
+            .get("execution")
+            .and_then(|e| as_map(e).ok()?.get("taskSupport"));
+        let required = support == Some(&Value::Text("required".into()));
+        let optional = support == Some(&Value::Text("optional".into()));
+        let mode = match self.task_policy {
+            client::McpGraphTaskPolicy::Required { ttl_ms } if required => {
+                client::McpToolTaskMode::Task {
+                    ttl_ms: Some(ttl_ms),
+                }
+            }
+            client::McpGraphTaskPolicy::Prefer { ttl_ms } if required || optional => {
+                client::McpToolTaskMode::Task {
+                    ttl_ms: Some(ttl_ms),
+                }
+            }
+            _ if required => return Err(fail(FailureCode::McpDescriptor)),
+            _ => client::McpToolTaskMode::Inline,
+        };
+        if matches!(mode, client::McpToolTaskMode::Task { .. })
+            && !session
+                .task_capabilities()
+                .map_err(|_| fail(FailureCode::McpDescriptor))?
+                .tool_call
+        {
+            return if required {
+                Err(fail(FailureCode::McpDescriptor))
+            } else {
+                Ok(client::McpToolTaskMode::Inline)
+            };
+        }
+        Ok(mode)
     }
     async fn prepare(
         &self,
@@ -150,22 +196,7 @@ impl NativeSessions {
                 if as_map(descriptor)?.get(key) == Some(&Value::Text(name.clone())) {
                     let descriptor = JsonDocument::from_value(descriptor, limits)
                         .map_err(|_| fail(FailureCode::McpDescriptor))?;
-                    let task_calls = as_map(capabilities)?
-                        .get("tasks")
-                        .and_then(|v| as_map(v).ok()?.get("requests"))
-                        .and_then(|v| as_map(v).ok()?.get("tools"))
-                        .and_then(|v| as_map(v).ok()?.get("call"))
-                        .is_some();
-                    let task_required = as_map(descriptor.value())?
-                        .get("execution")
-                        .and_then(|v| as_map(v).ok()?.get("taskSupport"))
-                        == Some(&Value::Text("required".into()));
-                    if matches!(binding.kind(), McpBindingKind::Tool { .. })
-                        && task_calls
-                        && task_required
-                    {
-                        return Err(fail(FailureCode::McpDescriptor));
-                    }
+                    self.select_task_mode(session, &descriptor, binding)?;
                     return Ok(descriptor);
                 }
             }
@@ -190,6 +221,7 @@ pub(super) struct NativeLease {
     closed: bool,
     protocol_error: Option<client::McpRpcError>,
     context: Option<McpAttemptContext>,
+    task_mode: client::McpToolTaskMode,
 }
 impl McpConnection for NativeLease {
     fn invoke_with_context<'a>(
@@ -224,10 +256,25 @@ impl McpConnection for NativeLease {
                 .parents
                 .extend(request.cancellation.parents.iter().cloned());
             request.cancellation = Arc::new(signal);
-            let mut reply = self
-                .session
-                .invoke_context(request, self.context.take())
-                .await;
+            let mut reply = if matches!(self.task_mode, client::McpToolTaskMode::Task { .. }) {
+                match self.invoke_task(request).await {
+                    Ok(reply) => reply,
+                    Err((delivery, error)) => {
+                        if delivery != McpDelivery::ResponseReceived {
+                            self.closed = true;
+                            let _ = self.session.close().await;
+                        }
+                        return McpOutcome {
+                            delivery,
+                            result: Err(error),
+                        };
+                    }
+                }
+            } else {
+                self.session
+                    .invoke_context(request, self.context.take())
+                    .await
+            };
             if let Ok(Err(error)) = &reply.result {
                 self.protocol_error = Some(error.clone());
             }
@@ -253,4 +300,107 @@ impl McpConnection for NativeLease {
     fn take_protocol_error(&mut self) -> Option<client::McpRpcError> {
         self.protocol_error.take()
     }
+}
+impl NativeLease {
+    async fn invoke_task(
+        &mut self,
+        request: McpRequest,
+    ) -> Result<client::McpClientReply, (McpDelivery, RuntimeFailure)> {
+        let context = self
+            .context
+            .take()
+            .ok_or_else(|| (McpDelivery::NotSent, fail(FailureCode::Profile)))?;
+        let key = htlk_executable::digest::hash_bytes(
+            format!(
+                "htlk.graph-remote-task/1:{}:{}",
+                context.origin.run_id, context.origin.invocation_id
+            )
+            .as_bytes(),
+        );
+        let limits = client::McpTaskLimits::new(
+            request.max_response_bytes,
+            request.timeout_ms,
+            1024,
+            1024,
+            self.session.client_limits().retained_bytes,
+            10,
+        )
+        .map_err(|_| (McpDelivery::NotSent, fail(FailureCode::Profile)))?;
+        let cancel = request.cancellation.clone();
+        let max_response_bytes = request.max_response_bytes;
+        let until = tokio::time::Instant::now() + Duration::from_millis(request.timeout_ms);
+        let params = JsonDocument::from_value(&request.params, &request.response_limits)
+            .map_err(|_| (McpDelivery::NotSent, fail(FailureCode::Input)))?;
+        let prepared = self
+            .session
+            .prepare_tool_task_call(&self.descriptor, params, self.task_mode)
+            .map_err(|_| (McpDelivery::NotSent, fail(FailureCode::McpDescriptor)))?
+            .with_logical_key(key);
+        let accepted = prepared
+            .dispatch_operation(request, Some(context))
+            .await
+            .map_err(task_failure)?;
+        let mut task = match accepted.value {
+            Ok(Some(client::McpToolTaskAcceptance::Accepted(task))) => task,
+            Ok(None) => return Ok(accepted.reply),
+            Err(error) => return Err((McpDelivery::PossiblySent, task_failure(error).1)),
+            _ => return Err((McpDelivery::PossiblySent, fail(FailureCode::McpProtocol))),
+        };
+        drop(accepted.reply);
+        let left = until
+            .saturating_duration_since(tokio::time::Instant::now())
+            .as_millis() as u64;
+        if left == 0 {
+            let _ = task.cancel(limits, Arc::new(McpCancellation::new())).await;
+            return Err((McpDelivery::PossiblySent, fail(FailureCode::McpTimeout)));
+        }
+        let limits = client::McpTaskLimits::new(
+            max_response_bytes,
+            left,
+            1024,
+            1024,
+            self.session.client_limits().retained_bytes,
+            10,
+        )
+        .map_err(|_| (McpDelivery::PossiblySent, fail(FailureCode::McpTimeout)))?;
+        match task
+            .wait(limits, cancel)
+            .await
+            .map_err(|e| (McpDelivery::PossiblySent, task_failure(e).1))?
+        {
+            client::McpTaskWait::Result(result) => match result.value {
+                Ok(_) => {
+                    let mut reply = result.reply;
+                    if reply.delivery != McpDelivery::ResponseReceived {
+                        reply.delivery = McpDelivery::PossiblySent;
+                    }
+                    Ok(reply)
+                }
+                Err(error) => Err((McpDelivery::PossiblySent, task_failure(error).1)),
+            },
+            client::McpTaskWait::Cancellation { .. } => {
+                Err((McpDelivery::PossiblySent, fail(FailureCode::Cancelled)))
+            }
+            client::McpTaskWait::Observation(_) => {
+                Err((McpDelivery::PossiblySent, fail(FailureCode::McpProtocol)))
+            }
+        }
+    }
+}
+fn task_failure(error: client::McpTaskError) -> (McpDelivery, RuntimeFailure) {
+    let code = match error {
+        client::McpTaskError::Persistence(code) => code,
+        client::McpTaskError::Cancelled => FailureCode::Cancelled,
+        client::McpTaskError::Expired => FailureCode::RetentionExpired,
+        client::McpTaskError::Limit => FailureCode::McpTimeout,
+        _ => FailureCode::McpProtocol,
+    };
+    (
+        if code == FailureCode::EffectUncertain {
+            McpDelivery::PossiblySent
+        } else {
+            McpDelivery::NotSent
+        },
+        fail(code),
+    )
 }

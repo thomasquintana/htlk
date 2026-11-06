@@ -8,6 +8,12 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Experimental MCP tasks now execute in both directions: bounded tool task creation,
+  polling/results/list/cancel, and durable deferred sampling/elicitation on independent
+  control capacity. Task-required graph tools use explicit frozen deployment policy;
+  accepted IDs resolve later callbacks to their actual accounted attempts. Creation
+  intent prevents blind recreation after a lost ACK, while task cancellation preserves
+  uncertain underlying work and replayable receipts. SQLite schema 13 rejects older stores.
 - Durable MCP URL elicitation now connects callback consent, URL-required errors,
   and scoped completion notifications to authenticated host inspection/reply APIs.
   Unknown/duplicate completions are ignored; addressed events contain opaque IDs.
