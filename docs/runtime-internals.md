@@ -7,8 +7,8 @@ records are not an additional supported wire format.
 
 ## Storage compatibility
 
-The SQLite application ID is `0x48544c4b`; the private schema version is **9**.
-An empty database initializes in one immediate transaction. Versions 1–8, future
+The SQLite application ID is `0x48544c4b`; the private schema version is **10**.
+An empty database initializes in one immediate transaction. Versions 1–9, future
 versions, foreign application IDs, and nonempty unrecognized databases fail without
 relabeling or deletion. There is no automatic migration or legacy binding decoder.
 Matching `0.1` format labels do not permit changed interpretation of saved effects.

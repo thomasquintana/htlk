@@ -1,6 +1,6 @@
 //! Long-lived transport ownership, independent of caller execution reactors.
 use super::*;
-use crate::mcp::{McpDelivery, McpEndpoint, McpRequest};
+use crate::mcp::{McpAttemptContext, McpDelivery, McpEndpoint, McpRequest};
 use std::sync::{
     Mutex,
     atomic::{AtomicU64, Ordering},
@@ -77,6 +77,7 @@ enum Command {
     Request {
         wire: Arc<Wire>,
         request: McpRequest,
+        context: Option<McpAttemptContext>,
         reply: oneshot::Sender<McpClientReply>,
         reservation: tokio::sync::OwnedSemaphorePermit,
     },
@@ -140,13 +141,13 @@ impl NativeMcpClient {
                                     let _ = reply.send(result);
                                 });
                             }
-                            Some(Command::Request { wire, request, reply, reservation }) => {
+                            Some(Command::Request { wire, request, context, reply, reservation }) => {
                                 if jobs.len() >= config.limits.pending_requests {
                                     let _ = reply.send(McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpTransport));
                                     continue;
                                 }
                                 jobs.spawn(async move {
-                                    let outcome = wire.invoke(request).await.reserved(reservation);
+                                    let outcome = wire.invoke_context(request, context).await.reserved(reservation);
                                     let _ = reply.send(outcome);
                                 });
                             }
@@ -294,6 +295,13 @@ impl McpClientSession {
     /// Sends a request with explicit per-operation bounds and optional verified
     /// protocol deduplication key. Per-call limits never shrink later requests.
     pub async fn invoke(&self, request: McpRequest) -> McpClientReply {
+        self.invoke_context(request, None).await
+    }
+    pub(crate) async fn invoke_context(
+        &self,
+        request: McpRequest,
+        context: Option<McpAttemptContext>,
+    ) -> McpClientReply {
         let (reply, receive) = oneshot::channel();
         let cancellation = request.cancellation.clone();
         if cancellation.is_cancelled() || self.wire.stop.is_cancelled() {
@@ -308,6 +316,7 @@ impl McpClientSession {
         let send = self.sender.send(Command::Request {
             wire: self.wire.clone(),
             request,
+            context,
             reply,
             reservation,
         });
@@ -350,10 +359,6 @@ async fn open(
 ) -> Result<Arc<Wire>, RuntimeFailure> {
     if lifetime.is_cancelled() || stop.is_cancelled() {
         return Err(fail(FailureCode::Cancelled));
-    }
-    // Run callbacks require their runtime-origin accounting bridge, not host budgets.
-    if matches!(owner.scope(), McpOwnerScope::Run(_)) && !config.handlers.is_empty() {
-        return Err(fail(FailureCode::Profile));
     }
     let key = (
         owner.key(),

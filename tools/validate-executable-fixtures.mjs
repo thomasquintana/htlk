@@ -147,7 +147,7 @@ assert.equal(get(profile, 'core_digest').value, native([
     'mcp/client/session/wire/http.rs', 'mcp/client/session/wire/payload.rs', 'mcp/client/session/wire/sse.rs',
     'mcp/native_sessions.rs', 'mcp_control.rs', 'execution/mcp.rs', 'execution/approval.rs', 'execution/extension.rs', 'store_late.sql', 'retention.rs', 'source.rs', 'store_retention.rs', 'execution/recovery.rs', 'mcp_protocol.rs', 'mcp_extract.rs', 'mcp_normalize.rs', 'uri_template.rs',
     'artifact_access.rs', 'execution/artifacts.rs', 'execution/boundary.rs', 'execution/retry.rs',
-    'store_mcp.rs', 'store_mcp.sql',
+    'store_mcp.rs', 'store_mcp_run.rs', 'store_mcp.sql',
   ]),
 ]));
 assert.equal(get(get(profile, 'regex_engine'), 'implementation_digest').value,

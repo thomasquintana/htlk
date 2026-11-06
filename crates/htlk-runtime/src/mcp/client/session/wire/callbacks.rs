@@ -39,6 +39,7 @@ impl Wire {
         let mut deadline =
             tokio::time::Instant::now() + Duration::from_millis(self.config.limits.timeout_ms);
         let mut origin_id = associated.clone();
+        let mut operation = None;
         let mut attribution = if associated.is_some() {
             McpAttribution::ResponseStream
         } else {
@@ -54,6 +55,7 @@ impl Wire {
                 attribution = McpAttribution::SerializedOperation;
             }
             if let Some(parent) = origin_id.as_ref().and_then(|id| pending.get(id)) {
+                operation = parent.context.clone();
                 token.parents.push(parent.cancellation.state.clone());
                 token
                     .parents
@@ -89,8 +91,20 @@ impl Wire {
             .now_ms()?
             .checked_add(i64::try_from(remaining).map_err(|_| fail(FailureCode::Profile))?)
             .ok_or_else(|| fail(FailureCode::Profile))?;
+        if let Some(operation) = &operation
+            && (operation.server
+                != self
+                    .server
+                    .digest(&self.limits)
+                    .map_err(|_| fail(FailureCode::McpIdentity))?
+                || !matches!(self.owner.scope(), McpOwnerScope::Run(run) if run == &operation.origin.run_id))
+        {
+            return Err(fail(FailureCode::McpIdentity));
+        }
         let context = McpInteractionContext {
-            labels: Default::default(),
+            labels: operation
+                .as_ref()
+                .map_or_else(Default::default, |operation| operation.labels.clone()),
             owner: self.owner.clone(),
             server: self.server.clone(),
             epoch: self.epoch,
@@ -98,11 +112,13 @@ impl Wire {
             request_id: request_id.clone(),
             originating_request_id: origin_id,
             depth: 1,
-            origin: None,
+            origin: operation.as_ref().map(|operation| operation.origin.clone()),
             attribution,
             task_id: None,
             parent_interaction: None,
-            deadline_ms,
+            deadline_ms: operation.as_ref().map_or(deadline_ms, |operation| {
+                deadline_ms.min(operation.deadline_ms)
+            }),
             cancellation: token,
         };
         let work_context = context.clone();
@@ -155,9 +171,27 @@ impl Wire {
             .digest(&self.limits)
             .map_err(|_| fail(FailureCode::McpIdentity))?;
         let record = host
-            .receive(&self.owner, server, session.id, raw, context.deadline_ms)
+            .receive(
+                &self.owner,
+                server,
+                session.id,
+                context.origin.clone(),
+                context.labels.clone(),
+                raw,
+                context.deadline_ms,
+            )
             .await?;
         context.labels = record.labels.clone();
+        context.deadline_ms = record.deadline_ms;
+        context.origin = record.origin.clone();
+        host.authorize(
+            self.owner.host(),
+            &self.owner,
+            server,
+            &record,
+            McpClientAction::Dispatch,
+            None,
+        )?;
         if context.cancellation.is_cancelled() {
             return Err(fail(FailureCode::Cancelled));
         }
@@ -311,6 +345,13 @@ impl Wire {
         }
         if self.stop.is_cancelled() {
             return Ok(());
+        }
+        if matches!(self.owner.scope(), McpOwnerScope::Run(_))
+            && record
+                .as_ref()
+                .is_some_and(|record| record.origin != context.origin)
+        {
+            record = None;
         }
         self.check_owner().await?;
         if let Some(record) = record {

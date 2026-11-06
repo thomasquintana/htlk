@@ -24,6 +24,9 @@ CREATE TABLE mcp_interactions (
     request_digest TEXT NOT NULL,
     raw_digest TEXT NOT NULL,
     request BLOB NOT NULL,
+    origin_invocation TEXT,
+    origin_attempt TEXT,
+    origin_run TEXT,
     protection BLOB NOT NULL,
     generation INTEGER NOT NULL CHECK(generation > 0),
     revision INTEGER NOT NULL CHECK(revision > 0),
@@ -42,8 +45,11 @@ CREATE TABLE mcp_interactions (
           (reply IS NOT NULL AND reply_digest IS NOT NULL)),
     CHECK(state != 'result' OR reply IS NOT NULL),
     CHECK(reply IS NULL OR state IN ('result','cancelled'))
+    ,CHECK((origin_invocation IS NULL) = (origin_attempt IS NULL)),
+    CHECK((origin_invocation IS NULL) = (origin_run IS NULL))
 ) STRICT;
 CREATE INDEX mcp_interactions_owner ON mcp_interactions(owner_key,interaction_id);
+CREATE INDEX mcp_interactions_origin ON mcp_interactions(origin_run,origin_invocation,origin_attempt);
 CREATE TABLE mcp_receipts (
     owner_key TEXT NOT NULL REFERENCES mcp_owners(owner_key),
     principal TEXT NOT NULL,

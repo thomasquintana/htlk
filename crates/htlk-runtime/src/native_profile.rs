@@ -92,6 +92,7 @@ pub fn native_profile(
         include_bytes!("execution/boundary.rs"),
         include_bytes!("execution/retry.rs"),
         include_bytes!("store_mcp.rs"),
+        include_bytes!("store_mcp_run.rs"),
         include_bytes!("store_mcp.sql"),
     ]);
     let regex = EngineIdentity::new(

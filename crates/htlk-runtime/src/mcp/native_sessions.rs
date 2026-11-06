@@ -87,6 +87,7 @@ impl NativeSessions {
                 lifetime: context.cancellation.clone(),
                 closed: false,
                 protocol_error: None,
+                context: None,
             }),
             Err(error) => {
                 let _ = session.close().await;
@@ -188,8 +189,17 @@ pub(super) struct NativeLease {
     lifetime: Arc<McpCancellation>,
     closed: bool,
     protocol_error: Option<client::McpRpcError>,
+    context: Option<McpAttemptContext>,
 }
 impl McpConnection for NativeLease {
+    fn invoke_with_context<'a>(
+        &'a mut self,
+        request: McpRequest,
+        context: McpAttemptContext,
+    ) -> McpAttemptFuture<'a> {
+        self.context = Some(context);
+        self.invoke(request)
+    }
     fn descriptor(&self) -> &JsonDocument {
         &self.descriptor
     }
@@ -214,7 +224,10 @@ impl McpConnection for NativeLease {
                 .parents
                 .extend(request.cancellation.parents.iter().cloned());
             request.cancellation = Arc::new(signal);
-            let mut reply = self.session.invoke(request).await;
+            let mut reply = self
+                .session
+                .invoke_context(request, self.context.take())
+                .await;
             if let Ok(Err(error)) = &reply.result {
                 self.protocol_error = Some(error.clone());
             }

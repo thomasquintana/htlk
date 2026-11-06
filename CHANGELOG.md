@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Run-owned MCP callbacks carry runtime-established invocation/attempt origins and
+  atomically charge every containing scope and wrapper before dispatch. Callback
+  results preserve ancestor protection and uncertainty through the run journal.
 - Durable host-owned sampling and addressed form/URL elicitation execute on bounded
   host workers independently of transport reception. Interactive and headless hosts
   share authorized inspection/reply commands; saved responses replay without model
@@ -31,7 +34,7 @@ User-visible changes and compatibility boundaries are recorded here, following
   independent host-work budgets.
 - Transactional host MCP ownership, persistent session epochs, callback work intent,
   saved replies and receipts, delivery facts, cumulative usage, and bounded late
-  evidence storage. Private SQLite schema 9 deliberately rejects earlier stores.
+  evidence storage. Private SQLite schema 10 deliberately rejects earlier stores.
 - Protected MCP evidence inspection now includes prompt, resource, and template
   attempts, with explicit operation kind, bounded original bytes, and delivery
   evidence; tool-only normalization and inference remain independently restricted.

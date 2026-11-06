@@ -94,6 +94,26 @@ impl std::fmt::Debug for McpOutcome {
 /// A sendable delivery-aware attempt future.
 pub type McpAttemptFuture<'a> = Pin<Box<dyn Future<Output = McpOutcome> + Send + 'a>>;
 
+/// Opaque runtime-established origin of an admitted MCP attempt. The native client
+/// carries it alongside pending RPCs; server metadata cannot construct this grant.
+#[derive(Clone)]
+pub struct McpAttemptContext {
+    pub(crate) origin: client::McpOperationOrigin,
+    pub(crate) server: htlk_executable::digest::Digest,
+    pub(crate) deadline_ms: i64,
+    pub(crate) labels: SecurityLabels,
+}
+impl McpAttemptContext {
+    /// Actual originating run, invocation and attempt.
+    pub fn origin(&self) -> &client::McpOperationOrigin {
+        &self.origin
+    }
+    /// Maximum inherited absolute deadline.
+    pub fn deadline_ms(&self) -> i64 {
+        self.deadline_ms
+    }
+}
+
 /// Cooperative cancellation, subordinate to durable acceptance fences.
 pub struct McpCancellation {
     state: tokio::sync::watch::Sender<bool>,
@@ -161,6 +181,15 @@ pub trait McpConnection: Send {
     fn descriptor(&self) -> &JsonDocument;
     /// Sends the frozen request and reports observed delivery separately.
     fn invoke<'a>(&'a mut self, request: McpRequest) -> McpAttemptFuture<'a>;
+    /// Invokes with independently established runtime origin for nested client work.
+    /// Scripted adapters without client services can use the ordinary invocation.
+    fn invoke_with_context<'a>(
+        &'a mut self,
+        request: McpRequest,
+        _context: McpAttemptContext,
+    ) -> McpAttemptFuture<'a> {
+        self.invoke(request)
+    }
     /// Takes the last invocation's protected correlated JSON-RPC error. Runtime
     /// records it separately from redacted graph failures and rechecks its bounds.
     /// A subsequent invocation must clear any previously retained error.

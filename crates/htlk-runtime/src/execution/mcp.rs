@@ -421,6 +421,16 @@ async fn operate_inner(
             ),
             ("owner_fence", Value::Integer(lease.fence())),
             (
+                "server_digest",
+                Value::Text(
+                    binding
+                        .server()
+                        .digest(&runtime.config.limits)
+                        .map_err(|_| err())?
+                        .to_string(),
+                ),
+            ),
+            (
                 "timeout_ms",
                 Value::Integer(
                     i64::try_from(effective.attempt_timeout_ms().ok_or_else(err)?)
@@ -714,16 +724,32 @@ async fn operate_inner(
             &cancellation.token,
             timeout,
             runtime.config.cancellation_grace_ms,
-            connection.invoke(McpRequest {
-                response_limits: runtime.config.limits.clone(),
-                cancellation: cancellation.token.clone(),
-                cancellation_grace_ms: runtime.config.cancellation_grace_ms,
-                method: string(&attempt.payload, "method")?,
-                params: field(&attempt.payload, "params")?.clone(),
-                timeout_ms: timeout,
-                max_response_bytes: response_limit(runtime),
-                idempotency_key: protocol_key,
-            }),
+            connection.invoke_with_context(
+                McpRequest {
+                    response_limits: runtime.config.limits.clone(),
+                    cancellation: cancellation.token.clone(),
+                    cancellation_grace_ms: runtime.config.cancellation_grace_ms,
+                    method: string(&attempt.payload, "method")?,
+                    params: field(&attempt.payload, "params")?.clone(),
+                    timeout_ms: timeout,
+                    max_response_bytes: response_limit(runtime),
+                    idempotency_key: protocol_key,
+                },
+                crate::mcp::McpAttemptContext {
+                    origin: crate::mcp::client::McpOperationOrigin {
+                        run_id: lease.run_id().clone(),
+                        invocation_id: invocation,
+                        attempt_id: attempt_id.parse().map_err(|_| err())?,
+                    },
+                    server: binding
+                        .server()
+                        .digest(&runtime.config.limits)
+                        .map_err(|_| err())?,
+                    deadline_ms: number(&record.payload, "deadline_ms")?
+                        .min(now.saturating_add(timeout as i64)),
+                    labels: influence.union(&policy.result_labels, &runtime.config.limits)?,
+                },
+            ),
         )
         .await
         {
@@ -866,7 +892,18 @@ async fn record_outcome(
     } else {
         response
     };
-    let response_labels = influence.union(&policy.result_labels, &runtime.config.limits)?;
+    let client_labels = runtime
+        .store
+        .run_client_metadata(
+            lease.run_id(),
+            None,
+            Some(attempt_id.parse().map_err(|_| err())?),
+        )
+        .await?
+        .1;
+    let response_labels = influence
+        .union(&policy.result_labels, &runtime.config.limits)?
+        .union(&client_labels, &runtime.config.limits)?;
     let response = replace(
         &response,
         [

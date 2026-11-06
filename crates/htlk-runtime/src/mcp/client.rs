@@ -148,7 +148,7 @@ pub enum McpAttribution {
 }
 
 /// Immutable operation identity carried independently of server-provided metadata.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpOperationOrigin {
     /// Owning workflow run.
     pub run_id: RunId,

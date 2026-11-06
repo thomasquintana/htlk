@@ -367,6 +367,14 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
         .map_err(|_| corrupt())?;
         let timeout = number(&attempt.payload, "timeout_ms")?;
         let owner = number(&attempt.payload, "owner_fence")?;
+        if digest(&attempt.payload, "server_digest")?
+            != binding
+                .server()
+                .digest(&runtime.config.limits)
+                .map_err(|_| corrupt())?
+        {
+            return Err(corrupt());
+        }
         if timeout <= 0
             || timeout as u64 > effective.attempt_timeout_ms().ok_or_else(corrupt)?
             || owner <= 0
@@ -577,6 +585,10 @@ async fn validate(runtime: &Arc<Runtime>, lease: &RunLease) -> Result<(), Runtim
     if !outstanding.is_empty() {
         return Err(corrupt());
     }
+    runtime
+        .store
+        .validate_run_mcp_interactions(lease.run_id())
+        .await?;
     let now = runtime
         .store
         .coordinator_time(runtime.clock.now_ms()?)

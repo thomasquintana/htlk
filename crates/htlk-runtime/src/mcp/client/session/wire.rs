@@ -26,6 +26,7 @@ struct PendingRequest {
     sent: Arc<AtomicBool>,
     cancellation: Arc<McpCancellation>,
     deadline: tokio::time::Instant,
+    context: Option<McpAttemptContext>,
 }
 type Pending = BTreeMap<McpRequestId, PendingRequest>;
 type QueuedEvent = (String, JsonDocument, tokio::sync::OwnedSemaphorePermit);
@@ -263,6 +264,19 @@ impl Wire {
     }
 
     pub async fn invoke(self: &Arc<Self>, request: McpRequest) -> McpClientReply {
+        self.invoke_context(request, None).await
+    }
+    pub async fn invoke_context(
+        self: &Arc<Self>,
+        request: McpRequest,
+        context: Option<McpAttemptContext>,
+    ) -> McpClientReply {
+        if let Some(context) = &context
+            && (self.server.digest(&self.limits).ok() != Some(context.server)
+                || !matches!(self.owner.scope(), McpOwnerScope::Run(run) if run == &context.origin.run_id))
+        {
+            return McpClientReply::failed(McpDelivery::NotSent, FailureCode::McpIdentity);
+        }
         let cancellation = &request.cancellation;
         let method = request.method.as_str();
         if cancellation.is_cancelled() || self.stop.is_cancelled() {
@@ -338,6 +352,7 @@ impl Wire {
                     sent: sent_state.clone(),
                     cancellation: request.cancellation.clone(),
                     deadline,
+                    context,
                 },
             );
         }

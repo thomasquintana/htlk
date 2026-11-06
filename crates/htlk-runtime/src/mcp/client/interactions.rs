@@ -27,6 +27,8 @@ pub enum McpClientAction {
 
 /// Exact protected action presented to the current host authorization policy.
 pub struct McpClientAuthorization<'a> {
+    /// Established parent operation, absent for host/root services.
+    pub origin: Option<&'a McpOperationOrigin>,
     /// Authority purpose selected by the client, never by request data.
     pub action: McpClientAction,
     /// Actual session owner and ownership generation.
@@ -170,6 +172,7 @@ impl McpInteractionHost {
         self.authorizer.authorize(
             actor,
             McpClientAuthorization {
+                origin: None,
                 action: McpClientAction::List,
                 owner,
                 server: None,
@@ -381,11 +384,14 @@ impl McpInteractionHost {
             .map(|_| ())
             .map_err(|e| fail(e.code()))
     }
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn receive(
         &self,
         owner: &McpOwner,
         server: Digest,
         session: Digest,
+        origin: Option<McpOperationOrigin>,
+        base_labels: SecurityLabels,
         raw: Vec<u8>,
         deadline: i64,
     ) -> Result<McpStoredInteraction, RuntimeFailure> {
@@ -393,10 +399,15 @@ impl McpInteractionHost {
             JsonDocument::new(&raw, &self.limits).map_err(|_| fail(FailureCode::McpProtocol))?;
         validate_client_request(&request, &self.config, &self.limits)
             .map_err(|_| fail(FailureCode::McpProtocol))?;
-        let labels = self.authorizer.request_labels(owner, server, &request)?;
+        let labels = self
+            .authorizer
+            .request_labels(owner, server, &request)?
+            .union(&base_labels, &self.limits)
+            .map_err(|_| fail(FailureCode::Profile))?;
         self.authorizer.authorize(
             owner.host(),
             McpClientAuthorization {
+                origin: origin.as_ref(),
                 action: McpClientAction::Dispatch,
                 owner,
                 server: Some(server),
@@ -407,19 +418,39 @@ impl McpInteractionHost {
                 response: None,
             },
         )?;
-        self.persistence
-            .store
-            .receive_mcp_interaction(
-                owner,
-                session,
-                raw,
-                labels,
-                deadline,
-                self.persistence.clock.now_ms()?,
-                self.config.limits.requests_per_session,
-            )
-            .await
-            .map_err(|e| fail(e.code()))
+        let now = self.persistence.clock.now_ms()?;
+        match owner.scope() {
+            McpOwnerScope::Host(_) => {
+                self.persistence
+                    .store
+                    .receive_mcp_interaction(
+                        owner,
+                        session,
+                        raw,
+                        labels,
+                        deadline,
+                        now,
+                        self.config.limits.requests_per_session,
+                    )
+                    .await
+            }
+            McpOwnerScope::Run(_) => {
+                self.persistence
+                    .store
+                    .receive_run_mcp_interaction(
+                        owner,
+                        session,
+                        origin,
+                        raw,
+                        labels,
+                        deadline,
+                        now,
+                        self.config.limits.requests_per_session,
+                    )
+                    .await
+            }
+        }
+        .map_err(|e| fail(e.code()))
     }
     pub(super) async fn begin(
         &self,
@@ -564,6 +595,7 @@ impl McpInteractionHost {
         self.authorizer.authorize(
             actor,
             McpClientAuthorization {
+                origin: record.origin.as_ref(),
                 action,
                 owner,
                 server: Some(server),
