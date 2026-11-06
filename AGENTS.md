@@ -6,11 +6,6 @@ technical authorities. README and user guides address human readers.
 
 ## Working constraints
 
-- During the active MCP client implementation, consult
-  `.opencode/.tmp/plans/mcp-client.md` after compaction and after every task. Update
-  its progress after verification, commit each completed task, and follow its
-  milestone dependencies. The temporary plan is local and ignored by Git.
-
 - Preserve compiler/runtime independent admission and transactional trust checks.
 - Preserve lazy reads: unused branches and unselected sources must not access values,
   inspect irrelevant checkpoints, or dispatch operations.

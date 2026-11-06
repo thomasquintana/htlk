@@ -10,6 +10,94 @@ schema proposals. Exact result/extraction/inference rules are specified in the
 [MCP specification](../specs/mcp-spec.md); the [runtime guide](runtime-guide.md)
 covers registration and host lifecycle.
 
+## Run a host-owned catalog browser
+
+The complete [`mcp_client` example](../crates/htlk-runtime/examples/mcp_client.rs)
+opens a host-owned session independently of a workflow, enumerates tools, prompts,
+resources, and resource templates, and optionally monitors one explicit resource.
+It includes persistence, current callback authorization, a roots provider, and a
+bounded event consumer. Start with its offline help:
+
+```console
+cargo run -p htlk-runtime --example mcp_client --locked -- --help
+```
+
+Supply the expected implementation **name and version** from your actual server's
+`initialize.serverInfo`. These are identity pins, not the MCP protocol version or
+arbitrary labels. The client negotiates MCP 2025-11-25. For stdio, supply an absolute
+program path followed by its arguments:
+
+```console
+cargo run -p htlk-runtime --example mcp_client --locked -- stdio SERVER_NAME SERVER_VERSION /absolute/path/to/server ARG
+```
+
+For Streamable HTTP, supply the exact endpoint:
+
+```console
+cargo run -p htlk-runtime --example mcp_client --locked -- http SERVER_NAME SERVER_VERSION https://service.example/mcp
+```
+
+Replace those placeholders with your deployment. Options precede `stdio` or `http`;
+all arguments after the stdio program belong to the child. Stdio inherits the host
+environment. HTTP accepts HTTPS or numeric-loopback HTTP development endpoints,
+without userinfo, query parameters, or fragments. `--help` exits before opening a
+store, spawning a child, or contacting an endpoint; invalid arguments produce a
+fixed diagnostic that excludes argument values.
+
+### Persist intent and receive bounded updates
+
+This invocation uses a SQLite store, exposes one advisory root, and monitors one
+operator-selected resource for 15 seconds after discovery:
+
+```console
+cargo run -p htlk-runtime --example mcp_client --locked -- --store ./mcp-client.sqlite --root file:///absolute/workspace/ --subscribe context://status --watch-seconds 15 http SERVER_NAME SERVER_VERSION https://service.example/mcp
+```
+
+The store defaults to in-memory when `--store` is omitted. A file store retains
+interaction evidence and subscription intent across runs; the example acquires a
+180-second owner lease, opens a fresh transport epoch, and on normal completion
+releases its subscription consumer, closes that exact epoch, shuts down the native
+client, and releases ownership. The parent directory for the store must already
+exist. Reopening does not automatically restore old subscriptions or retry uncertain
+operations. Monitoring a retained URI from an earlier epoch reports `Gap` until an
+explicit restoration command binds that record to the new session. A host building
+continuous monitoring should renew ownership and authorize restoration through the
+[durable subscription APIs](#durable-resource-monitoring).
+
+Each inventory has a five-second traversal budget, 16-page and 512-item ceilings,
+256 KiB per page, and 2 MiB cumulative result bytes. All four share a 20-second
+discovery deadline. Output reports complete, incomplete, or unsupported inventories
+and prints validated descriptor JSON. An incomplete result exits unsuccessfully
+after cleanup. Catalog pagination is not a snapshot of a changing server.
+
+`--watch-seconds` accepts 0–60; monitoring a resource requires a positive value.
+The selected server must advertise `resources.subscribe`. Subscription reports
+distinguish desired presence from acknowledged remote state and expose unconfirmed
+release. Notifications produce value-free event identifiers. Receipt never reads
+resource content, refreshes catalogs, invokes tools, gets prompt messages, expands
+templates, or adopts compiler contracts. HTTP idle reception depends on the server's
+optional GET/SSE support; the example reports whether it is available.
+
+### Roots, headless elicitation, and credentials
+
+The roots provider returns only the explicitly supplied `--root`, or an empty list.
+It does not inspect the filesystem. Roots are advisory and do not establish a sandbox.
+The example installs `McpAwaitReply` for form and URL elicitation. Its separate event
+consumer authorizes inspection and submits an addressed **decline**, bound to the
+saved request digest and a stable idempotency key. It never fabricates form answers,
+accepts URL consent, navigates a URL, or retries the requesting operation. The
+example's module rustdoc explains where an interactive frontend or a real accounted
+sampling handler connects. Sampling remains unadvertised in this runnable browser.
+
+For an operator-managed static HTTP bearer token, add `--bearer-env TOKEN_VARIABLE`
+before `http`; the value is read from that environment variable rather than a command
+argument. Keep the credential out of the store path and URL. Authentication concerns
+are observed even if initialization fails; the example does not refresh credentials
+or replay requests. For host-managed OAuth, exact credential binding and refresh,
+use the [authorization integration](#mcp-server-authorization). The example's
+single-principal callback policy is the starting point for application-specific
+actor authentication and protection-label enforcement.
+
 ## Trusted transport configuration
 
 `NativeMcpAdapter` routes deployment IDs to operator-supplied `McpEndpoint::Stdio`
