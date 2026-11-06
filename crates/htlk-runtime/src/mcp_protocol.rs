@@ -69,7 +69,7 @@ pub fn validate_mcp_prompt_result(
     }
     Ok(())
 }
-fn content_binary(content: &Map, limits: &Limits) -> Result<(), McpValidationError> {
+pub(crate) fn content_binary(content: &Map, limits: &Limits) -> Result<(), McpValidationError> {
     match content.get("type") {
         Some(Value::Text(kind)) if kind == "image" || kind == "audio" => {
             if let Some(Value::Text(data)) = content.get("data") {

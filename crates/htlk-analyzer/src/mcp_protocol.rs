@@ -29,6 +29,68 @@ impl McpDescriptorKind {
         }
     }
 }
+
+macro_rules! message_kinds {
+    ($( $variant:ident => $root:literal, $doc:literal; )*) => {
+        /// Closed message shapes from the pinned MCP schema. Cross-message rules
+        /// (such as balanced sampling tool results) require additional validation.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum McpMessageKind { $( #[doc = $doc] $variant, )* }
+        impl McpMessageKind {
+            fn root(self) -> &'static str { match self { $( Self::$variant => $root, )* } }
+        }
+        const MESSAGE_ROOTS: &[&str] = &[$($root,)*];
+    }
+}
+message_kinds! {
+    InitializeRequest => "InitializeRequest", "Client initialization request.";
+    InitializeResult => "InitializeResult", "Negotiated server initialization result.";
+    ClientCapabilities => "ClientCapabilities", "Client capability declaration.";
+    SamplingRequest => "CreateMessageRequest", "Complete sampling/createMessage request envelope.";
+    SamplingResult => "CreateMessageResult", "Sampling result object.";
+    ElicitationRequest => "ElicitRequest", "Complete form or URL elicitation/create request.";
+    RootsRequest => "ListRootsRequest", "Server roots/list request.";
+    RootsResult => "ListRootsResult", "Host roots result.";
+    ToolList => "ListToolsResult", "One tools/list page.";
+    PromptList => "ListPromptsResult", "One prompts/list page.";
+    ResourceList => "ListResourcesResult", "One resources/list page.";
+    ResourceTemplateList => "ListResourceTemplatesResult", "One resources/templates/list page.";
+    CompletionRequest => "CompleteRequest", "Argument completion request.";
+    CompletionResult => "CompleteResult", "Argument completion result.";
+    LoggingNotification => "LoggingMessageNotification", "Structured server log notification.";
+    ProgressNotification => "ProgressNotification", "Correlated progress notification.";
+    ResourceUpdated => "ResourceUpdatedNotification", "Resource-update notification.";
+    ToolsChanged => "ToolListChangedNotification", "Tool catalog invalidation notification.";
+    PromptsChanged => "PromptListChangedNotification", "Prompt catalog invalidation notification.";
+    ResourcesChanged => "ResourceListChangedNotification", "Resource and template catalog invalidation notification.";
+    RootsChanged => "RootsListChangedNotification", "Client roots invalidation notification.";
+    ElicitationComplete => "ElicitationCompleteNotification", "URL elicitation completion notification.";
+    Task => "Task", "Experimental task state.";
+    CreateTaskResult => "CreateTaskResult", "Experimental task-acceptance result.";
+    TaskList => "ListTasksResult", "Experimental task enumeration page.";
+    TaskStatus => "TaskStatusNotification", "Experimental task status notification.";
+}
+
+/// Validates a complete protocol envelope or result against the selected schema
+/// shape. This performs no I/O and does not grant negotiated capability authority.
+///
+/// # Errors
+/// Returns bounded ingress/schema failure or a message-shape mismatch.
+pub fn validate_mcp_message(
+    kind: McpMessageKind,
+    document: &JsonDocument,
+    limits: &cbor::Limits,
+) -> Result<(), McpValidationError> {
+    if mcp_schema_validators()?.validate(
+        &format!("{MCP_SCHEMA_URI}:{}", kind.root()),
+        document,
+        limits,
+    )? {
+        Ok(())
+    } else {
+        Err(McpValidationError::Message)
+    }
+}
 /// Borrows immutable offline validators for descriptors and runtime protocol data.
 ///
 /// # Errors
@@ -52,7 +114,10 @@ pub fn mcp_schema_validators() -> Result<&'static NativeSchemas, McpValidationEr
                 "GetPromptResult",
                 "CallToolResult",
                 "ReadResourceResult",
-            ] {
+            ]
+            .into_iter()
+            .chain(MESSAGE_ROOTS.iter().copied())
+            {
                 documents.push((
                     format!("{MCP_SCHEMA_URI}:{root}"),
                     JsonDocument::new(
@@ -95,6 +160,8 @@ pub fn validate_mcp_descriptor(
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum McpValidationError {
+    /// A client/service message does not satisfy its pinned protocol shape.
+    Message,
     /// Invalid base64 protocol content.
     BinaryEncoding,
     /// Decoded content exceeds its byte-string ceiling.

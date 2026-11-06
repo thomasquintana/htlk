@@ -184,7 +184,20 @@ fn native_protocol_failures_have_durable_classifications_and_never_publish_outpu
                         .await
                         .unwrap();
                     assert!(evidence.response_received);
-                    assert!(evidence.raw_response.is_none() && evidence.normalized.is_none());
+                    assert_eq!(
+                        evidence.payload_kind,
+                        Some(htlk::runtime::execution::McpEvidencePayload::ProtocolError)
+                    );
+                    let raw = htlk_executable::JsonDocument::new(
+                        evidence.raw_response.as_deref().unwrap(),
+                        &Limits::default(),
+                    )
+                    .unwrap();
+                    let Value::Map(error) = raw.value() else {
+                        panic!()
+                    };
+                    assert_eq!(error.get("code"), Some(&Value::Integer(-32603)));
+                    assert!(evidence.normalized.is_none());
                     assert_eq!(evidence.failure_code, Some(FailureCode::McpProtocol));
                 }
                 assert_eq!(peer.calls().len(), sent, "{transport}/{mode}");

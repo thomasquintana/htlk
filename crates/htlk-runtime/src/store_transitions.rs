@@ -174,112 +174,20 @@ impl SqliteStore {
     pub async fn commit(
         &self,
         lease: &RunLease,
-        mut transition: Transition,
+        transition: Transition,
     ) -> Result<CommitReceipt, StoreError> {
-        timestamp(transition.context.timestamp_ms)?;
         let limits = self.config.limits.clone();
-        for text in [
-            &transition.context.command_id,
-            &transition.context.actor,
-            &transition.context.causation,
-        ] {
-            self.check_text(text)?;
-        }
-        let body = transition_body(&mut transition, &limits)?;
-        let request_digest = command_digest(
-            lease.run_id(),
-            &transition.context.actor,
-            &transition.context.causation,
-            &body,
-            &limits,
-        )?;
-        let event_payload = cbor::encode(
-            &Value::Array(vec![
-                Value::Text(lease.owner.clone()),
-                Value::Integer(lease.fence),
-                body,
-            ]),
-            &limits,
-        )?;
-        let writes = transition
-            .writes
-            .iter()
-            .map(|write| Ok(cbor::encode(&write.payload, &limits)?))
-            .collect::<Result<Vec<_>, StoreError>>()?;
+        let prepared = PreparedTransition::new(lease, transition, &limits)?;
         let lease = lease.clone();
-        self.connection.call(move |db| -> Result<CommitReceipt, StoreError> {
-            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let header = load_header(&tx, &lease.run_id)?;
-            let now = transition.context.timestamp_ms.max(header.last_time_ms);
-            check_authority(&header, &lease, now)?;
-            let old = tx.query_row(
-                "SELECT request_digest,sequence FROM commands WHERE run_id=?1 AND command_id=?2",
-                params![lease.run_id.as_str(), transition.context.command_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-            ).optional()?;
-            if let Some((digest, sequence)) = old {
-                if digest != request_digest.to_string() {
-                    return Err(StoreError::IdempotencyConflict);
-                }
-                return Ok(CommitReceipt { sequence });
-            }
-            if header.status.is_terminal() {
-                return Err(StoreError::Terminal);
-            }
-            if transition.expected_fingerprint.is_some_and(|fp| fp != header.fingerprint) {
-                return Err(StoreError::Conflict);
-            }
-            if transition.next_status.is_some_and(|status| !header.status.can_transition_to(status)) {
-                return Err(StoreError::Terminal);
-            }
-            // Classification and proposal construction can cross expiry. Check
-            // acceptance in the same transaction as the wait, receipt and graph.
-            for write in &transition.writes {
-                check_acceptance_deadline(write, now)?;
-            }
-            for (write, payload) in transition.writes.iter().zip(&writes) {
-                artifacts::check_artifact_write(&tx, &lease.run_id, write, &limits)?;
-                let old = tx.query_row(
-                    "SELECT revision,final FROM records WHERE run_id=?1 AND family=?2 AND record_id=?3",
-                    params![lease.run_id.as_str(), write.key.family.as_str(), write.key.id],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?)),
-                ).optional()?;
-                if old.is_some_and(|(_, final_record)| final_record) {
-                    return Err(StoreError::Terminal);
-                }
-                if old.map(|(revision, _)| revision) != write.expected_revision {
-                    return Err(StoreError::Conflict);
-                }
-                let revision = next_revision(write.expected_revision)?;
-                tx.execute(
-                    "INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,?2,?3,?4,?5,?6)
-                     ON CONFLICT(run_id,family,record_id) DO UPDATE SET revision=excluded.revision,final=excluded.final,payload=excluded.payload",
-                    params![lease.run_id.as_str(), write.key.family.as_str(), write.key.id, revision, write.final_record, payload],
-                )?;
-            }
-            retention::check_references(&tx, &transition.writes, &limits)?;
-            artifacts::check_output_publication(&tx, &lease.run_id, &transition.writes, &limits)?;
-            let sequence = header.sequence.checked_add(1).ok_or(StoreError::Invalid)?;
-            let fingerprint = transition.root.as_ref().map_or(header.fingerprint, |root| root.fingerprint);
-            let root = transition.root.as_ref().map_or(header.root_scope, |root| root.root_scope);
-            tx.execute(
-                "UPDATE runs SET fingerprint=?2,root_scope=?3,status=?4,sequence=?5,last_time_ms=?6 WHERE run_id=?1",
-                params![lease.run_id.as_str(), fingerprint.to_string(), root.to_string(), transition.next_status.unwrap_or(header.status).as_str(), sequence, now],
-            )?;
-            append_event(&tx, lease.run_id.as_str(), sequence, EventMeta {
-                kind: "records_committed",
-                actor: &transition.context.actor,
-                timestamp: now,
-                causation: &transition.context.causation,
-                command: Some(&transition.context.command_id),
-            }, &event_payload, &limits)?;
-            tx.execute(
-                "INSERT INTO commands(run_id,command_id,request_digest,sequence) VALUES(?1,?2,?3,?4)",
-                params![lease.run_id.as_str(), transition.context.command_id, request_digest.to_string(), sequence],
-            )?;
-            tx.commit()?;
-            Ok(CommitReceipt { sequence })
-        }).await.map_err(StoreError::from_worker)
+        self.connection
+            .call(move |db| -> Result<CommitReceipt, StoreError> {
+                let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let receipt = prepared.apply(&tx, &lease, &limits)?;
+                tx.commit()?;
+                Ok(receipt)
+            })
+            .await
+            .map_err(StoreError::from_worker)
     }
     /// Reads one authoritative record under the configured representation limits.
     ///
@@ -394,7 +302,7 @@ impl SqliteStore {
             .await
             .map_err(StoreError::from_worker)
     }
-    fn page_size(&self, page_size: usize) -> Result<i64, StoreError> {
+    pub(super) fn page_size(&self, page_size: usize) -> Result<i64, StoreError> {
         if page_size == 0 || page_size > self.config.max_page_size {
             return Err(StoreError::Invalid);
         }
@@ -445,6 +353,159 @@ fn page_header(count: usize) -> usize {
         2
     } else {
         3
+    }
+}
+
+pub(super) struct PreparedTransition {
+    transition: Transition,
+    request_digest: Digest,
+    event_payload: Vec<u8>,
+    writes: Vec<Vec<u8>>,
+}
+impl PreparedTransition {
+    pub fn new(
+        lease: &RunLease,
+        mut transition: Transition,
+        limits: &Limits,
+    ) -> Result<Self, StoreError> {
+        timestamp(transition.context.timestamp_ms)?;
+        for text in [
+            &transition.context.command_id,
+            &transition.context.actor,
+            &transition.context.causation,
+        ] {
+            RecordAccounting::new(limits)?
+                .text(text, 0)
+                .map_err(|_| StoreError::Invalid)?;
+        }
+        let body = transition_body(&mut transition, limits)?;
+        let request_digest = command_digest(
+            lease.run_id(),
+            &transition.context.actor,
+            &transition.context.causation,
+            &body,
+            limits,
+        )?;
+        let event_payload = cbor::encode(
+            &Value::Array(vec![
+                Value::Text(lease.owner.clone()),
+                Value::Integer(lease.fence),
+                body,
+            ]),
+            limits,
+        )?;
+        let writes = transition
+            .writes
+            .iter()
+            .map(|write| Ok(cbor::encode(&write.payload, limits)?))
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        Ok(Self {
+            transition,
+            request_digest,
+            event_payload,
+            writes,
+        })
+    }
+    // The same transactional trust boundary is used by ordinary graph commits and
+    // callback accounting. The caller owns the transaction and commits all facts together.
+    pub fn apply(
+        self,
+        tx: &tokio_rusqlite::Transaction<'_>,
+        lease: &RunLease,
+        limits: &Limits,
+    ) -> Result<CommitReceipt, StoreError> {
+        let Self {
+            transition,
+            request_digest,
+            event_payload,
+            writes,
+        } = self;
+        let header = load_header(tx, &lease.run_id)?;
+        let now = transition.context.timestamp_ms.max(header.last_time_ms);
+        check_authority(&header, lease, now)?;
+        let old = tx
+            .query_row(
+                "SELECT request_digest,sequence FROM commands WHERE run_id=?1 AND command_id=?2",
+                params![lease.run_id.as_str(), transition.context.command_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((digest, sequence)) = old {
+            if digest != request_digest.to_string() {
+                return Err(StoreError::IdempotencyConflict);
+            }
+            return Ok(CommitReceipt { sequence });
+        }
+        if header.status.is_terminal() {
+            return Err(StoreError::Terminal);
+        }
+        if transition
+            .expected_fingerprint
+            .is_some_and(|fp| fp != header.fingerprint)
+        {
+            return Err(StoreError::Conflict);
+        }
+        if transition
+            .next_status
+            .is_some_and(|status| !header.status.can_transition_to(status))
+        {
+            return Err(StoreError::Terminal);
+        }
+        for write in &transition.writes {
+            check_acceptance_deadline(write, now)?;
+        }
+        for (write, payload) in transition.writes.iter().zip(&writes) {
+            artifacts::check_artifact_write(tx, &lease.run_id, write, limits)?;
+            let old = tx.query_row("SELECT revision,final FROM records WHERE run_id=?1 AND family=?2 AND record_id=?3",
+                params![lease.run_id.as_str(), write.key.family.as_str(), write.key.id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))).optional()?;
+            if old.is_some_and(|(_, final_record)| final_record) {
+                return Err(StoreError::Terminal);
+            }
+            if old.map(|(revision, _)| revision) != write.expected_revision {
+                return Err(StoreError::Conflict);
+            }
+            let revision = next_revision(write.expected_revision)?;
+            tx.execute("INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,?2,?3,?4,?5,?6)
+                ON CONFLICT(run_id,family,record_id) DO UPDATE SET revision=excluded.revision,final=excluded.final,payload=excluded.payload",
+                params![lease.run_id.as_str(), write.key.family.as_str(), write.key.id, revision, write.final_record, payload])?;
+        }
+        retention::check_references(tx, &transition.writes, limits)?;
+        artifacts::check_output_publication(tx, &lease.run_id, &transition.writes, limits)?;
+        let sequence = header.sequence.checked_add(1).ok_or(StoreError::Invalid)?;
+        let fingerprint = transition
+            .root
+            .as_ref()
+            .map_or(header.fingerprint, |root| root.fingerprint);
+        let root = transition
+            .root
+            .as_ref()
+            .map_or(header.root_scope, |root| root.root_scope);
+        tx.execute("UPDATE runs SET fingerprint=?2,root_scope=?3,status=?4,sequence=?5,last_time_ms=?6 WHERE run_id=?1",
+            params![lease.run_id.as_str(), fingerprint.to_string(), root.to_string(), transition.next_status.unwrap_or(header.status).as_str(), sequence, now])?;
+        append_event(
+            tx,
+            lease.run_id.as_str(),
+            sequence,
+            EventMeta {
+                kind: "records_committed",
+                actor: &transition.context.actor,
+                timestamp: now,
+                causation: &transition.context.causation,
+                command: Some(&transition.context.command_id),
+            },
+            &event_payload,
+            limits,
+        )?;
+        tx.execute(
+            "INSERT INTO commands(run_id,command_id,request_digest,sequence) VALUES(?1,?2,?3,?4)",
+            params![
+                lease.run_id.as_str(),
+                transition.context.command_id,
+                request_digest.to_string(),
+                sequence
+            ],
+        )?;
+        Ok(CommitReceipt { sequence })
     }
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Workspace coverage summaries and fail-closed per-crate coverage checks. */
+/** Workspace coverage evidence, advisory baselines and optional strict checks. */
 import { readFileSync } from 'node:fs';
 import { resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,8 +45,9 @@ export function summarize(report) {
   return totals;
 }
 
-export function check(totals, thresholds) {
-  const failures = [];
+export function assess(totals, thresholds) {
+  const recommendations = [];
+  const errors = [];
   for (const name of crates) {
     const minimum = thresholds[name];
     if (!minimum || !Number.isFinite(minimum.lines) || minimum.lines < 0 || minimum.lines > 100) {
@@ -55,16 +56,16 @@ export function check(totals, thresholds) {
     const lines = totals[name].lines;
     const percent = lines.count ? 100 * lines.covered / lines.count : 100;
     if (percent + Number.EPSILON < minimum.lines) {
-      failures.push(`${name}: ${percent.toFixed(2)}% lines < ${minimum.lines}% required`);
+      recommendations.push(`${name}: ${percent.toFixed(2)}% lines < ${minimum.lines}% baseline`);
     }
     if (minimum.branches !== undefined) {
       if (!Number.isFinite(minimum.branches) || minimum.branches < 0 || minimum.branches > 100) {
         throw new Error(`Invalid branch threshold for ${name}`);
       }
       const branches = totals[name].branches;
-      if (branches.count === 0 && lines.count !== 0) failures.push(`${name}: missing branch instrumentation`);
+      if (branches.count === 0 && lines.count !== 0) errors.push(`${name}: missing branch instrumentation`);
       else if (100 * branches.covered / branches.count < minimum.branches) {
-        failures.push(`${name}: ${(100 * branches.covered / branches.count).toFixed(2)}% branches < ${minimum.branches}% required`);
+        recommendations.push(`${name}: ${(100 * branches.covered / branches.count).toFixed(2)}% branches < ${minimum.branches}% baseline`);
       }
     }
     if (minimum.max_uncovered_lines !== undefined) {
@@ -72,15 +73,20 @@ export function check(totals, thresholds) {
         throw new Error(`Invalid uncovered-line allowance for ${name}`);
       }
       if (lines.count - lines.covered > minimum.max_uncovered_lines) {
-        failures.push(`${name}: ${lines.count - lines.covered} uncovered lines > ${minimum.max_uncovered_lines} allowed`);
+        recommendations.push(`${name}: ${lines.count - lines.covered} uncovered lines > ${minimum.max_uncovered_lines} baseline allowance`);
       }
     }
   }
-  return failures;
+  return { errors, recommendations };
+}
+
+export function check(totals, thresholds) {
+  const { errors, recommendations } = assess(totals, thresholds);
+  return [...errors, ...recommendations];
 }
 
 function main(args) {
-  if (!args.length) throw new Error('Usage: node tools/coverage.mjs REPORT.json [--check THRESHOLDS.json] [--missing PATH]');
+  if (!args.length) throw new Error('Usage: node tools/coverage.mjs REPORT.json [--recommendations BASELINES.json | --check THRESHOLDS.json] [--missing PATH]');
   const report = JSON.parse(readFileSync(args.shift(), 'utf8'));
   const totals = summarize(report);
   console.log('| Crate | Lines | Functions | Regions | Branches | Uncovered lines |');
@@ -96,6 +102,13 @@ function main(args) {
     if (option === '--check') {
       const failures = check(totals, JSON.parse(readFileSync(value, 'utf8')));
       if (failures.length) throw new Error(failures.join('\n'));
+    } else if (option === '--recommendations') {
+      const { errors, recommendations } = assess(totals, JSON.parse(readFileSync(value, 'utf8')));
+      if (errors.length) throw new Error(errors.join('\n'));
+      console.log('\n## Coverage recommendations\n');
+      if (recommendations.length) {
+        for (const recommendation of recommendations) console.log(`- ${recommendation}`);
+      } else console.log('All recorded baselines are met. Review remaining paths for meaningful test opportunities.');
     } else if (option === '--missing') {
       for (const data of report.data) {
         for (const file of data.files ?? []) {

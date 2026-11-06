@@ -6,7 +6,109 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ## [Unreleased]
 
+### Changed
+
+- Coverage baselines are advisory recommendations in CI. Invalid or missing
+  measurements and absent branch instrumentation still fail validation; complete
+  instrumented test suites and report artifacts remain required.
+
+### Fixed
+
+- The native MCP catalog-browser example accepts an explicit bounded startup timeout
+  for slower real servers while retaining separate catalog/subscription budgets.
+- MCP work inspection authorizes evidence and protection from one consistent
+  snapshot. Reconciled sampling recovery uses the exact selected late result,
+  labels and usage without changing the original callback reply or redispatching work.
+- Task result-retrieval RPC errors remain separate protected observations instead
+  of becoming final operation results or releasing uncertain graph reservations.
+- Retired native MCP transports release session capacity. Bounded, non-evicting
+  owner-generation fences reject stale opens after reclamation; active run failures
+  remain sticky until their original lifetime ends.
+- MCP recovery validates admitted interaction history incrementally instead of
+  rejecting a valid run whose lifetime history exceeds one document's byte ceiling.
+
 ### Added
+
+- Accounted MCP host work now has a stable single-operation claim and a native child
+  RPC wrapper bound to the actual callback session, ancestor reservation, deadline
+  and cancellation. Protected routing/native outcome evidence and known sampling
+  results survive callback interruption and reopen without model redispatch.
+  Combined sampling tools/context has explicit service dispatch; duplicate tool
+  declarations and unresolved tool schemas fail before host work.
+- The MCP I/O owner sends absolute-deadline cancellation hints, poisons ambiguous
+  run sessions independently of dropped caller futures, and retains abandoned
+  correlated outcomes as protected late evidence.
+- Typed, pinned MCP resource/catalog/logging notifications expose capability gates,
+  URI subscription state, and explicit ignored dispositions without automatic reads.
+  Installed roots providers support bounded roots-change notifications. Progress
+  preserves actual request/token identity and task lifetime, enforces monotonic work
+  and totals, and supports expiring host callback reporters without extending deadlines.
+- Experimental MCP tasks now execute in both directions: bounded tool task creation,
+  polling/results/list/cancel, and durable deferred sampling/elicitation on independent
+  control capacity. Task-required graph tools use explicit frozen deployment policy;
+  accepted IDs resolve later callbacks to their actual accounted attempts. Creation
+  intent prevents blind recreation after a lost ACK, while task cancellation preserves
+  uncertain underlying work and replayable receipts. SQLite schema 13 rejects older stores.
+- Durable MCP URL elicitation now connects callback consent, URL-required errors,
+  and scoped completion notifications to authenticated host inspection/reply APIs.
+  Unknown/duplicate completions are ignored; addressed events contain opaque IDs.
+  Original RPC errors and delivery remain intact when URL admission fails, and
+  neither consent nor completion fetches a URL or retries work. Streamable HTTP
+  drains complete trailing SSE frames in the received response chunk. Private
+  SQLite schema 12 deliberately rejects earlier stores.
+- Native MCP HTTP credential providers bind exact server/resource/principal and run
+  on every POST, GET/resumption and DELETE. Bounded OAuth/OIDC discovery, PKCE S256,
+  pre-registration, resource indicators, refresh rotation and scope challenges are
+  implemented with host-controlled navigation and secret persistence. Protected
+  structured authentication concerns survive failed initialization; credentials
+  never automatically replay operations. Optional CIMD, dynamic registration and
+  independently versioned authorization extensions are explicitly assessed/deferred.
+- Bounded MCP tool, prompt, resource, and template catalog browsing, capability-gated
+  completion/logging utilities, and four-inventory stdio discovery without content
+  acquisition. Durable host subscriptions share consumer intent, fence acknowledgements,
+  preserve uncertain sends, and require explicit restoration across observable epoch
+  gaps. Private SQLite schema 11 deliberately rejects earlier stores.
+- Run-owned MCP callbacks carry runtime-established invocation/attempt origins and
+  atomically charge every containing scope and wrapper before dispatch. Callback
+  results preserve ancestor protection and uncertainty through the run journal.
+- Durable host-owned sampling and addressed form/URL elicitation execute on bounded
+  host workers independently of transport reception. Interactive and headless hosts
+  share authorized inspection/reply commands; saved responses replay without model
+  recall, and blocked callbacks cannot monopolize I/O or erase late evidence.
+- Host callback outcomes distinguish underlying work completion from RPC reply
+  delivery. Acknowledged timeout errors retain uncertain reservations; explicit
+  reconciliation preserves the original reply. Usage receipts retain unknown
+  values separately from measured zero.
+- Native MCP result/error evidence preserves original payload bytes before JSON
+  normalization, including escaped member names. Pending and unconsumed replies
+  reserve bounded response capacity before request transmission.
+- Correlated MCP JSON-RPC errors retain protected code/message/data in durable
+  attempt evidence, including URL-elicitation-required errors. Graph-visible
+  failures remain redacted, and inspecting errors cannot dispatch or retry work.
+- Independent MCP client-service validation for multimodal sampling, balanced
+  tool-use histories and tool choice, form/URL elicitation, and roots. Form numbers
+  include fractional values as required by the authoritative MCP TypeScript model.
+- Native MCP clients can link durable owner leases and store-scoped session epochs;
+  request/event delivery rechecks ownership and expired leases stop reception.
+  Run sessions verify actual persisted principals and fences without borrowing
+  independent host-work budgets.
+- Transactional host MCP ownership, persistent session epochs, callback work intent,
+  saved replies and receipts, delivery facts, cumulative usage, and bounded late
+  evidence storage. Private SQLite schema 10 deliberately rejects earlier stores.
+- Protected MCP evidence inspection now includes prompt, resource, and template
+  attempts, with explicit operation kind, bounded original bytes, and delivery
+  evidence; tool-only normalization and inference remain independently restricted.
+- Run-owned native MCP operations use the same persistent dispatcher as host-owned
+  sessions, without exclusive reader leases. Per-attempt ingress limits, exact
+  deduplication keys, cooperative stop hints, and sticky ambiguous-session failures
+  remain independently enforced.
+- Persistent native MCP client sessions with bounded idle event delivery, reverse
+  ping, concurrent request correlation, cooperative cancellation, stdio/Streamable
+  HTTP transports, SSE resumption, explicit session epochs, and observable overflow.
+- Validated MCP client service configuration, finite session limits, distinct
+  host/run owner identities, callback context, and protected structured RPC errors.
+  These types form the bidirectional client foundation; native transport integration
+  and durable callback execution are tracked in the MCP conformance inventory.
 
 - HTLK IR Draft 0.1 compilation from standalone source, exact source bundles, and
   canonical documents; module interface inspection and public-port graph joins.

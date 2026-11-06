@@ -1,6 +1,6 @@
 //! Explicit authorized sample selection from genuine recorded MCP invocations.
 
-use super::{mcp_evidence::binding_for_view, model::*};
+use super::{mcp_evidence::tool_binding_for_view as binding_for_view, model::*};
 use crate::{
     HostContext, Runtime, RuntimeError,
     artifact::ArtifactProducer,

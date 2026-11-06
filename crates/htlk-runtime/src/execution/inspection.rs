@@ -75,6 +75,9 @@ pub struct RunView {
 /// Node occurrence observation. Returned IDs grant no value access.
 #[derive(Clone, Debug)]
 pub struct NodeView {
+    /// Durable client interactions attributed to this invocation. Values require
+    /// the separately authorized MCP interaction inspection API.
+    pub client_interactions: Vec<Digest>,
     /// Protected contract and destination-validation evidence for this occurrence.
     pub diagnostics: Vec<DecisionView>,
     /// Owning runtime instance and original local name.
@@ -574,6 +577,9 @@ impl Runtime {
             None
         };
         let mut protection = labels(&record.payload, &self.config.limits)?;
+        let (client_interactions, client_labels) =
+            self.store.run_client_metadata(run, Some(id), None).await?;
+        protection = protection.union(&client_labels, &self.config.limits)?;
         for evidence in guards
             .iter()
             .chain(bindings.iter())
@@ -679,6 +685,7 @@ impl Runtime {
             .collect::<Result<Vec<_>, RuntimeError>>()?;
         attempts.sort_by_key(|a| a.number);
         Ok(NodeView {
+            client_interactions,
             diagnostics: observations
                 .iter()
                 .filter(|r| map(&r.payload).is_ok_and(|m| m.get("canonical_path").is_some()))

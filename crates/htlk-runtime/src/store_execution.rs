@@ -31,6 +31,12 @@ impl SqliteStore {
                         }
                     }
                 }
+                labels = labels
+                    .union(
+                        &mcp::run_metadata(db, &run, None, None, &limits)?.1,
+                        &limits,
+                    )
+                    .map_err(|_| StoreError::Invalid)?;
                 Ok(labels)
             })
             .await

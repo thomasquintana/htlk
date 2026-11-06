@@ -7,8 +7,8 @@ records are not an additional supported wire format.
 
 ## Storage compatibility
 
-The SQLite application ID is `0x48544c4b`; the private schema version is **7**.
-An empty database initializes in one immediate transaction. Versions 1–6, future
+The SQLite application ID is `0x48544c4b`; the private schema version is **12**.
+An empty database initializes in one immediate transaction. Versions 1–11, future
 versions, foreign application IDs, and nonempty unrecognized databases fail without
 relabeling or deletion. There is no automatic migration or legacy binding decoder.
 Matching `0.1` format labels do not permit changed interpretation of saved effects.
@@ -25,6 +25,41 @@ maintenance is described in [testing](testing.md#native-identity-and-fixtures).
 authentication, value checks, and application authorization. `StoreConfig` bounds
 codec metadata, page sizes, and busy timeout. Structured errors omit database paths,
 submitted values, and raw SQLite diagnostics.
+
+### Host MCP interaction storage
+
+The store includes owner-scoped MCP leases, epochs, interactions, receipts, journal
+facts, and a bounded late-reply inbox. Host sessions use their own namespace rather
+than synthetic graph runs. Immediate transactions arbitrate duplicate work claims
+across connections. Only a newly committed `McpWorkClaim::Started` permits dispatch;
+an existing intent remains uncertain, and a saved reply is reusable without recall.
+Lease takeover does not reset spent calls or outstanding reservations. Reply bytes
+and protection are recorded before delivery facts, and transport acceptance is
+distinct from application consumption.
+
+Underlying `McpWorkDelivery` is independent of sending a callback reply. An RPC error
+can be recorded and acknowledged while model work remains uncertain. Per-interaction
+charged/outstanding flags independently reconcile the owner counters before admission.
+Usage receipts distinguish unknown tokens/cost from observed zero.
+
+Late replies cannot publish outputs or release reservations. Explicit settlement
+against an exact retained known-completion or not-started receipt can release
+uncertain concurrency while preserving cancellation, original RPC replies, and spent
+calls. Uncertain late evidence cannot settle work. These store APIs are trusted infrastructure;
+native callback admission and authenticated frontend APIs require their separate
+runtime integration described in the [client contract](../specs/mcp-client-spec.md).
+
+URL lifecycle storage uses owner/server/session/elicitation-ID digests. Protected
+parameter/error blobs retain complete metadata; journal and host events carry only
+opaque local identities. Callback consent derives from the existing immutable
+callback reply rather than a dual-written URL response. Error-originated decisions
+have their own principal/key-bound receipts. Consent and first server completion
+are independent facts; completion does not release work reservations, replace an
+RPC outcome, or authorize an operation retry. Complete required-error lists commit
+atomically, and run-origin admission independently rechecks the actual outstanding
+attempt, ancestor protection and deadline through the existing run admission seam.
+Notifications require the live epoch; historical inspection and exact receipt
+lookup survive closure under current authorization and ownership.
 
 ## Ownership and atomic transitions
 

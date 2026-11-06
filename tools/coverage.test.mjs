@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { summarize, check } from './coverage.mjs';
+import { summarize, check, assess } from './coverage.mjs';
 
 const names = ['htlk-analyzer', 'htlk-compiler', 'htlk-executable', 'htlk-runtime', 'htlk'];
 function report() {
@@ -19,6 +19,39 @@ function report() {
   };
 }
 const thresholds = Object.fromEntries(names.map(name => [name, { lines: 99, max_uncovered_lines: 1 }]));
+
+test('recommendations preserve evidence integrity without gating on baseline scores', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'htlk-coverage-advisory-'));
+  try {
+    const input = join(directory, 'coverage.json');
+    const policy = join(directory, 'baselines.json');
+    const command = fileURLToPath(new URL('./coverage.mjs', import.meta.url));
+    const run = () => spawnSync(process.execPath, [command, input, '--recommendations', policy], { encoding: 'utf8' });
+    const low = report();
+    low.data[0].files[3].summary.lines.covered = 1;
+    writeFileSync(input, JSON.stringify(low));
+    writeFileSync(policy, JSON.stringify(thresholds));
+    const advisory = run();
+    assert.equal(advisory.status, 0, advisory.stderr);
+    assert.match(advisory.stdout, /htlk-runtime: 1.00% lines < 99% baseline/);
+    assert.match(advisory.stdout, /99 uncovered lines/);
+    const comparison = assess(summarize(low), thresholds);
+    assert.equal(comparison.errors.length, 0);
+    assert.equal(comparison.recommendations.length, 2);
+    writeFileSync(policy, JSON.stringify({ ...thresholds, 'htlk-runtime': { lines: 99, branches: 90 } }));
+    assert.notEqual(run().status, 0, 'missing instrumentation must still fail');
+    low.data[0].files[3].summary.branches = { count: 100, covered: 1 };
+    writeFileSync(input, JSON.stringify(low));
+    assert.equal(run().status, 0, 'real low branch coverage is advisory');
+    writeFileSync(policy, '{}');
+    assert.notEqual(run().status, 0, 'invalid baseline configuration must fail');
+    writeFileSync(policy, JSON.stringify(thresholds));
+    writeFileSync(input, JSON.stringify({ type: 'llvm.coverage.json.export', data: [] }));
+    assert.notEqual(run().status, 0, 'missing production measurements must fail');
+    writeFileSync(input, '{');
+    assert.notEqual(run().status, 0, 'invalid JSON must fail');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test('each crate must meet its own exact threshold and uncovered-line allowance', () => {
   const data = report();

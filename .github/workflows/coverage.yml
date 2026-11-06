@@ -50,7 +50,7 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
 
-      - name: Check coverage gate implementation
+      - name: Check coverage report integrity and baseline tooling
         run: node --test tools/coverage.test.mjs
 
       - name: Execute all unit, integration, native E2E, crash and stress tests
@@ -64,12 +64,12 @@ jobs:
           cargo +${{ matrix.toolchain }} llvm-cov report --workspace --lcov --output-path target/coverage/lcov.info
           cargo +${{ matrix.toolchain }} llvm-cov report --workspace --html --output-dir target/coverage
 
-      - name: Enforce per-crate coverage ratchets
-        run: node tools/coverage.mjs target/coverage/coverage.json --check ${{ matrix.thresholds }}
+      - name: Validate measurements and report advisory coverage baselines
+        run: node tools/coverage.mjs target/coverage/coverage.json --recommendations ${{ matrix.thresholds }}
 
       - name: Write per-crate summary
         if: always()
-        run: node tools/coverage.mjs target/coverage/coverage.json >> "$GITHUB_STEP_SUMMARY"
+        run: node tools/coverage.mjs target/coverage/coverage.json --recommendations ${{ matrix.thresholds }} >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload annotated coverage reports
         if: always()

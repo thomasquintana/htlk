@@ -11,7 +11,7 @@ mod host;
 mod inspection;
 mod mcp;
 mod mcp_evidence;
-pub use mcp_evidence::McpEvidenceView;
+pub use mcp_evidence::{McpEvidenceKind, McpEvidencePayload, McpEvidenceView};
 mod mcp_samples;
 pub use mcp_samples::{McpInferenceSelection, ProtectedInferenceRevision};
 mod recovery;
