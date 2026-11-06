@@ -14,7 +14,7 @@ use htlk_executable::{
 use std::{fmt, path::Path, time::Duration};
 use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
@@ -22,6 +22,7 @@ const ARTIFACT_SCHEMA: &str = include_str!("store_artifacts.sql");
 const RUN_SCHEMA: &str = include_str!("store_runs.sql");
 const LATE_SCHEMA: &str = include_str!("store_late.sql");
 const MCP_SCHEMA: &str = include_str!("store_mcp.sql");
+const MCP_URL_SCHEMA: &str = include_str!("store_mcp_url.sql");
 const MCP_SUBSCRIPTIONS_SCHEMA: &str = include_str!("store_mcp_subscriptions.sql");
 #[path = "store_mcp.rs"]
 mod mcp;
@@ -135,6 +136,7 @@ impl SqliteStore {
                     tx.execute_batch(RUN_SCHEMA)?;
                     tx.execute_batch(LATE_SCHEMA)?;
                     tx.execute_batch(MCP_SCHEMA)?;
+                    tx.execute_batch(MCP_URL_SCHEMA)?;
                     tx.execute_batch(MCP_SUBSCRIPTIONS_SCHEMA)?;
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;

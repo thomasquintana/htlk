@@ -26,6 +26,7 @@ mod interactions;
 mod protocol;
 mod services;
 mod subscriptions;
+mod url_interactions;
 mod workers;
 pub use interactions::{
     McpAwaitReply, McpClientAction, McpClientAuthorization, McpClientAuthorizer,
@@ -41,6 +42,10 @@ pub use services::{
     McpServiceLimits,
 };
 pub use subscriptions::{McpSubscriptionConsumer, McpSubscriptionHost, McpSubscriptionReport};
+pub use url_interactions::{
+    McpStoredUrlInteraction, McpStoredUrlRequiredError, McpUrlAddress, McpUrlCompletion,
+    McpUrlConsent, McpUrlPage, McpUrlRequest, McpUrlRequiredError, validate_url_completion,
+};
 
 /// Observable reason a session stopped receiving. This remains inspectable even
 /// when the application event queue is full or its consumer is stalled.

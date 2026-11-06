@@ -110,7 +110,7 @@ pub struct McpInteractionView {
 pub struct McpInteractionReceipt {
     /// Exact addressed interaction.
     pub interaction_id: Digest,
-    /// Immutable full reply identity.
+    /// Immutable saved reply or error-originated URL consent identity.
     pub reply_digest: Digest,
 }
 
@@ -155,6 +155,309 @@ impl McpInteractionHost {
             authorizer,
             limits,
         })
+    }
+    /// Lists authorized URL lifecycle addresses for event-driven or polling hosts.
+    /// No URL or remote completion ID is disclosed by this page.
+    ///
+    /// # Errors
+    /// Returns invalid paging bounds, denial, corruption, or storage failure.
+    pub async fn list_urls(
+        &self,
+        actor: &HostContext,
+        owner: &McpOwner,
+        after: Option<Digest>,
+        maximum: usize,
+    ) -> Result<McpUrlPage, RuntimeFailure> {
+        self.authorizer.authorize(
+            actor,
+            McpClientAuthorization {
+                origin: None,
+                action: McpClientAction::List,
+                owner,
+                server: None,
+                interaction_id: None,
+                request_digest: None,
+                labels: &SecurityLabels::default(),
+                request: None,
+                response: None,
+            },
+        )?;
+        let addresses = self
+            .persistence
+            .store
+            .mcp_url_addresses(owner, after, maximum)
+            .await
+            .map_err(|e| fail(e.code()))?;
+        let next = (addresses.len() == maximum)
+            .then(|| addresses.last().map(|a| a.0))
+            .flatten();
+        let mut interactions = Vec::new();
+        for (interaction_id, server, session) in addresses {
+            let address = McpUrlAddress {
+                interaction_id,
+                server,
+                session,
+            };
+            match self.inspect_url(actor, owner, address).await {
+                Ok(_) => interactions.push(address),
+                Err(error) if error.code() == FailureCode::Policy => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(McpUrlPage { interactions, next })
+    }
+    /// Inspects the full protected URL and exact server/session identity before
+    /// consent. Expiry, disconnect, human consent and server completion remain
+    /// independently observable; this operation performs no navigation or retry.
+    ///
+    /// # Errors
+    /// Returns denial, cross-scope/missing identity, bounds, corruption or storage failure.
+    pub async fn inspect_url(
+        &self,
+        actor: &HostContext,
+        owner: &McpOwner,
+        address: McpUrlAddress,
+    ) -> Result<McpStoredUrlInteraction, RuntimeFailure> {
+        let record = self.url_record(owner, address).await?;
+        self.authorize_url(actor, owner, &record, McpClientAction::Inspect, None)?;
+        if record.request.params().as_bytes().len() > self.limits.max_document_bytes {
+            return Err(fail(FailureCode::Input));
+        }
+        Ok(record)
+    }
+    /// Submits an addressed URL consent decision using the inspected parameter
+    /// digest. Callback replies use the existing callback ledger; requirements
+    /// from an RPC error save only local consent, without sending a fabricated RPC
+    /// reply or reissuing the original operation. `cancel` is an explicit dismissal.
+    ///
+    /// # Errors
+    /// Returns denial, invalid content/action, stale authority, expiry or key conflict.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn respond_url(
+        &self,
+        actor: &HostContext,
+        owner: &McpOwner,
+        address: McpUrlAddress,
+        request_digest: Digest,
+        result: JsonDocument,
+        idempotency_key: &str,
+    ) -> Result<McpInteractionReceipt, RuntimeFailure> {
+        let record = self.url_record(owner, address).await?;
+        if record.request.params().digest() != request_digest {
+            return Err(fail(FailureCode::Digest));
+        }
+        if self
+            .config
+            .handler(McpClientService::ElicitationUrl)
+            .is_none()
+        {
+            return Err(fail(FailureCode::Policy));
+        }
+        McpUrlConsent::from_result(&result).map_err(|_| fail(FailureCode::Input))?;
+        self.authorize_url(actor, owner, &record, McpClientAction::Reply, Some(&result))?;
+        let reply_digest = if let Some(callback) = record.callback_id {
+            let callback_record = self.record(owner, callback).await?;
+            self.respond(
+                actor,
+                owner,
+                callback,
+                callback_record.request_digest,
+                result,
+                idempotency_key,
+            )
+            .await?
+            .reply_digest
+        } else {
+            let labels = self.authorizer.result_labels(actor, owner, &result)?;
+            self.persistence
+                .store
+                .submit_mcp_url_consent(
+                    owner,
+                    address.server,
+                    address.session,
+                    address.interaction_id,
+                    request_digest,
+                    actor,
+                    idempotency_key,
+                    result,
+                    labels,
+                    self.persistence.clock.now_ms()?,
+                )
+                .await
+                .map_err(|e| fail(e.code()))?
+        };
+        Ok(McpInteractionReceipt {
+            interaction_id: address.interaction_id,
+            reply_digest,
+        })
+    }
+    /// Inspects exact original URL-required error evidence. Later consent/completion
+    /// cannot rewrite the error, grant retry authority or modify delivery facts.
+    ///
+    /// # Errors
+    /// Returns denial, missing/cross-scope evidence, bounds, corruption or storage failure.
+    pub async fn inspect_url_required_error(
+        &self,
+        actor: &HostContext,
+        owner: &McpOwner,
+        server: Digest,
+        session: Digest,
+        request_id: McpRequestId,
+    ) -> Result<McpStoredUrlRequiredError, RuntimeFailure> {
+        let record = self
+            .persistence
+            .store
+            .mcp_url_required_error(owner, server, session, request_id)
+            .await
+            .map_err(|e| fail(e.code()))?;
+        self.authorizer.authorize(
+            actor,
+            McpClientAuthorization {
+                origin: record.origin.as_ref(),
+                action: McpClientAction::Inspect,
+                owner,
+                server: Some(server),
+                interaction_id: None,
+                request_digest: Some(record.error.document().digest()),
+                labels: &record.labels,
+                request: None,
+                response: Some(record.error.document()),
+            },
+        )?;
+        if record.error.as_bytes().len() > self.limits.max_document_bytes {
+            return Err(fail(FailureCode::Input));
+        }
+        Ok(record)
+    }
+    async fn url_record(
+        &self,
+        owner: &McpOwner,
+        address: McpUrlAddress,
+    ) -> Result<McpStoredUrlInteraction, RuntimeFailure> {
+        self.persistence
+            .store
+            .mcp_url_interaction(
+                owner,
+                address.server,
+                address.session,
+                address.interaction_id,
+            )
+            .await
+            .map_err(|e| fail(e.code()))
+    }
+    fn authorize_url(
+        &self,
+        actor: &HostContext,
+        owner: &McpOwner,
+        record: &McpStoredUrlInteraction,
+        action: McpClientAction,
+        response: Option<&JsonDocument>,
+    ) -> Result<(), RuntimeFailure> {
+        self.authorizer.authorize(
+            actor,
+            McpClientAuthorization {
+                origin: record.origin.as_ref(),
+                action,
+                owner,
+                server: Some(record.server),
+                interaction_id: Some(record.id),
+                request_digest: Some(record.request.params().digest()),
+                labels: &record.labels,
+                request: None,
+                response,
+            },
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn receive_url_required(
+        &self,
+        owner: &McpOwner,
+        server: Digest,
+        session: Digest,
+        request_id: McpRequestId,
+        error: &McpRpcError,
+        context: Option<&crate::mcp::McpAttemptContext>,
+    ) -> Result<Vec<Digest>, RuntimeFailure> {
+        if self
+            .config
+            .handler(McpClientService::ElicitationUrl)
+            .is_none()
+        {
+            return Err(fail(FailureCode::Policy));
+        }
+        let required = McpUrlRequiredError::parse(
+            error,
+            self.config.limits.requests_per_session,
+            &self.limits,
+        )?
+        .ok_or_else(|| fail(FailureCode::McpProtocol))?;
+        let base = context.map_or_else(SecurityLabels::default, |context| context.labels.clone());
+        let mut labels = self
+            .authorizer
+            .request_labels(owner, server, error.document())?
+            .union(&base, &self.limits)
+            .map_err(|_| fail(FailureCode::Profile))?;
+        let origin = context.map(|context| context.origin.clone());
+        self.authorizer.authorize(
+            owner.host(),
+            McpClientAuthorization {
+                origin: origin.as_ref(),
+                action: McpClientAction::Dispatch,
+                owner,
+                server: Some(server),
+                interaction_id: None,
+                request_digest: Some(error.document().digest()),
+                labels: &labels,
+                request: Some(error.document()),
+                response: None,
+            },
+        )?;
+        for request in required.interactions() {
+            labels = labels
+                .union(
+                    &self
+                        .authorizer
+                        .request_labels(owner, server, request.params())?,
+                    &self.limits,
+                )
+                .map_err(|_| fail(FailureCode::Profile))?;
+        }
+        for request in required.interactions() {
+            self.authorizer.authorize(
+                owner.host(),
+                McpClientAuthorization {
+                    origin: origin.as_ref(),
+                    action: McpClientAction::Dispatch,
+                    owner,
+                    server: Some(server),
+                    interaction_id: None,
+                    request_digest: Some(request.params().digest()),
+                    labels: &labels,
+                    request: Some(request.params()),
+                    response: None,
+                },
+            )?;
+        }
+        let now = self.persistence.clock.now_ms()?;
+        let deadline = now
+            .checked_add(self.config.limits.timeout_ms as i64)
+            .ok_or_else(|| fail(FailureCode::Profile))?;
+        self.persistence
+            .store
+            .record_mcp_url_required_error(
+                owner,
+                server,
+                session,
+                request_id,
+                error.clone(),
+                origin,
+                labels,
+                context.map_or(deadline, |context| deadline.min(context.deadline_ms)),
+                now,
+                self.config.limits.requests_per_session,
+            )
+            .await
+            .map_err(|e| fail(e.code()))
     }
     /// Enumerates durable interactions for a headless/polling frontend, using the
     /// same identity and authorization contract as live interaction events.

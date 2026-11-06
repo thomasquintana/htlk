@@ -50,7 +50,10 @@ impl Wire {
                 .pending
                 .lock()
                 .map_err(|_| fail(FailureCode::Invariant))?;
-            if origin_id.is_none() && pending.len() == 1 {
+            if origin_id.is_none()
+                && matches!(self.transport, Transport::Stdio { .. })
+                && pending.len() == 1
+            {
                 origin_id = pending.keys().next().cloned();
                 attribution = McpAttribution::SerializedOperation;
             }
@@ -181,6 +184,29 @@ impl Wire {
                 context.deadline_ms,
             )
             .await?;
+        let url_id = if kind == McpIncomingKind::Url {
+            let persistence = self
+                .config
+                .persistence
+                .as_ref()
+                .ok_or_else(|| fail(FailureCode::Profile))?;
+            Some(
+                persistence
+                    .store
+                    .track_mcp_url_callback(
+                        &self.owner,
+                        server,
+                        session.id,
+                        record.id,
+                        persistence.clock.now_ms()?,
+                        self.config.limits.requests_per_session,
+                    )
+                    .await
+                    .map_err(|e| fail(e.code()))?,
+            )
+        } else {
+            None
+        };
         context.labels = record.labels.clone();
         context.deadline_ms = record.deadline_ms;
         context.origin = record.origin.clone();
@@ -213,7 +239,7 @@ impl Wire {
         if context.cancellation.is_cancelled() {
             return Err(fail(FailureCode::Cancelled));
         }
-        self.interaction_event(&record, kind)?;
+        self.interaction_event(&record, kind, url_id)?;
         let service = match kind {
             McpIncomingKind::Sampling => {
                 let params = as_map(get(as_map(request.value())?, "params")?)?;
@@ -260,30 +286,43 @@ impl Wire {
         &self,
         record: &McpStoredInteraction,
         kind: McpIncomingKind,
+        url_id: Option<Digest>,
     ) -> Result<(), RuntimeFailure> {
         if self.config.events.is_none() {
             return Ok(());
         }
+        let mut fields = vec![
+            ("interaction_id", Value::Text(record.id.to_string())),
+            (
+                "request_digest",
+                Value::Text(record.request_digest.to_string()),
+            ),
+            (
+                "kind",
+                Value::Text(
+                    match kind {
+                        McpIncomingKind::Sampling => "sampling",
+                        McpIncomingKind::Form => "form",
+                        McpIncomingKind::Url => "url",
+                        McpIncomingKind::Roots => "roots",
+                    }
+                    .into(),
+                ),
+            ),
+        ];
+        if let Some(id) = url_id {
+            fields.push(("url_interaction_id", Value::Text(id.to_string())));
+        }
         let params = JsonDocument::from_value(
-            &obj([
-                ("interaction_id", Value::Text(record.id.to_string())),
-                (
-                    "request_digest",
-                    Value::Text(record.request_digest.to_string()),
-                ),
-                (
-                    "kind",
-                    Value::Text(
-                        match kind {
-                            McpIncomingKind::Sampling => "sampling",
-                            McpIncomingKind::Form => "form",
-                            McpIncomingKind::Url => "url",
-                            McpIncomingKind::Roots => "roots",
-                        }
-                        .into(),
-                    ),
-                ),
-            ])?,
+            &Value::Map(
+                Map::try_from_entries(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| (key.into(), value))
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|_| fail(FailureCode::McpProtocol))?,
+            ),
             &self.limits,
         )
         .map_err(|_| fail(FailureCode::McpProtocol))?;

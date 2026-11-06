@@ -16,6 +16,9 @@ use wire::Wire;
 /// Correlated protocol result or protected protocol error, separate from local I/O
 /// failure and conservative delivery evidence.
 pub struct McpClientReply {
+    /// Exact correlated outgoing RPC identity, available for addressed error
+    /// evidence inspection. Absent when no correlated response was admitted.
+    pub request_id: Option<McpRequestId>,
     /// Whether sending/completion was actually observed.
     pub delivery: McpDelivery,
     /// Local transport/validation failure or complete correlated result/error.
@@ -23,6 +26,9 @@ pub struct McpClientReply {
     /// Exact result-object bytes before JSON normalization; protocol errors retain
     /// their own original bytes in `McpRpcError`. Absent for local failures.
     pub raw_result: Option<Vec<u8>>,
+    /// Independent URL-required admission outcome. A failure here never replaces
+    /// the original correlated RPC error or changes its delivery classification.
+    pub url_interactions: Option<Result<Vec<Digest>, RuntimeFailure>>,
     // Holds response capacity until the caller consumes or drops this reply.
     _reservation: Option<tokio::sync::OwnedSemaphorePermit>,
 }
@@ -40,17 +46,21 @@ impl McpClientReply {
     }
     fn error(delivery: McpDelivery, error: RuntimeFailure) -> Self {
         Self {
+            request_id: None,
             delivery,
             result: Err(error),
             raw_result: None,
+            url_interactions: None,
             _reservation: None,
         }
     }
     fn correlated(result: Result<JsonDocument, McpRpcError>, raw_result: Option<Vec<u8>>) -> Self {
         Self {
+            request_id: None,
             delivery: McpDelivery::ResponseReceived,
             result: Ok(result),
             raw_result,
+            url_interactions: None,
             _reservation: None,
         }
     }

@@ -69,6 +69,7 @@ pub fn native_profile(
         include_bytes!("mcp/client/services.rs"),
         include_bytes!("mcp/client/subscriptions.rs"),
         include_bytes!("mcp/client/interactions.rs"),
+        include_bytes!("mcp/client/url_interactions.rs"),
         include_bytes!("mcp/client/workers.rs"),
         include_bytes!("mcp/client/session.rs"),
         include_bytes!("mcp/client/session/wire.rs"),
@@ -99,6 +100,9 @@ pub fn native_profile(
         include_bytes!("store_mcp.sql"),
         include_bytes!("store_mcp_subscriptions.rs"),
         include_bytes!("store_mcp_subscriptions.sql"),
+        include_bytes!("store_mcp_url.rs"),
+        include_bytes!("store_mcp_url_state.rs"),
+        include_bytes!("store_mcp_url.sql"),
     ]);
     let regex = EngineIdentity::new(
         "htlk.native-regex".into(),

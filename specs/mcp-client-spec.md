@@ -165,6 +165,33 @@ and archival. Event overflow and connection gaps are observable.
   transit the client. Connection credentials are applied on every relevant HTTP
   request and excluded from ordinary evidence and executable meaning.
 
+## Native URL elicitation lifecycle
+
+The native client MUST bind completion identities to the authenticated owner,
+compound server and durable session epoch. Admitted callback URL identities MUST
+be registered before exposing their event or dispatching the handler. Callback
+consent MUST derive from the saved callback reply; acceptance MUST NOT establish
+external completion. Known completion notifications record only the first server
+observation. Unknown and already-completed IDs MUST be ignored without forwarding
+their raw parameters or inspecting unrelated protected URL values.
+
+For error `-32042`, the native client MUST validate every entry of the required URL
+list before atomically retaining its original error bytes and registering its
+addressed requirements. Registration MUST precede processing later frames on the
+same stream. Complete trailing SSE frames already received in the response chunk
+MUST be processed even when they follow the correlated response. Host events MUST
+carry opaque local identities rather than the URL, remote elicitation ID or metadata.
+
+URL admission failure MUST be exposed separately from the original correlated RPC
+error and delivery classification. It MUST NOT replace that error with a local
+success/failure outcome, mutate the original attempt, or retry the operation.
+Inspection and consent submission MUST check current purpose-specific grants and
+unioned protection. Run attribution MUST use the exact pending operation context
+and independently checked persisted attempt; it MUST NOT guess an origin from
+unrelated concurrent work. URL consent carries no in-band content. The host owns
+secure presentation/navigation and separately authorized manual continuation.
+Expiry/closure remain inspectable, and historical receipts grant no new delivery.
+
 ## Native HTTP authorization profile
 
 The optional native OAuth profile supports pre-registered clients using `none`,

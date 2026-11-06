@@ -8,6 +8,13 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Durable MCP URL elicitation now connects callback consent, URL-required errors,
+  and scoped completion notifications to authenticated host inspection/reply APIs.
+  Unknown/duplicate completions are ignored; addressed events contain opaque IDs.
+  Original RPC errors and delivery remain intact when URL admission fails, and
+  neither consent nor completion fetches a URL or retries work. Streamable HTTP
+  drains complete trailing SSE frames in the received response chunk. Private
+  SQLite schema 12 deliberately rejects earlier stores.
 - Native MCP HTTP credential providers bind exact server/resource/principal and run
   on every POST, GET/resumption and DELETE. Bounded OAuth/OIDC discovery, PKCE S256,
   pre-registration, resource indicators, refresh rotation and scope challenges are

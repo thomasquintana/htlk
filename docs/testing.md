@@ -227,6 +227,21 @@ static headers before send, retain structured acquisition/challenge concerns, an
 prove that authentication and SSE resumption never automatically replay an
 effectful POST. The test imports the exported production API directly.
 
+## URL elicitation qualification
+
+The focused URL elicitation campaigns are:
+
+```console
+cargo test -p htlk-runtime --test mcp_url_interactions --test mcp_url_live --test mcp_callbacks
+```
+
+They cover independent SQLite connections/reopen, owner/epoch fencing, competing
+responders, callback-response/completion races, atomic URL-required lists, and exact
+original error retention. The independent Node peer exercises stdio, HTTP JSON with
+idle GET SSE, and coalesced POST SSE frames. Interactive and polling frontends use
+the same authenticated APIs. Peer counters verify zero URL/metadata fetches and
+zero automatic retries; events disclose opaque local identities only.
+
 ## Native identity and fixtures
 
 Native implementation identities hash explicit source contributions, package-owned

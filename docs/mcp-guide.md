@@ -244,6 +244,47 @@ does not establish external completion. Applications present the requesting serv
 and full URL, obtain consent, and perform secure navigation themselves. The native
 client never fetches the URL or its metadata as part of elicitation.
 
+#### Durable URL consent and completion
+
+Install `ElicitationUrl` with bound persistence and authorization for URL lifecycle
+tracking. The callback event adds `url_interaction_id` to its usual callback identity.
+`McpInteractionHost::list_urls` supplies the same `McpUrlAddress` values to polling
+hosts. Call `inspect_url` to authorize and inspect the full URL, server/session
+identity, request digest, protection, consent, deadline, session closure and optional
+server completion timestamp. Submit `respond_url` with that parameter digest and an
+idempotency key. Callback-originated responses still use the existing callback
+ledger; error-originated consent saves a local receipt without fabricating a reply
+to the original outgoing request. Decline and cancel are valid decisions too.
+
+A correlated `-32042` error atomically registers its validated URL requirements before
+the next frame on that stream is processed. `McpClientReply::url_interactions` reports
+the addressed identities or an independent redacted registration failure. The
+original `result`, error bytes and delivery classification remain unchanged. An
+`htlk/url_interaction` event announces each requirement; use
+`inspect_url_required_error` with `McpClientReply::request_id` to inspect its
+exact protected error evidence. Request IDs preserve integer/string distinction.
+
+Known `notifications/elicitation/complete` IDs are scoped to the authenticated owner,
+compound server and durable transport epoch. The first observation persists and
+emits `htlk/url_completed`; unknown and already-completed IDs are ignored. Both local
+URL events carry only `interaction_id`, with server/session context on the event
+envelope. Raw completion parameters, URLs and metadata are not forwarded. HTTP
+processes complete trailing SSE frames already received in the response chunk,
+including completion frames following the correlated error.
+
+`htlk/url_registration_failed` carries the outgoing `request_id` and a redacted
+failure `code`; the reply's separate registration field remains available when an
+event cannot be delivered. Storage interruption may leave admission uncertain, so
+inspect/list retained identities rather than blindly creating another interaction.
+Receipt lookup remains available under current host grants and ownership after
+deadline/session closure; it grants no new delivery. `expired(now_ms)` and
+`session_closed` let frontends present missing-notification and disconnect states.
+Manual continuation uses a separately authorized ordinary operation, with the normal
+replay and budget rules. Neither consent nor completion automatically dispatches it.
+Third-party user input stays outside HTLK; MCP-server connection authorization is
+the separate mechanism described above. The [live URL campaigns](../crates/htlk-runtime/tests/mcp_url_live.rs)
+exercise interactive and headless consumers over stdio and both HTTP response forms.
+
 Streamable HTTP supports optional idle GET SSE, incremental bounded framing, and
 GET resumption using the failed stream's event cursor. Resumption never repeats
 the original operation POST. A GET 405 reports lack of idle-stream support while

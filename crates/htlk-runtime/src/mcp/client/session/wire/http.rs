@@ -427,16 +427,19 @@ impl Http {
                     if let Some(event_id) = event.id {
                         *cursor = Some(event_id);
                     }
-                    if let Some(id) = id
-                        && !wire
-                            .pending
-                            .lock()
-                            .map_err(|_| fail(FailureCode::Invariant))?
-                            .contains_key(id)
-                    {
-                        return Ok(());
-                    }
                 }
+            }
+            // Drain every complete frame already received in this chunk, including
+            // completion notifications following a correlated response. The caller
+            // retains this exchange until this bounded chunk has been admitted.
+            if let Some(id) = id
+                && !wire
+                    .pending
+                    .lock()
+                    .map_err(|_| fail(FailureCode::Invariant))?
+                    .contains_key(id)
+            {
+                return Ok(());
             }
         }
         decoder.finish()

@@ -31,6 +31,24 @@ struct PendingRequest {
 type Pending = BTreeMap<McpRequestId, PendingRequest>;
 type QueuedEvent = (String, JsonDocument, tokio::sync::OwnedSemaphorePermit);
 
+// Once a correlated outcome is admitted, cancellation of independent URL storage
+// must not downgrade it to a transport failure or discard its protected bytes.
+struct ObservedReply {
+    sender: Option<oneshot::Sender<McpClientReply>>,
+    reply: Option<McpClientReply>,
+    registering_urls: bool,
+}
+impl Drop for ObservedReply {
+    fn drop(&mut self) {
+        if let (Some(sender), Some(mut reply)) = (self.sender.take(), self.reply.take()) {
+            if self.registering_urls && reply.url_interactions.is_none() {
+                reply.url_interactions = Some(Err(fail(FailureCode::Cancelled)));
+            }
+            let _ = sender.send(reply);
+        }
+    }
+}
+
 pub(super) struct Wire {
     pub owner: McpOwner,
     pub server: ServerIdentity,
@@ -374,6 +392,7 @@ impl Wire {
                 },
             );
         }
+        let mut observed = None;
         let result = tokio::time::timeout_at(deadline, async {
             let exchange = async {
                 match &self.transport {
@@ -387,8 +406,27 @@ impl Wire {
                 loop {
                     tokio::select! {
                         biased;
-                        result = &mut receive => return result.map_err(|_| fail(FailureCode::McpTransport)),
-                        result = exchange.as_mut(), if !sent => { result?; sent = true; },
+                        result = &mut receive, if observed.is_none() => {
+                            observed = Some(result.map_err(|_| fail(FailureCode::McpTransport))?);
+                            if sent { return Ok(observed.take().expect("observed reply")); }
+                        },
+                        result = exchange.as_mut(), if !sent => {
+                            sent = true;
+                            if let Err(error) = result {
+                                if let Some(reply) = observed.take() {
+                                    self.end(if error.code() == FailureCode::McpProtocol { McpSessionEnd::Protocol } else { McpSessionEnd::Transport });
+                                    return Ok(reply);
+                                }
+                                // A reply sent by the exchange immediately before a
+                                // trailing-frame error is still an observed outcome.
+                                if let Ok(reply) = receive.try_recv() {
+                                    self.end(McpSessionEnd::Protocol);
+                                    return Ok(reply);
+                                }
+                                return Err(error);
+                            }
+                            if let Some(reply) = observed.take() { return Ok(reply); }
+                        },
                     }
                 }
             };
@@ -425,14 +463,24 @@ impl Wire {
         }
         match result {
             Ok(reply) => reply,
-            Err(error) => McpClientReply::error(
-                if sent_state.load(Ordering::Acquire) {
-                    McpDelivery::PossiblySent
-                } else {
-                    McpDelivery::NotSent
-                },
-                error,
-            ),
+            Err(error) => {
+                if let Some(reply) = observed.take().or_else(|| receive.try_recv().ok()) {
+                    self.end(if error.code() == FailureCode::Cancelled {
+                        McpSessionEnd::Cancelled
+                    } else {
+                        McpSessionEnd::Transport
+                    });
+                    return reply;
+                }
+                McpClientReply::error(
+                    if sent_state.load(Ordering::Acquire) {
+                        McpDelivery::PossiblySent
+                    } else {
+                        McpDelivery::NotSent
+                    },
+                    error,
+                )
+            }
         }
     }
 
@@ -617,6 +665,44 @@ impl Wire {
                 ])?)
                 .await?;
             } else {
+                if method == "notifications/elicitation/complete" {
+                    let elicitation = validate_url_completion(&document)?;
+                    if self
+                        .config
+                        .handler(McpClientService::ElicitationUrl)
+                        .is_none()
+                    {
+                        return Ok(());
+                    }
+                    let persistence = self
+                        .config
+                        .persistence
+                        .as_ref()
+                        .ok_or_else(|| fail(FailureCode::Profile))?;
+                    let session = self
+                        .stored_session
+                        .as_ref()
+                        .ok_or_else(|| fail(FailureCode::Profile))?;
+                    let server = self
+                        .server
+                        .digest(&self.limits)
+                        .map_err(|_| fail(FailureCode::McpIdentity))?;
+                    let completion = persistence
+                        .store
+                        .complete_mcp_url_interaction(
+                            &self.owner,
+                            server,
+                            session.id,
+                            elicitation,
+                            persistence.clock.now_ms()?,
+                        )
+                        .await
+                        .map_err(|e| fail(e.code()))?;
+                    if let McpUrlCompletion::Recorded { interaction_id } = completion {
+                        self.url_event("htlk/url_completed", interaction_id)?;
+                    }
+                    return Ok(());
+                }
                 let params = fields.get("params").cloned().unwrap_or(obj([])?);
                 if !matches!(params, Value::Map(_)) {
                     return Err(fail(FailureCode::McpProtocol));
@@ -655,24 +741,25 @@ impl Wire {
                         && matches!(error.get("message"), Some(Value::Text(_))) => {}
                 _ => return Err(fail(FailureCode::McpProtocol)),
             }
-            let pending = self
-                .pending
-                .lock()
-                .map_err(|_| fail(FailureCode::Invariant))?;
-            if let Some(request) = pending.get(&id) {
-                JsonDocument::new(bytes, &request.limits)
-                    .map_err(|_| fail(FailureCode::McpProtocol))?;
-                if !request.sent.load(Ordering::Acquire) {
-                    return Err(fail(FailureCode::McpProtocol));
-                }
-            } else if !matches!(&id, McpRequestId::Integer(id) if *id > 0 && (*id as u64) < self.next.load(Ordering::Relaxed))
             {
-                return Err(fail(FailureCode::McpProtocol));
-            } else {
-                // No waiting request can consume this late/duplicate payload.
-                return Ok(());
+                let pending = self
+                    .pending
+                    .lock()
+                    .map_err(|_| fail(FailureCode::Invariant))?;
+                if let Some(request) = pending.get(&id) {
+                    JsonDocument::new(bytes, &request.limits)
+                        .map_err(|_| fail(FailureCode::McpProtocol))?;
+                    if !request.sent.load(Ordering::Acquire) {
+                        return Err(fail(FailureCode::McpProtocol));
+                    }
+                } else if !matches!(&id, McpRequestId::Integer(id) if *id > 0 && (*id as u64) < self.next.load(Ordering::Relaxed))
+                {
+                    return Err(fail(FailureCode::McpProtocol));
+                } else {
+                    // No waiting request can consume this late/duplicate payload.
+                    return Ok(());
+                }
             }
-            drop(pending);
             let (result, raw_result) = if fields.get("result").is_some() {
                 let raw = payload::member(bytes, "result", &self.limits)?;
                 (
@@ -689,19 +776,91 @@ impl Wire {
                     None,
                 )
             };
-            if let Some(request) = self
+            let request = self
                 .pending
                 .lock()
                 .map_err(|_| fail(FailureCode::Invariant))?
-                .remove(&id)
-            {
-                let _ = request
-                    .reply
-                    .send(McpClientReply::correlated(result, raw_result));
+                .remove(&id);
+            if let Some(request) = request {
+                let mut observed = ObservedReply {
+                    sender: Some(request.reply),
+                    reply: Some(McpClientReply::correlated(result, raw_result)),
+                    registering_urls: false,
+                };
+                let reply = observed.reply.as_mut().expect("observed reply");
+                reply.request_id = Some(id.clone());
+                if let Ok(Err(error)) = &reply.result
+                    && error.code() == -32042
+                    && self.initialization.get().is_some()
+                {
+                    observed.registering_urls = true;
+                    let registration = async {
+                        let session = self
+                            .stored_session
+                            .as_ref()
+                            .ok_or_else(|| fail(FailureCode::Profile))?;
+                        let server = self
+                            .server
+                            .digest(&self.limits)
+                            .map_err(|_| fail(FailureCode::McpIdentity))?;
+                        let host = McpInteractionHost::new((*self.config).clone())?;
+                        let ids = host
+                            .receive_url_required(
+                                &self.owner,
+                                server,
+                                session.id,
+                                id.clone(),
+                                error,
+                                request.context.as_ref(),
+                            )
+                            .await?;
+                        for id in &ids {
+                            self.url_event("htlk/url_interaction", *id)?;
+                        }
+                        Ok(ids)
+                    };
+                    let registered = tokio::time::timeout_at(request.deadline, registration)
+                        .await
+                        .unwrap_or_else(|_| Err(fail(FailureCode::Timeout)));
+                    if let Err(error) = &registered {
+                        // Correlated error/delivery remain intact even when policy,
+                        // validation, storage or event admission independently fails.
+                        let _ = self.local_event(
+                            "htlk/url_registration_failed",
+                            obj([
+                                ("request_id", id.to_value()),
+                                ("code", Value::Text(error.code().as_str().into())),
+                            ])?,
+                        );
+                    }
+                    reply.url_interactions = Some(registered);
+                }
+                drop(observed);
             }
             // A late response cannot resurrect a timed-out pending request.
         }
         Ok(())
+    }
+
+    fn url_event(&self, method: &str, id: Digest) -> Result<(), RuntimeFailure> {
+        self.local_event(
+            method,
+            obj([("interaction_id", Value::Text(id.to_string()))])?,
+        )
+    }
+    fn local_event(&self, method: &str, params: Value) -> Result<(), RuntimeFailure> {
+        if self.config.events.is_none() {
+            return Ok(());
+        }
+        let params = JsonDocument::from_value(&params, &self.limits)
+            .map_err(|_| fail(FailureCode::McpProtocol))?;
+        let reservation = self.reserve(params.as_bytes().len())?;
+        self.events
+            .try_send((method.into(), params, reservation))
+            .map_err(|_| {
+                self.end(McpSessionEnd::EventOverflow);
+                fail(FailureCode::Budget)
+            })
     }
 
     async fn deliver_events(&self, mut receiver: mpsc::Receiver<QueuedEvent>) {

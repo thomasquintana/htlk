@@ -12,6 +12,8 @@ use tokio_rusqlite::rusqlite::Connection as Db;
 mod run;
 #[path = "store_mcp_subscriptions.rs"]
 mod subscriptions;
+#[path = "store_mcp_url.rs"]
+mod url_interactions;
 pub use subscriptions::{
     McpStoredSubscription, McpSubscriptionAction, McpSubscriptionClaim, McpSubscriptionIntent,
     McpSubscriptionLimits, McpSubscriptionOperation, McpSubscriptionOutcome, McpSubscriptionState,
