@@ -47,6 +47,12 @@ Ownership generation checks apply transactionally, independently of local actors
 Transport handles are process-local. Durable records are not proof that a remote
 session or stateful handle survived a process restart.
 
+Retiring a host transport or ending a run's original lifetime MUST release its live
+session-registry capacity. A broken active-run session remains sticky until that
+lifetime ends. The native client's bounded `owner_identities` inventory retains
+highest-generation fences for its entire lifetime; it MUST refuse new owner identities
+at capacity rather than evict a fence and permit a stale-generation open.
+
 ## Dispatch and attribution
 
 Reception continues during idle periods and while a handler awaits. Transport
@@ -124,6 +130,11 @@ Recording or acknowledging a JSON-RPC timeout error does not establish that a mo
 operation ended. Its unresolved reservation remains charged until explicit trusted
 completion/no-start reconciliation. Reconciliation cannot replace the callback reply
 already recorded or sent. Known pre-dispatch refusals spend no host-work call.
+Work recovery MUST resolve the exact selected settlement evidence, including its
+usage and unioned protection, rather than interpreting an immutable old timeout reply
+as the recovered model outcome. Work inspection MUST authorize the same consistent
+snapshot of evidence and protection that it returns. Run recovery validates history
+incrementally; the per-document codec ceiling is not a lifetime interaction-history quota.
 
 Protected evidence covers tools, prompts, resources, templates, interactions and
 structured protocol errors. Inspection checks current authority and unioned labels,
@@ -137,6 +148,14 @@ of that optional stream. Parsers retain bounded incomplete frames, not entire
 stream history. Resumption uses GET with the stream's Last-Event-ID, honors retry,
 and handles empty priming events. It never repeats an effectful POST as a substitute
 for stream resumption.
+
+The native POST SSE exchange ends after the matching JSON-RPC response and admission
+of complete frames already present in its current received chunk. It does not promise
+delivery of later-chunk post-result events or of a trailing event split across that
+boundary. MCP recommends server termination of that stream after the response; this
+profile does not extend its lifetime to provide ongoing event reception. Idle GET SSE
+and subsequent task result streams have their own independent lifetimes. Same-chunk
+trailing-frame qualification MUST NOT be presented as full post-result stream support.
 
 Session-expiry 404 invalidates old handles. New initialization produces a new epoch;
 it neither resumes old remote handles nor reissues the old operation. Subscription
@@ -224,6 +243,14 @@ before delivering that RPC response or processing later messages. Reusing that o
 server-scoped key MUST NOT send another creation, including after a lost response or
 transport-owner restart. Protected original acceptance, creation error and deferred
 result/error bytes MUST remain separate and integrity checked.
+
+A `tasks/result` RPC error MUST NOT itself establish the underlying task's outcome.
+The native profile admits an underlying JSON-RPC execution error only with an already
+observed failed/cancelled task status and matching related-task metadata. Otherwise it
+returns `McpTaskError::Retrieval`, preserving the RPC's bytes/delivery separately;
+graph execution retains original-operation uncertainty. Persisted retrieval-error
+observations have a separate owner-wide ceiling of 64 distinct payloads and one codec
+document's encoded bytes. They cannot occupy the immutable final-payload slot.
 
 Native graph task dispatch requires explicit `McpGraphTaskPolicy` plus the runtime's
 actual persistence/clock. Descriptor and policy selection MUST freeze before dispatch;

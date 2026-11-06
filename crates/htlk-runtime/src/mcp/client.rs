@@ -340,6 +340,10 @@ impl fmt::Debug for McpRpcError {
 /// validates these before allocating channels or starting processes.
 #[derive(Clone, Debug)]
 pub struct McpClientLimits {
+    /// Maximum distinct owner identities retained by one native client over its
+    /// lifetime. Highest-generation fences are never evicted: new identities fail
+    /// closed at this ceiling, while retired transports release session capacity.
+    pub owner_identities: usize,
     /// Pending outgoing requests.
     pub pending_requests: usize,
     /// Simultaneously admitted host callbacks.
@@ -373,6 +377,7 @@ pub struct McpClientLimits {
 impl Default for McpClientLimits {
     fn default() -> Self {
         Self {
+            owner_identities: 4096,
             pending_requests: 64,
             callbacks: 8,
             events: 128,
@@ -395,6 +400,7 @@ impl McpClientLimits {
     /// Returns a profile failure before any allocation or transport startup.
     pub fn validate(&self) -> Result<(), RuntimeFailure> {
         let counts = [
+            self.owner_identities,
             self.pending_requests,
             self.callbacks,
             self.events,
@@ -416,9 +422,14 @@ impl McpClientLimits {
             || self.retained_bytes > u32::MAX as usize
             || self.requests_per_session < self.pending_requests
             || self.callbacks > self.requests_per_session
-            || [self.pending_requests, self.callbacks, self.events]
-                .into_iter()
-                .any(|n| n > 65_536)
+            || [
+                self.owner_identities,
+                self.pending_requests,
+                self.callbacks,
+                self.events,
+            ]
+            .into_iter()
+            .any(|n| n > 65_536)
             || self.cancellation_grace_ms > self.timeout_ms
         {
             return Err(fail(FailureCode::Profile));

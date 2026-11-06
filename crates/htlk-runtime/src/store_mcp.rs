@@ -205,28 +205,38 @@ impl SqliteStore {
         &self,
         run_id: &RunId,
     ) -> Result<(), StoreError> {
-        let (run_id, limits) = (run_id.clone(), self.config.limits.clone());
+        let (run_id, limits, page_size) = (
+            run_id.clone(),
+            self.config.limits.clone(),
+            self.config.max_page_size,
+        );
         self.connection.call(move |db| -> Result<_, StoreError> {
-            let header = load_header(db, &run_id)?;
-            let scope: Vec<u8> = db.query_row("SELECT payload FROM records WHERE run_id=?1 AND family='scope' AND record_id=?2", params![run_id.as_str(), header.root_scope.to_string()], |row| row.get(0))?;
+            let tx = db.transaction()?;
+            let header = load_header(&tx, &run_id)?;
+            let scope: Vec<u8> = tx.query_row("SELECT payload FROM records WHERE run_id=?1 AND family='scope' AND record_id=?2", params![run_id.as_str(), header.root_scope.to_string()], |row| row.get(0))?;
             let scope = cbor::decode(&scope, &limits)?;
             let Value::Text(principal) = field(map(&scope)?, "principal")? else { return Err(StoreError::Corrupt) };
             let owner = McpOwner::new(HostContext::new(principal.clone(), &limits).map_err(|_| StoreError::Corrupt)?, McpOwnerScope::Run(run_id.clone()), header.fence, &limits).map_err(|_| StoreError::Corrupt)?;
-            let mut statement = db.prepare("SELECT interaction_id FROM mcp_interactions WHERE owner_key=?1 ORDER BY interaction_id")?;
-            let mut rows = statement.query([owner.key().to_string()])?;
-            let mut visited = 0usize;
-            let mut ids = std::collections::BTreeSet::new();
-            while let Some(row) = rows.next()? {
-                let id = row.get::<_, String>(0)?.parse().map_err(|_| StoreError::Corrupt)?;
-                let record = interaction(db, &owner, id, &limits)?.ok_or(StoreError::Corrupt)?;
-                visited = visited.checked_add(record.request.len() + record.reply.as_ref().map_or(0, Vec::len) + 512).ok_or(StoreError::Invalid)?;
-                if visited > limits.max_document_bytes { return Err(StoreError::Invalid); }
-                run::validate(db, &owner, &record, &limits)?;
-                ids.insert(format!("client:{id}"));
+            // Codec limits apply to each retained document, not lifetime history.
+            // Validate one record at a time in bounded identity pages, under one
+            // snapshot. No request/reply history or identity set accumulates here.
+            let mut after = String::new();
+            loop {
+                let mut statement = tx.prepare("SELECT interaction_id FROM mcp_interactions WHERE owner_key=?1 AND interaction_id>?2 ORDER BY interaction_id LIMIT ?3")?;
+                let mut rows = statement.query(params![owner.key().to_string(), after, page_size as i64])?;
+                let mut count = 0;
+                while let Some(row) = rows.next()? {
+                    after = row.get(0)?;
+                    let id = after.parse().map_err(|_| StoreError::Corrupt)?;
+                    let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Corrupt)?;
+                    run::validate(&tx, &owner, &record, &limits)?;
+                    count += 1;
+                }
+                if count < page_size { break; }
             }
-            let mut statement = db.prepare("SELECT record_id FROM records WHERE run_id=?1 AND family='reservation' AND record_id LIKE 'client:%'")?;
-            let mut rows = statement.query([run_id.as_str()])?;
-            while let Some(row) = rows.next()? { if !ids.contains(&row.get::<_, String>(0)?) { return Err(StoreError::Corrupt); } }
+            let orphan: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM records r WHERE r.run_id=?1 AND r.family='reservation' AND r.record_id LIKE 'client:%' AND NOT EXISTS(SELECT 1 FROM mcp_interactions i WHERE i.owner_key=?2 AND r.record_id='client:'||i.interaction_id))", params![run_id.as_str(), owner.key().to_string()], |row| row.get(0))?;
+            if orphan { return Err(StoreError::Corrupt); }
+            tx.commit()?;
             Ok(())
         }).await.map_err(StoreError::from_worker)
     }
@@ -871,16 +881,44 @@ impl SqliteStore {
         &self,
         owner: &McpOwner,
         id: Digest,
-    ) -> Result<Option<crate::mcp::client::McpHostWorkEvidence>, StoreError> {
+    ) -> Result<
+        (
+            McpStoredInteraction,
+            Option<crate::mcp::client::McpHostWorkEvidence>,
+        ),
+        StoreError,
+    > {
         let (owner, limits) = (owner.clone(), self.config.limits.clone());
         self.connection.call(move |db| -> Result<_, StoreError> {
-            interaction(db, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
-            let claim: Option<Vec<u8>> = db.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='host_operation_claim'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
-            let Some(claim) = claim else { return Ok(None); };
+            let tx = db.transaction()?;
+            let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            let claim: Option<Vec<u8>> = tx.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='host_operation_claim'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
+            let Some(claim) = claim else { return Ok((record, None)); };
             let Value::Array(claim) = cbor::decode(&claim, &limits)? else { return Err(StoreError::Corrupt); };
             let [Value::Text(id_text), descriptor] = claim.as_slice() else { return Err(StoreError::Corrupt); };
-            let outcome: Option<Vec<u8>> = db.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='native_operation_outcome'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
-            Ok(Some(crate::mcp::client::McpHostWorkEvidence { claim_id: id_text.parse().map_err(|_| StoreError::Corrupt)?, descriptor: descriptor.clone(), native_outcome: outcome.map(|bytes| cbor::decode(&bytes, &limits)).transpose()? }))
+            let outcome: Option<Vec<u8>> = tx.query_row("SELECT payload FROM mcp_events WHERE owner_key=?1 AND interaction_id=?2 AND kind='native_operation_outcome'", params![owner.key().to_string(), id.to_string()], |row| row.get(0)).optional()?;
+            let evidence = crate::mcp::client::McpHostWorkEvidence { claim_id: id_text.parse().map_err(|_| StoreError::Corrupt)?, descriptor: descriptor.clone(), native_outcome: outcome.map(|bytes| cbor::decode(&bytes, &limits)).transpose()? };
+            tx.commit()?;
+            Ok((record, Some(evidence)))
+        }).await.map_err(StoreError::from_worker)
+    }
+
+    pub(crate) async fn mcp_work_outcome(
+        &self,
+        owner: &McpOwner,
+        id: Digest,
+    ) -> Result<(McpStoredInteraction, Option<McpLateReply>), StoreError> {
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let tx = db.transaction()?;
+            let record = interaction(&tx, &owner, id, &limits)?.ok_or(StoreError::Missing)?;
+            let evidence = if let Some(digest) = record.settlement_digest {
+                let mut statement = tx.prepare("SELECT digest,reply,protection,raw_digest,work_delivery,usage FROM mcp_late_results WHERE interaction_id=?1 AND digest=?2")?;
+                let mut rows = statement.query(params![id.to_string(), digest.to_string()])?;
+                Some(late_reply(rows.next()?.ok_or(StoreError::Corrupt)?, id, &record.request, &limits)?)
+            } else { None };
+            tx.commit()?;
+            Ok((record, evidence))
         }).await.map_err(StoreError::from_worker)
     }
 
@@ -1767,4 +1805,53 @@ fn fact(
     db.execute("INSERT INTO mcp_events(owner_key,interaction_id,kind,generation,timestamp_ms,payload) VALUES(?1,?2,?3,?4,?5,?6)",
         params![owner.key().to_string(), interaction.map(|id| id.to_string()), kind, owner.generation(), now, payload])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    #[test]
+    fn recovery_pages_admitted_history_larger_than_one_document_and_checks_orphans() {
+        actix::System::new().block_on(async {
+            let limits = Limits { max_document_bytes: 16 * 1024, ..Limits::default() };
+            let config = StoreConfig { limits: limits.clone(), max_page_size: 2, ..StoreConfig::default() };
+            let path = std::env::temp_dir().join(format!("htlk-client-history-{}-{}.sqlite", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            let store = SqliteStore::open(&path, config.clone()).await.unwrap();
+            let run_id = RunId::new("history".into(), &limits).unwrap();
+            let root = ScopeInstanceId::root(&run_id, &limits).unwrap();
+            store.create_run(RunSeed { run_id: run_id.clone(), fingerprint: hash_bytes(b"graph"), root_scope: root,
+                actor: "alice".into(), causation: "test".into(), timestamp_ms: 1 }).await.unwrap();
+            let lease = store.acquire(&run_id, "worker".into(), 1, 1000).await.unwrap();
+            store.commit(&lease, Transition {
+                context: TransitionContext { command_id: "scope".into(), actor: "worker".into(), causation: "test".into(), timestamp_ms: 2 },
+                writes: vec![RecordWrite { key: RecordKey { family: RecordFamily::Scope, id: root.to_string() }, expected_revision: None, final_record: false,
+                    payload: JsonDocument::new(br#"{"principal":"alice","deadline_ms":900}"#, &limits).unwrap().value().clone() }],
+                next_status: None, root: None, expected_fingerprint: None,
+            }).await.unwrap();
+            let owner = McpOwner::new(HostContext::new("alice".into(), &limits).unwrap(), McpOwnerScope::Run(run_id.clone()), lease.fence(), &limits).unwrap();
+            let session = store.open_mcp_epoch(&owner, hash_bytes(b"server"), 3).await.unwrap();
+            let mut total = 0;
+            for id in 0..20 {
+                let request = format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"roots/list","params":{{"padding":"{}"}}}}"#, "x".repeat(1024)).into_bytes();
+                total += request.len();
+                store.receive_run_mcp_interaction(&owner, session.id, None, request, SecurityLabels::default(), 800, 4, 32).await.unwrap();
+            }
+            assert!(total > limits.max_document_bytes);
+            store.close().await.unwrap();
+            let store = SqliteStore::open(&path, config).await.unwrap();
+            store.validate_run_mcp_interactions(&run_id).await.unwrap();
+            // An orphan reservation must still be detected after the last page.
+            let run = run_id.clone();
+            store.connection.call(move |db| db.execute("INSERT INTO records(run_id,family,record_id,revision,final,payload) VALUES(?1,'reservation','client:orphan',1,0,x'a0')", [run.as_str()])).await.unwrap();
+            assert_eq!(store.validate_run_mcp_interactions(&run_id).await.unwrap_err(), StoreError::Corrupt);
+            store.connection.call(|db| db.execute("DELETE FROM records WHERE record_id='client:orphan'", [])).await.unwrap();
+            // Corruption in a later page cannot be skipped by bounded iteration.
+            store.connection.call(|db| db.execute("UPDATE mcp_interactions SET raw_digest=?1 WHERE interaction_id=(SELECT max(interaction_id) FROM mcp_interactions)", [hash_bytes(b"wrong").to_string()])).await.unwrap();
+            assert_eq!(store.validate_run_mcp_interactions(&run_id).await.unwrap_err(), StoreError::Corrupt);
+            store.close().await.unwrap();
+            for suffix in ["", "-wal", "-shm"] { let _ = std::fs::remove_file(format!("{}{suffix}", path.display())); }
+        });
+    }
 }

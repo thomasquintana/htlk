@@ -33,6 +33,9 @@ pub enum McpTaskError {
     /// A task changed identity, creation time, TTL or immutable terminal status,
     /// or its update timestamp moved backwards.
     InvalidTransition,
+    /// tasks/result failed as a retrieval RPC, without a proven underlying task
+    /// error. Original wire evidence remains in reply; completion stays unknown.
+    Retrieval,
     /// Local page, item, byte, request or elapsed-time budget was exhausted.
     Limit,
     /// The granted retention lifetime has elapsed; it is not safe to assume that
@@ -49,8 +52,10 @@ impl fmt::Display for McpTaskError {
 impl std::error::Error for McpTaskError {}
 
 /// One observed RPC, preserving exact bytes, protected remote errors and delivery
-/// even when typed admission fails. `Ok(None)` means the wire reply contains a
-/// local failure or remote error; inspect `reply.result` for that original outcome.
+/// even when typed admission fails. `Ok(None)` means no typed result was admitted;
+/// inspect `reply.result` for the original outcome. For tasks/result, a validated
+/// underlying execution error is `Ok(Some(()))`; an unproven retrieval RPC error
+/// is `Err(McpTaskError::Retrieval)` and cannot establish operation completion.
 #[derive(Debug)]
 pub struct McpTaskReply<T> {
     /// Unmodified correlated wire evidence and response-capacity reservation.
@@ -1023,6 +1028,9 @@ impl McpRemoteTask {
     /// Retrieves the underlying tool result, including while input_required so
     /// related callbacks can make progress. This RPC is independently bounded;
     /// cancelling its wait is not remote task cancellation.
+    /// An error is an underlying execution result only with a previously observed
+    /// failed/cancelled status and matching task metadata. Otherwise `Retrieval`
+    /// preserves uncertainty; the host may explicitly inspect/poll the known task.
     pub async fn result(
         &mut self,
         limits: McpTaskLimits,
@@ -1071,7 +1079,59 @@ impl McpRemoteTask {
                 Ok(())
             })
             .transpose();
-        if value.is_ok()
+        if let Ok(Err(error)) = &reply.result {
+            value = if matches!(
+                self.state.status,
+                McpTaskStatus::Failed | McpTaskStatus::Cancelled
+            ) && mcp_related_task_id(error.document().value()).ok().flatten()
+                == Some(self.state.id.as_str())
+            {
+                if self
+                    .result_identity
+                    .is_some_and(|identity| identity != error.document().digest())
+                {
+                    Err(McpTaskError::InvalidTransition)
+                } else {
+                    self.result_identity = Some(error.document().digest());
+                    self.result_status = Some(self.state.status);
+                    Ok(Some(()))
+                }
+            } else {
+                Err(McpTaskError::Retrieval)
+            };
+        }
+        if value == Err(McpTaskError::Retrieval)
+            && let (Some(key), Some(persistence), Ok(Err(error))) =
+                (self.intent_key, self.session.persistence(), &reply.result)
+        {
+            let retained = async {
+                persistence
+                    .store
+                    .record_mcp_remote_task_retrieval_error(
+                        self.session.owner(),
+                        self.session
+                            .durable_identity()
+                            .ok_or(McpTaskError::InvalidInput)?,
+                        self.session
+                            .server()
+                            .digest(self.session.representation_limits())
+                            .map_err(|_| McpTaskError::InvalidInput)?,
+                        key,
+                        error.as_bytes().to_vec(),
+                        persistence
+                            .clock
+                            .now_ms()
+                            .map_err(|e| McpTaskError::Persistence(e.code()))?,
+                    )
+                    .await
+                    .map_err(|e| McpTaskError::Persistence(e.code()))
+            }
+            .await;
+            if let Err(error) = retained {
+                value = Err(error);
+            }
+        }
+        if matches!(value, Ok(Some(())))
             && let Err(error) = self.persist(None, Some(&reply)).await
         {
             value = Err(error)

@@ -216,10 +216,10 @@ fn bounded_polling_completes_without_status_notifications_and_keeps_acceptance_s
             let McpTaskWait::Result(reply) = waited else { panic!("{waited:?}") };
             assert_eq!(reply.reply.delivery, McpDelivery::ResponseReceived);
             if scenario == "remote-error" {
-                assert!(matches!(reply.value, Ok(None)));
+                assert!(matches!(reply.value, Ok(Some(()))));
                 let error = reply.reply.result.unwrap().unwrap_err();
                 assert_eq!(error.code(), -32050);
-                assert_eq!(error.as_bytes(), br#"{"code":-32050,"message":"private-underlying-error","data":{"protected":true}}"#);
+                assert_eq!(error.as_bytes(), br#"{"code":-32050,"message":"private-underlying-error","data":{"protected":true},"_meta":{"io.modelcontextprotocol/related-task":{"taskId":"opaque/private/task"}}}"#);
             } else {
                 assert!(matches!(reply.value, Ok(Some(()))));
                 let raw = String::from_utf8(reply.reply.raw_result.unwrap()).unwrap();
@@ -605,6 +605,188 @@ fn final_result_identity_terminal_observations_and_restored_retention_do_not_res
         let late = task.get(limits(), cancellation()).await.unwrap();
         assert_eq!(late.value.unwrap_err(), McpTaskError::InvalidTransition);
         assert_eq!(task.state().status(), McpTaskStatus::Cancelled);
+        client.shutdown().await.unwrap();
+    });
+}
+
+#[test]
+fn retrieval_rpc_errors_are_retained_without_installing_an_underlying_final_result() {
+    use htlk_executable::digest::hash_bytes;
+    use htlk_runtime::{
+        clock::SystemClock,
+        store::{SqliteStore, StoreError},
+    };
+    for mode in ["stdio", "http-json", "http-sse"] {
+        let peer = (mode != "stdio").then(|| HttpPeer::start("retrieval-error", mode));
+        actix::System::new().block_on(async {
+            let store = SqliteStore::in_memory(Default::default()).await.unwrap();
+            let persistence = McpClientPersistence::new(store.clone(), Arc::new(SystemClock));
+            let owner = persistence
+                .acquire_owner(
+                    &HostContext::new("alice".into(), &Limits::default()).unwrap(),
+                    "protocol-tasks",
+                    60_000,
+                )
+                .await
+                .unwrap();
+            let config = McpClientConfig::new(McpClientLimits::default(), BTreeMap::new(), None)
+                .unwrap()
+                .with_persistence(persistence);
+            let client = NativeMcpClient::new(config).unwrap();
+            let session = if let Some(peer) = &peer {
+                peer.open(&client).await
+            } else {
+                open(&client, "retrieval-error").await
+            };
+            let key = hash_bytes(b"retrieval-is-not-execution");
+            let creation = session
+                .prepare_tool_task_call(
+                    &descriptor(Some("required")),
+                    params(),
+                    McpToolTaskMode::Task {
+                        ttl_ms: Some(60_000),
+                    },
+                )
+                .unwrap()
+                .with_logical_key(key)
+                .dispatch(limits(), cancellation())
+                .await
+                .unwrap();
+            let mut task = accepted(creation);
+            let failed = task.result(limits(), cancellation()).await.unwrap();
+            assert_eq!(failed.value, Err(McpTaskError::Retrieval));
+            assert_eq!(
+                failed.reply.delivery,
+                McpDelivery::ResponseReceived,
+                "delivery describes only the retrieval RPC"
+            );
+            let error = failed.reply.result.as_ref().unwrap().as_ref().unwrap_err();
+            assert_eq!(error.code(), -32603);
+            let server = session.server().digest(&Limits::default()).unwrap();
+            let saved = store
+                .inspect_mcp_remote_task_intent(&owner, server, key)
+                .await
+                .unwrap();
+            assert!(saved.final_payload.is_none() && saved.result_status.is_none());
+            assert_eq!(saved.task.unwrap().status(), McpTaskStatus::Working);
+            let facts = store.mcp_journal(&owner, 0, 64).await.unwrap();
+            let observed = facts
+                .iter()
+                .find(|fact| fact.kind == "remote_task_retrieval_error")
+                .unwrap();
+            let Value::Array(parts) = &observed.payload else {
+                panic!()
+            };
+            assert_eq!(parts.last(), Some(&Value::Bytes(error.as_bytes().to_vec())));
+            assert_eq!(
+                store
+                    .update_mcp_remote_task(
+                        &owner,
+                        session.durable_identity().unwrap(),
+                        server,
+                        key,
+                        None,
+                        Some((true, error.as_bytes().to_vec())),
+                        htlk_runtime::clock::CoordinatorClock::now_ms(&SystemClock).unwrap()
+                    )
+                    .await
+                    .unwrap_err(),
+                StoreError::Invalid,
+                "transactional boundary also refuses to make a retrieval error final"
+            );
+            drop(failed);
+            let completed = task.result(limits(), cancellation()).await.unwrap();
+            assert_eq!(completed.value, Ok(Some(())));
+            let saved = store
+                .inspect_mcp_remote_task_intent(&owner, server, key)
+                .await
+                .unwrap();
+            assert_eq!(saved.result_status, Some(McpTaskStatus::Completed));
+            assert_eq!(
+                saved.final_payload.unwrap().1,
+                completed.reply.raw_result.unwrap()
+            );
+            assert_eq!(stats(&session).await["creates"], 1);
+            client.shutdown().await.unwrap();
+        });
+    }
+}
+
+#[test]
+fn related_error_requires_terminal_observation_and_then_persists_exact_execution_error() {
+    use htlk_executable::digest::hash_bytes;
+    use htlk_runtime::{clock::SystemClock, store::SqliteStore};
+    actix::System::new().block_on(async {
+        let store = SqliteStore::in_memory(Default::default()).await.unwrap();
+        let persistence = McpClientPersistence::new(store.clone(), Arc::new(SystemClock));
+        let owner = persistence
+            .acquire_owner(
+                &HostContext::new("alice".into(), &Limits::default()).unwrap(),
+                "protocol-tasks",
+                60_000,
+            )
+            .await
+            .unwrap();
+        let client = NativeMcpClient::new(
+            McpClientConfig::new(McpClientLimits::default(), BTreeMap::new(), None)
+                .unwrap()
+                .with_persistence(persistence),
+        )
+        .unwrap();
+        let session = open(&client, "remote-error").await;
+        let key = hash_bytes(b"known-execution-error");
+        let creation = session
+            .prepare_tool_task_call(
+                &descriptor(Some("required")),
+                params(),
+                McpToolTaskMode::Task {
+                    ttl_ms: Some(60_000),
+                },
+            )
+            .unwrap()
+            .with_logical_key(key)
+            .dispatch(limits(), cancellation())
+            .await
+            .unwrap();
+        let mut task = accepted(creation);
+        let unproven = task.result(limits(), cancellation()).await.unwrap();
+        assert_eq!(
+            unproven.value,
+            Err(McpTaskError::Retrieval),
+            "related metadata alone does not prove terminal execution"
+        );
+        let raw = unproven
+            .reply
+            .result
+            .unwrap()
+            .unwrap_err()
+            .as_bytes()
+            .to_vec();
+        let server = session.server().digest(&Limits::default()).unwrap();
+        assert!(
+            store
+                .inspect_mcp_remote_task_intent(&owner, server, key)
+                .await
+                .unwrap()
+                .final_payload
+                .is_none()
+        );
+        let observed = task.get(limits(), cancellation()).await.unwrap();
+        assert_eq!(
+            observed.value.unwrap().unwrap().status(),
+            McpTaskStatus::Failed
+        );
+        drop(observed.reply);
+        let known = task.result(limits(), cancellation()).await.unwrap();
+        assert_eq!(known.value, Ok(Some(())));
+        assert_eq!(known.reply.result.unwrap().unwrap_err().as_bytes(), raw);
+        let saved = store
+            .inspect_mcp_remote_task_intent(&owner, server, key)
+            .await
+            .unwrap();
+        assert_eq!(saved.final_payload, Some((true, raw)));
+        assert_eq!(saved.task.unwrap().status(), McpTaskStatus::Failed);
+        assert_eq!(stats(&session).await["creates"], 1);
         client.shutdown().await.unwrap();
     });
 }

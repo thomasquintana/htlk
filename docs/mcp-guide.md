@@ -109,6 +109,16 @@ store reopen without dispatch. Unknown completion stays uncertain. This wrapper
 supports one accounted native operation; independent child workflows started with
 `Runtime::start_run` do not inherit its budget.
 
+After explicit reconciliation, recovery returns the exact selected late sampling
+result and usage. The original callback timeout/cancellation reply remains unchanged.
+Inspection authorizes evidence and its protection from one consistent store snapshot.
+
+Retired transports release native client session slots. Highest owner generations
+remain in a separate bounded `McpClientLimits::owner_identities` inventory (4096 by
+default) for the client's lifetime. A full inventory refuses new owner identities;
+it never forgets a fence to make room. Broken run sessions remain sticky until their
+original execution lifetime ends.
+
 The [sampling campaigns](../crates/htlk-runtime/tests/mcp_sampling.rs) demonstrate
 multimodal tools/context, explicit routing, native child work and HTTP ancestry,
 lost reply acknowledgement, tool-result continuation and interrupted-callback recovery.

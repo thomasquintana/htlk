@@ -369,11 +369,18 @@ impl NativeLease {
             .map_err(|e| (McpDelivery::PossiblySent, task_failure(e).1))?
         {
             client::McpTaskWait::Result(result) => match result.value {
-                Ok(_) => {
+                Ok(Some(())) => {
                     let mut reply = result.reply;
                     if reply.delivery != McpDelivery::ResponseReceived {
                         reply.delivery = McpDelivery::PossiblySent;
                     }
+                    Ok(reply)
+                }
+                Ok(None) => {
+                    // A failed result-retrieval transport is not the original
+                    // operation's completion, even if this RPC was never sent.
+                    let mut reply = result.reply;
+                    reply.delivery = McpDelivery::PossiblySent;
                     Ok(reply)
                 }
                 Err(error) => Err((McpDelivery::PossiblySent, task_failure(error).1)),

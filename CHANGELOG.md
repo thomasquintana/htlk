@@ -6,6 +6,19 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP work inspection authorizes evidence and protection from one consistent
+  snapshot. Reconciled sampling recovery uses the exact selected late result,
+  labels and usage without changing the original callback reply or redispatching work.
+- Task result-retrieval RPC errors remain separate protected observations instead
+  of becoming final operation results or releasing uncertain graph reservations.
+- Retired native MCP transports release session capacity. Bounded, non-evicting
+  owner-generation fences reject stale opens after reclamation; active run failures
+  remain sticky until their original lifetime ends.
+- MCP recovery validates admitted interaction history incrementally instead of
+  rejecting a valid run whose lifetime history exceeds one document's byte ceiling.
+
 ### Added
 
 - Accounted MCP host work now has a stable single-operation claim and a native child

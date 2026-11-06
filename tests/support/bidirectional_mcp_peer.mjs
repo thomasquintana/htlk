@@ -110,6 +110,12 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(404).end(); return;
     }
     response.writeHead(200, { "content-type": "text/event-stream" });
+    if (rpc.params.name === "split-trailing") {
+      const trailing = `data: ${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/resources/updated', params: { uri: 'test://after-result' } })}\n\n`;
+      response.write(`data: ${JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { content: [] } })}\n\n` + trailing.slice(0, 35));
+      setTimeout(() => response.end(trailing.slice(35)), 150);
+      return;
+    }
     if (rpc.params.name === "sampling") {
       const id = `sampling-${rpc.id}`;
       session.sampling.set(id, { response, parent: rpc.id, replies: 0 });

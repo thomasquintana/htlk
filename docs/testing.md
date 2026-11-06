@@ -242,6 +242,12 @@ idle GET SSE, and coalesced POST SSE frames. Interactive and polling frontends u
 the same authenticated APIs. Peer counters verify zero URL/metadata fetches and
 zero automatic retries; events disclose opaque local identities only.
 
+POST SSE qualification ends after the matching response and complete frames in its
+current received chunk. `mcp_client_sessions` deliberately splits a trailing event
+across that boundary and verifies that it is not reported as delivered. This is not
+qualification of ongoing post-result stream reception; MCP recommends server stream
+termination after the response. Idle GET reception is qualified independently.
+
 ## Experimental task qualification
 
 ```console

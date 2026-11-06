@@ -232,7 +232,13 @@ impl McpHostWork {
         F: FnOnce(McpHostWorkReceipt) -> Fut,
         Fut: Future<Output = McpServiceOutcome> + Send,
     {
-        let mut old = self.host.record(&self.owner, self.record.id).await?;
+        let (mut old, settlement) = self
+            .host
+            .persistence
+            .store
+            .mcp_work_outcome(&self.owner, self.record.id)
+            .await
+            .map_err(|error| fail(error.code()))?;
         let descriptor_labels =
             self.host
                 .authorizer
@@ -249,8 +255,10 @@ impl McpHostWork {
             McpClientAction::Dispatch,
             Some(&descriptor),
         )?;
-        if old.reply.is_some() && old.work_delivery != McpWorkDelivery::Uncertain {
-            return decode(&old, &self.host.limits);
+        if (old.reply.is_some() || settlement.is_some())
+            && old.work_delivery != McpWorkDelivery::Uncertain
+        {
+            return decode(&old, settlement.as_ref(), &self.host.limits);
         }
         if self.cancellation.is_cancelled() {
             return Err(fail(FailureCode::Cancelled));
@@ -294,7 +302,7 @@ impl McpHostWork {
         // protected evidence survives without publishing an expired response.
         let outcome = operation(receipt).await;
         let saved = self.host.finish(&self.owner, &old, outcome).await?;
-        decode(&saved, &self.host.limits)
+        decode(&saved, None, &self.host.limits)
     }
 }
 impl McpInteractionHost {
@@ -309,7 +317,12 @@ impl McpInteractionHost {
         owner: &McpOwner,
         id: Digest,
     ) -> Result<Option<McpHostWorkEvidence>, RuntimeFailure> {
-        let record = self.record(owner, id).await?;
+        let (record, evidence) = self
+            .persistence
+            .store
+            .mcp_host_work_evidence(owner, id)
+            .await
+            .map_err(|error| fail(error.code()))?;
         self.authorize(
             actor,
             owner,
@@ -318,11 +331,7 @@ impl McpInteractionHost {
             McpClientAction::Inspect,
             None,
         )?;
-        self.persistence
-            .store
-            .mcp_host_work_evidence(owner, id)
-            .await
-            .map_err(|error| fail(error.code()))
+        Ok(evidence)
     }
     /// Recovers a known host-work outcome by its original stable interaction ID.
     /// This never opens a connection or launches work. Unknown completion requires
@@ -336,7 +345,12 @@ impl McpInteractionHost {
         owner: &McpOwner,
         id: Digest,
     ) -> Result<McpServiceOutcome, RuntimeFailure> {
-        let record = self.record(owner, id).await?;
+        let (record, settlement) = self
+            .persistence
+            .store
+            .mcp_work_outcome(owner, id)
+            .await
+            .map_err(|error| fail(error.code()))?;
         self.authorize(
             actor,
             owner,
@@ -348,17 +362,18 @@ impl McpInteractionHost {
         if record.work_delivery == McpWorkDelivery::Uncertain {
             return Err(fail(FailureCode::EffectUncertain));
         }
-        decode(&record, &self.limits)
+        decode(&record, settlement.as_ref(), &self.limits)
     }
 }
 fn decode(
     record: &McpStoredInteraction,
+    settlement: Option<&crate::store::McpLateReply>,
     limits: &Limits,
 ) -> Result<McpServiceOutcome, RuntimeFailure> {
     let reply = JsonDocument::new(
-        record
-            .reply
-            .as_deref()
+        settlement
+            .map(|evidence| evidence.reply.as_slice())
+            .or(record.reply.as_deref())
             .ok_or_else(|| fail(FailureCode::EffectUncertain))?,
         limits,
     )
@@ -376,7 +391,10 @@ fn decode(
         result,
         delivery: record.work_delivery,
         labels: record.labels.clone(),
-        usage: record.usage.as_ref().map(usage).transpose()?,
+        usage: settlement
+            .map_or(record.usage.as_ref(), |evidence| evidence.usage.as_ref())
+            .map(usage)
+            .transpose()?,
     })
 }
 fn usage(value: &Value) -> Result<McpUsage, RuntimeFailure> {
@@ -405,4 +423,59 @@ fn usage(value: &Value) -> Result<McpUsage, RuntimeFailure> {
             value => Some(crate::mcp::as_text(value)?.into()),
         },
     })
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    use crate::clock::CoordinatorClock;
+
+    struct Clock;
+    impl CoordinatorClock for Clock {
+        fn now_ms(&self) -> Result<i64, RuntimeFailure> {
+            Ok(10)
+        }
+    }
+    struct Policy;
+    impl McpClientAuthorizer for Policy {
+        fn authorize(
+            &self,
+            _: &HostContext,
+            _: McpClientAuthorization<'_>,
+        ) -> Result<(), RuntimeFailure> {
+            Ok(())
+        }
+    }
+    fn doc(raw: &str) -> JsonDocument {
+        JsonDocument::new(raw.as_bytes(), &Limits::default()).unwrap()
+    }
+
+    #[test]
+    fn cached_run_reuses_selected_settlement_even_without_an_original_wire_reply() {
+        actix::System::new().block_on(async {
+            let store = crate::store::SqliteStore::in_memory(Default::default()).await.unwrap();
+            let actor = HostContext::new("alice".into(), &Limits::default()).unwrap();
+            let owner = store.acquire_mcp_owner(&actor, "cache", 1, 1000).await.unwrap();
+            let config = McpClientConfig::new(McpClientLimits::default(), BTreeMap::new(), None).unwrap()
+                .with_persistence(McpClientPersistence::new(store.clone(), Arc::new(Clock)))
+                .with_authorizer(Arc::new(Policy));
+            let client = NativeMcpClient::new(config.clone()).unwrap();
+            let server = ServerIdentity::new("peer".into(), htlk_executable::McpTransport::Stdio, "peer".into(), "1".into(), &Limits::default()).unwrap();
+            let session = client.open(owner.clone(), server, crate::mcp::McpEndpoint::Stdio { program: "node".into(),
+                arguments: vec!["--input-type=module".into(), "-e".into(), r#"import{createInterface}from'node:readline';for await(const line of createInterface({input:process.stdin})){const r=JSON.parse(line);if(r.method==='initialize')console.log(JSON.stringify({jsonrpc:'2.0',id:r.id,result:{protocolVersion:'2025-11-25',serverInfo:{name:'peer',version:'1'},capabilities:{}}}));}"#.into()], environment: BTreeMap::new() }, Limits::default(), Arc::new(McpCancellation::new())).await.unwrap();
+            let record = store.receive_mcp_interaction(&owner, session.durable_identity().unwrap(), br#"{"jsonrpc":"2.0","id":1,"method":"sampling/createMessage","params":{"messages":[],"maxTokens":10}}"#.to_vec(), Default::default(), 900, 3, 8).await.unwrap();
+            store.begin_mcp_work(&owner, record.id, 4, 8, 1).await.unwrap();
+            store.claim_mcp_host_operation(&owner, record.id, Default::default(), doc("{}"), 5).await.unwrap();
+            store.cancel_mcp_work(&owner, record.id, 6).await.unwrap();
+            let late = br#"{"jsonrpc":"2.0","id":1,"result":{"role":"assistant","model":"known","content":{"type":"text","text":"actual result"}}}"#.to_vec();
+            let evidence = store.retain_mcp_late_reply(&owner, record.id, late, Default::default(), McpWorkDelivery::Completed, None, 4).await.unwrap();
+            store.settle_mcp_work(&owner, record.id, evidence, 7).await.unwrap();
+            let work = McpHostWork::new(McpInteractionHost::new(config).unwrap(), owner.clone(), record.clone(), Arc::new(McpCancellation::new()), session);
+            let recovered = work.run(doc("{}"), |_| async { panic!("cached settlement must not construct another model operation") }).await.unwrap();
+            assert_eq!(get(as_map(recovered.result.unwrap().value()).unwrap(), "model").unwrap(), &Value::Text("known".into()));
+            assert_eq!(store.mcp_owner_usage(&owner).await.unwrap().calls_spent, 1);
+            assert!(store.mcp_interaction(&owner, record.id).await.unwrap().reply.is_none());
+            client.shutdown().await.unwrap();
+        });
+    }
 }

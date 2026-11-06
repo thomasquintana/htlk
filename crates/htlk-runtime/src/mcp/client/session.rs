@@ -77,8 +77,20 @@ impl McpClientReply {
 
 type Slot = Arc<tokio::sync::OnceCell<Result<Arc<Wire>, RuntimeFailure>>>;
 type SessionKey = (Digest, i64, Digest);
-type Registry =
-    Arc<Mutex<BTreeMap<SessionKey, (Slot, Arc<McpCancellation>, Arc<McpCancellation>)>>>;
+#[derive(Default)]
+struct RegistryState {
+    sessions: BTreeMap<SessionKey, SessionEntry>,
+    // Bounded, non-evicting high-water marks outlive transport reclamation.
+    generations: BTreeMap<Digest, i64>,
+}
+#[derive(Clone)]
+struct SessionEntry {
+    slot: Slot,
+    stop: Arc<McpCancellation>,
+    lifetime: Arc<McpCancellation>,
+    run_owned: bool,
+}
+type Registry = Arc<Mutex<RegistryState>>;
 
 enum Command {
     Open {
@@ -199,8 +211,8 @@ impl NativeMcpClient {
                 }
                 receiver.close();
                 stop.cancel();
-                let wires: Vec<_> = registry.lock().map(|entries| entries.values()
-                    .filter_map(|(slot, _, _)| slot.get().and_then(|v| v.as_ref().ok()).cloned())
+                    let wires: Vec<_> = registry.lock().map(|entries| entries.sessions.values()
+                        .filter_map(|entry| entry.slot.get().and_then(|v| v.as_ref().ok()).cloned())
                     .collect()).unwrap_or_default();
                 for wire in wires { jobs.spawn(async move { wire.close().await; }); }
                 let _ = tokio::time::timeout(Duration::from_secs(1), async {
@@ -469,47 +481,79 @@ async fn open(
             .digest(&limits)
             .map_err(|_| fail(FailureCode::McpIdentity))?,
     );
-    let (slot, token, _) = {
-        let mut entries = registry.lock().map_err(|_| fail(FailureCode::Invariant))?;
-        for ((id, generation, _), (_, token, lifetime)) in entries.iter() {
-            if *id == owner.key() {
-                if *generation > owner.generation() {
-                    return Err(fail(FailureCode::Fenced));
-                }
-                if *generation < owner.generation() {
-                    token.cancel();
-                    if matches!(owner.scope(), McpOwnerScope::Run(_)) {
-                        lifetime.cancel();
-                    }
+    let (entry, created) = {
+        let mut registry = registry.lock().map_err(|_| fail(FailureCode::Invariant))?;
+        if registry
+            .generations
+            .get(&owner.key())
+            .is_some_and(|generation| *generation > owner.generation())
+        {
+            return Err(fail(FailureCode::Fenced));
+        }
+        if !registry.generations.contains_key(&owner.key())
+            && registry.generations.len() >= config.limits.owner_identities
+        {
+            return Err(fail(FailureCode::Budget));
+        }
+        registry.generations.insert(owner.key(), owner.generation());
+        for ((id, generation, _), entry) in &registry.sessions {
+            if *id == owner.key() && *generation < owner.generation() {
+                entry.stop.cancel();
+                if entry.run_owned {
+                    entry.lifetime.cancel();
                 }
             }
         }
-        // Explicit host reopen creates a fresh epoch; old handles stay cancelled.
-        // Run-owned handles retain sticky failure until the runtime reconciles them.
-        if matches!(owner.scope(), McpOwnerScope::Host(_))
-            && entries
-                .get(&key)
-                .is_some_and(|(_, token, _)| token.is_cancelled())
+        // Active-run failure is sticky even after transport cleanup. Once its
+        // original lifetime ends, only the small non-evicting fence remains.
+        registry.sessions.retain(|_, entry| {
+            !entry.lifetime.is_cancelled() && (entry.run_owned || !entry.stop.is_cancelled())
+        });
+        if !registry.sessions.contains_key(&key)
+            && registry.sessions.len() >= config.limits.pending_requests
         {
-            entries.remove(&key);
-        }
-        if !entries.contains_key(&key) && entries.len() >= config.limits.pending_requests {
             return Err(fail(FailureCode::McpTransport));
         }
-        entries
+        let created = !registry.sessions.contains_key(&key);
+        let entry = registry
+            .sessions
             .entry(key)
             .or_insert_with(|| {
                 let mut token = McpCancellation::linked(&stop);
                 token.parents.push(lifetime.state.clone());
                 token.parents.extend(lifetime.parents.iter().cloned());
-                (
-                    Arc::new(tokio::sync::OnceCell::new()),
-                    Arc::new(token),
-                    lifetime.clone(),
-                )
+                SessionEntry {
+                    slot: Arc::new(tokio::sync::OnceCell::new()),
+                    stop: Arc::new(token),
+                    lifetime: lifetime.clone(),
+                    run_owned: matches!(owner.scope(), McpOwnerScope::Run(_)),
+                }
             })
-            .clone()
+            .clone();
+        (entry, created)
     };
+    let SessionEntry {
+        slot, stop: token, ..
+    } = entry.clone();
+    if created {
+        let registry = registry.clone();
+        let shutdown = stop.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => {},
+                _ = entry.lifetime.cancelled() => {},
+                _ = entry.stop.cancelled(), if !entry.run_owned => {},
+            }
+            if let Ok(mut registry) = registry.lock()
+                && registry
+                    .sessions
+                    .get(&key)
+                    .is_some_and(|current| Arc::ptr_eq(&current.slot, &entry.slot))
+            {
+                registry.sessions.remove(&key);
+            }
+        });
+    }
     let result = slot
         .get_or_init(|| async {
             let stored_session = if let Some(persistence) = &config.persistence {

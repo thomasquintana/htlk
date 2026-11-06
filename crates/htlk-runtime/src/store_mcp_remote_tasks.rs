@@ -38,6 +38,46 @@ impl fmt::Debug for McpRemoteTaskRecord {
     }
 }
 impl SqliteStore {
+    /// Retains a bounded protected tasks/result RPC error separately from the
+    /// underlying operation's final payload. This never establishes completion.
+    ///
+    /// # Errors
+    /// Returns stale authority, malformed error, missing acceptance or retention limits.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_mcp_remote_task_retrieval_error(
+        &self,
+        owner: &McpOwner,
+        session: Digest,
+        server: Digest,
+        key: Digest,
+        bytes: Vec<u8>,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        timestamp(now_ms)?;
+        let key = remote_key(owner, server, key, &self.config.limits)?;
+        let (owner, limits) = (owner.clone(), self.config.limits.clone());
+        if bytes.len() > limits.max_document_bytes / 8 {
+            return Err(StoreError::Invalid);
+        }
+        crate::mcp::client::McpRpcError::from_bytes(&bytes, &limits)
+            .map_err(|_| StoreError::Invalid)?;
+        self.connection.call(move |db| -> Result<_, StoreError> {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let now = authority(&tx, &owner, now_ms)?;
+            remote_session(&tx, &owner, session, server)?;
+            let old = remote_record(&tx, &owner, session, server, key, &limits)?;
+            if old.task.is_none() { return Err(StoreError::Missing); }
+            let payload = Value::Array(vec![Value::Text(key.to_string()), Value::Text(hash_bytes(&bytes).to_string()), Value::Bytes(bytes)]);
+            let encoded = cbor::encode(&payload, &limits)?;
+            let existing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM mcp_events WHERE owner_key=?1 AND kind='remote_task_retrieval_error' AND payload=?2)", params![owner.key().to_string(), encoded], |row| row.get(0))?;
+            if !existing {
+                let (count, retained): (usize, usize) = tx.query_row("SELECT count(*),coalesce(sum(length(payload)),0) FROM mcp_events WHERE owner_key=?1 AND kind='remote_task_retrieval_error'", [owner.key().to_string()], |row| Ok((row.get(0)?, row.get(1)?)))?;
+                if count >= 64 || retained.saturating_add(encoded.len()) > limits.max_document_bytes { return Err(StoreError::Budget); }
+                fact(&tx, &owner, None, "remote_task_retrieval_error", now, &payload, &limits)?;
+            }
+            tx.commit()?; Ok(())
+        }).await.map_err(StoreError::from_worker)
+    }
     /// Retains a correlated creation error separately from acceptance and deferred
     /// results. The logical intent remains non-recreatable.
     ///
@@ -254,7 +294,9 @@ impl SqliteStore {
             if let Some((error,bytes))=final_payload {
                 if bytes.len()>limits.max_document_bytes/8{return Err(StoreError::Invalid)}
                 JsonDocument::new(&bytes,&limits).map_err(|_|StoreError::Invalid)?;
-                if !error {
+                if error {
+                    validate_execution_error(&bytes, &previous, &limits)?;
+                } else {
                     let document=JsonDocument::new(&bytes,&limits).map_err(|_|StoreError::Invalid)?;
                     crate::validate_mcp_tool_result(&document,&limits).map_err(|_|StoreError::Invalid)?;
                     if crate::mcp::client::mcp_related_task_id(document.value()).map_err(|_|StoreError::Invalid)?!=Some(previous.task_id()){return Err(StoreError::Invalid)}
@@ -407,6 +449,10 @@ fn remote_record(
         (None, None) => None,
         (Some(kind), Some(bytes)) => {
             JsonDocument::new(&bytes, limits).map_err(|_| StoreError::Corrupt)?;
+            if kind == "error" {
+                validate_execution_error(&bytes, task.as_ref().ok_or(StoreError::Corrupt)?, limits)
+                    .map_err(|_| StoreError::Corrupt)?;
+            }
             Some((
                 match kind.as_str() {
                     "result" => false,
@@ -452,6 +498,24 @@ fn remote_bytes(db: &Db, owner: &McpOwner, limits: &Limits) -> Result<(), StoreE
     let bytes:usize=db.query_row("SELECT coalesce(sum(length(descriptor)+length(params)+coalesce(length(snapshot),0)+coalesce(length(acceptance),0)+coalesce(length(final_payload),0)+coalesce(length(create_error),0)+1024),0) FROM mcp_remote_tasks WHERE owner_key=?1",[owner.key().to_string()],|r|r.get(0))?;
     if bytes > limits.max_document_bytes {
         return Err(StoreError::Budget);
+    }
+    Ok(())
+}
+
+fn validate_execution_error(
+    bytes: &[u8],
+    task: &McpTaskState,
+    limits: &Limits,
+) -> Result<(), StoreError> {
+    use crate::mcp::client::{McpRpcError, McpTaskStatus, mcp_related_task_id};
+    let error = McpRpcError::from_bytes(bytes, limits).map_err(|_| StoreError::Invalid)?;
+    if !matches!(
+        task.status(),
+        McpTaskStatus::Failed | McpTaskStatus::Cancelled
+    ) || mcp_related_task_id(error.document().value()).map_err(|_| StoreError::Invalid)?
+        != Some(task.task_id())
+    {
+        return Err(StoreError::Invalid);
     }
     Ok(())
 }

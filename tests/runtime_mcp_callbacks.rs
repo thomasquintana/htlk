@@ -154,7 +154,7 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
 fn runtime_callbacks_have_real_attempt_origins_and_atomic_ancestor_budgets() {
     actix::System::new().block_on(async {
         for (calls, concurrency, expected_models) in [(2, 2, 1), (1, 2, 0), (2, 1, 0)] {
-          for (deferred,mode) in [(false,"stdio"),(true,"stdio"),(true,"json"),(true,"sse"),(false,"optional-no-cap")] {
+          for (deferred,mode) in [(false,"stdio"),(true,"stdio"),(true,"json"),(true,"sse"),(false,"optional-no-cap"),(true,"retrieval-error")] {
             let limits = Limits::default();
             let defaults = ExecutionLimits::new().with_timeout_ms(15000).unwrap().with_attempt_timeout_ms(5000).unwrap()
                 .with_max_mcp_calls(calls).unwrap().with_max_concurrency(concurrency).unwrap();
@@ -211,7 +211,8 @@ fn runtime_callbacks_have_real_attempt_origins_and_atomic_ancestor_budgets() {
                   else if(r.method!=='notifications/cancelled') process.exit(42);
                 }
             "#;
-            let script=if mode=="optional-no-cap"{ordinary_script.replace("tools:[{name:'tool',inputSchema:{type:'object'}}]","tools:[{name:'tool',inputSchema:{type:'object'},execution:{taskSupport:'optional'}}]")}else if deferred{deferred_script.into()}else{ordinary_script.into()};
+             let script=if mode=="retrieval-error"{deferred_script.replace("else if(r.method==='tasks/result')", "else if(r.method==='tasks/result') send({jsonrpc:'2.0',id:r.id,error:{code:-32603,message:'retrieval unavailable; task still running'}}); else if(r.method==='unused')")}
+             else if mode=="optional-no-cap"{ordinary_script.replace("tools:[{name:'tool',inputSchema:{type:'object'}}]","tools:[{name:'tool',inputSchema:{type:'object'},execution:{taskSupport:'optional'}}]")}else if deferred{deferred_script.into()}else{ordinary_script.into()};
             let mut _peer=None;
             let endpoint=if !matches!(mode,"json"|"sse"){McpEndpoint::Stdio {
                 program: "node".into(), arguments: vec!["--input-type=module".into(), "-e".into(), script], environment: BTreeMap::new(),
@@ -233,7 +234,23 @@ fn runtime_callbacks_have_real_attempt_origins_and_atomic_ancestor_budgets() {
                     if let Ok(view) = runtime.inspect_run(&caller, &run.run_id).await && view.header.status.is_terminal() { break view; }
                     tokio::time::sleep(Duration::from_millis(2)).await;
                 }
-            }).await.unwrap();
+             }).await.unwrap();
+             if mode=="retrieval-error" {
+                 assert_eq!(view.header.status, RunStatus::Failed);
+                 assert_eq!(view.failure.as_ref().unwrap().code(), FailureCode::Dependency);
+                 assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+                 let usage = store.records(&run.run_id, RecordFamily::Usage, None, 32).await.unwrap();
+                 for record in usage {
+                     assert_eq!(field(&record.payload, "calls_spent"), &Value::Integer(1));
+                     assert_eq!(field(&record.payload, "concurrency_reserved"), &Value::Integer(1), "retrieval failure cannot release original task reservation");
+                 }
+                 let responses=store.records(&run.run_id,RecordFamily::Response,None,16).await.unwrap();
+                 assert_eq!(field(&responses[0].payload,"delivery"),&Value::Text("possibly_sent".into()));
+                 assert_eq!(field(&responses[0].payload,"failure_code"),&Value::Text(FailureCode::EffectUncertain.to_string()));
+                 assert!(matches!(&responses[0].payload,Value::Map(fields) if fields.get("protocol_error").is_none()));
+                 engine.shutdown().await.unwrap(); adapter.shutdown().await.unwrap();
+                 continue;
+             }
             assert_eq!(view.header.status, RunStatus::Succeeded, "{calls}/{concurrency}: {:?}", view.failure);
             assert_eq!(model.calls.load(Ordering::SeqCst), expected_models);
             assert_eq!(model.related.load(Ordering::SeqCst),if deferred {expected_models}else{0});

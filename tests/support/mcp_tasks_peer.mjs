@@ -31,7 +31,8 @@ function reply(r, send, result) { send({ jsonrpc: '2.0', id: r.id, result }); }
 function error(r, send, code, message, data) { send({ jsonrpc: '2.0', id: r.id, error: { code, message, ...(data ? { data } : {}) } }); }
 function result(r, send) {
   if (scenario === 'remote-error') {
-    error(r, send, -32050, 'private-underlying-error', { protected: true });
+    send({ jsonrpc: '2.0', id: r.id, error: { code: -32050, message: 'private-underlying-error',
+      data: { protected: true }, _meta: { [related]: { taskId: task.taskId } } } });
   } else {
     reply(r, send, { content: [{ type: 'text', text: 'actual-operation-result' }],
       isError: scenario === 'tool-error',
@@ -95,6 +96,7 @@ async function receive(r, send, disconnect) {
     assert(r.params.taskId === task.taskId, 'exact target task ID');
     if (r.method === 'tasks/get') {
       counters.gets++;
+      if (terminal && scenario === 'remote-error') { reply(r, send, task); return; }
       if (Date.now() - lastPoll < 20) counters.earlyPoll++;
       lastPoll = Date.now();
       if (scenario === 'identity-drift') { reply(r, send, { ...task, taskId: 'different' }); return; }
@@ -113,9 +115,12 @@ async function receive(r, send, disconnect) {
       }
     } else if (r.method === 'tasks/result') {
       counters.results++;
+      if (scenario === 'retrieval-error' && counters.results === 1) {
+        error(r, send, -32603, 'Result service temporarily unavailable'); return;
+      }
       if (scenario === 'cancel-in-result') { waitingResult = { r, send }; return; }
       // On input_required the result stream is the rendezvous that unblocks work.
-      if (!terminal) changed('completed');
+      if (!terminal) changed(scenario === 'remote-error' ? 'failed' : 'completed');
       result(r, send);
     } else {
       counters.cancels++;

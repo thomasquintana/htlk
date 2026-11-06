@@ -122,6 +122,135 @@ fn endpoint() -> McpEndpoint {
         environment: BTreeMap::new(),
     }
 }
+
+#[test]
+fn retired_transports_release_slots_without_evicting_owner_generation_fences() {
+    actix::System::new().block_on(async {
+        let client = client(
+            None,
+            McpClientLimits {
+                pending_requests: 1,
+                owner_identities: 3,
+                ..Default::default()
+            },
+        );
+        let first = open(&client, "alice", 2).await;
+        first.close().await.unwrap();
+        let second = open(&client, "bob", 1).await;
+        second.close().await.unwrap();
+        let third = open(&client, "carol", 1).await;
+        third.close().await.unwrap();
+        let stale = client
+            .open(
+                owner("alice", 1),
+                server(),
+                endpoint(),
+                Limits::default(),
+                Arc::new(McpCancellation::new()),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(stale.code(), htlk_runtime::failure::FailureCode::Fenced);
+        let exhausted = client
+            .open(
+                owner("dave", 1),
+                server(),
+                endpoint(),
+                Limits::default(),
+                Arc::new(McpCancellation::new()),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            exhausted.code(),
+            htlk_runtime::failure::FailureCode::Budget,
+            "identity retention fails closed instead of forgetting fences"
+        );
+        let reopened = open(&client, "alice", 2).await;
+        assert_ne!(reopened.epoch(), first.epoch());
+        assert!(first.ended().is_some());
+        client.shutdown().await.unwrap();
+    });
+}
+
+#[test]
+fn failed_run_session_stays_sticky_until_its_original_lifetime_ends() {
+    actix::System::new().block_on(async {
+        let client = client(
+            None,
+            McpClientLimits {
+                pending_requests: 1,
+                ..Default::default()
+            },
+        );
+        let representation = Limits::default();
+        let make_owner = |name: &str| {
+            McpOwner::new(
+                HostContext::new("alice".into(), &representation).unwrap(),
+                McpOwnerScope::Run(
+                    htlk_runtime::identity::RunId::new(name.into(), &representation).unwrap(),
+                ),
+                1,
+                &representation,
+            )
+            .unwrap()
+        };
+        let lifetime = Arc::new(McpCancellation::new());
+        let first = client
+            .open(
+                make_owner("first"),
+                server(),
+                endpoint(),
+                representation.clone(),
+                lifetime.clone(),
+            )
+            .await
+            .unwrap();
+        first.close().await.unwrap();
+        let sticky = client
+            .open(
+                make_owner("first"),
+                server(),
+                endpoint(),
+                representation.clone(),
+                lifetime.clone(),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(sticky.code(), htlk_runtime::failure::FailureCode::Cancelled);
+        let full = client
+            .open(
+                make_owner("second"),
+                server(),
+                endpoint(),
+                representation.clone(),
+                Arc::new(McpCancellation::new()),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            full.code(),
+            htlk_runtime::failure::FailureCode::McpTransport
+        );
+        lifetime.cancel();
+        let next = client
+            .open(
+                make_owner("second"),
+                server(),
+                endpoint(),
+                representation,
+                Arc::new(McpCancellation::new()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(next.epoch(), first.epoch());
+        client.shutdown().await.unwrap();
+    });
+}
 struct Events(tokio::sync::mpsc::Sender<McpClientEvent>);
 impl McpEventHandler for Events {
     fn receive<'a>(&'a self, event: McpClientEvent) -> McpFuture<'a, ()> {
@@ -311,6 +440,41 @@ fn http_get_405_does_not_disable_normal_post_requests() {
             )
             .await;
         assert_eq!(reply.delivery, McpDelivery::ResponseReceived);
+        client.shutdown().await.unwrap();
+    });
+}
+
+#[test]
+fn completed_post_sse_does_not_claim_delivery_of_split_post_result_events() {
+    let peer = HttpPeer::start("sse", "405");
+    actix::System::new().block_on(async {
+        let (events, mut receive) = tokio::sync::mpsc::channel(8);
+        let client = client(Some(Arc::new(Events(events))), McpClientLimits::default());
+        let session = peer.open(&client).await;
+        let reply = session
+            .request(
+                "tools/call",
+                document(r#"{"name":"split-trailing"}"#),
+                Arc::new(McpCancellation::new()),
+            )
+            .await;
+        assert_eq!(reply.delivery, McpDelivery::ResponseReceived);
+        assert!(reply.result.unwrap().is_ok());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), receive.recv())
+                .await
+                .is_err(),
+            "a split frame beyond completed POST lifetime is not advertised as delivered"
+        );
+        assert!(session.ended().is_none());
+        let next = session
+            .request(
+                "tools/list",
+                document("{}"),
+                Arc::new(McpCancellation::new()),
+            )
+            .await;
+        assert_eq!(next.delivery, McpDelivery::ResponseReceived);
         client.shutdown().await.unwrap();
     });
 }
