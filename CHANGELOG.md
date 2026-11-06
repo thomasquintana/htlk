@@ -14,6 +14,8 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Fixed
 
+- The native MCP catalog-browser example accepts an explicit bounded startup timeout
+  for slower real servers while retaining separate catalog/subscription budgets.
 - MCP work inspection authorizes evidence and protection from one consistent
   snapshot. Reconciled sampling recovery uses the exact selected late result,
   labels and usage without changing the original callback reply or redispatching work.

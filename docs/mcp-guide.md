@@ -885,6 +885,13 @@ explicitly destroy test-owned remote objects; transport teardown is separate cle
 
 ## Dated interoperability findings
 
+The [2026-11-06 sibling campaign](mcp-interoperability-2026-11-06.md) exercises the
+current bidirectional client against all five sibling projects over their supported
+stdio/HTTP transports, including real browser, search, model, context, and sandbox
+operations. It records the refreshed OpenAI results, actual Chrome roots/list-change
+delivery, independent durable evidence and cleanup, upstream failures, and the bounded
+startup-timeout example improvement. Unsupported services are not counted as passes.
+
 The 2026-10-29 campaign exercised 75 advertised tools; 73 had successful normal
 cases. These observations are version-specific samples, not exhaustive support claims:
 
