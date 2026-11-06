@@ -11,7 +11,11 @@ recommendations rather than release targets. CI reports per-crate comparisons fr
 [`coverage-thresholds.json`](../tools/coverage-thresholds.json) and the branch baseline
 without failing solely on percentage or uncovered-line counts. Adequacy is judged
 alongside independent observable invariants, fault scenarios, and remaining reachable
-paths. Per-crate reporting keeps a large crate from concealing another's gaps.
+paths. Branch and region reports help identify untested decisions and error paths;
+line counts are supporting diagnostics, not substitutes for behavioral coverage.
+Improve coverage as high as reasonably practical, prioritizing meaningful independent
+invariants over tests that merely repeat implementation details. Per-crate reporting
+keeps a large crate from concealing another's gaps.
 
 The primary measurement uses Rust **1.98.0** and `cargo-llvm-cov` **0.9.1**.
 The separate branch measurement uses **nightly-2026-10-20**, since Rust branch
@@ -22,7 +26,7 @@ can assign different line/region counts to the same source.
 
 Reports cover `crates/*/src/` and the facade's `src/`. The facade currently only
 reexports APIs and has no executable lines; it is reported as **n/a**, with a
-100% floor for any future executable code. Integration tests, peers, examples,
+100% advisory baseline for any future executable code. Integration tests, peers, examples,
 dependencies and generated build output are outside the reported source paths.
 Existing crate-local unit tests share their production source files and appear
 in LLVM's file totals. All tests still execute. No production coverage-skipping
