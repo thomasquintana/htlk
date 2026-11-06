@@ -7,6 +7,10 @@ fresh discovered descriptors, the native client, and ordinary compiled graphs.
 These are measured samples for the identified revisions, not exhaustive server
 conformance or a substitute for the [protocol feature inventory](mcp-conformance.md).
 
+A [fresh complete context-tool follow-up](context-mcp-interoperability-2026-11-06.md)
+at HTLK `a8f02ef` subsequently closed the initial nine-tool gap: all 23 tools have
+normal functional outcomes over authenticated HTTP, with representative stdio cases.
+
 ## Results
 
 | Sibling / revision | Transport | Verified behavior | Remaining finding |
@@ -14,7 +18,7 @@ conformance or a substitute for the [protocol feature inventory](mcp-conformance
 | Chrome DevTools `ada7963246c0c91eae185125a57aecd13cbe0376` | Stdio | **32/32 tools** had successful real graph calls; isolated page continuity, form interaction, screenshots, recording, network/performance/filesystem operations; actual roots inquiry and tools-list-change event | Early test-targeting/path-denial cases were corrected and passed. |
 | Brave `af08e0d48e812a3966ea2211854db5f0e8eee32d` | Stdio, stateless HTTP, stateful HTTP | **6/8 tools** had positive cases on every transport, including actual web/news/video/image/context/local results; all eight had bounded negative coverage | Place Search violates its advertised output schema. Positive summarization was unavailable because searches returned no summary key. |
 | LLM `667cc010bc247bb337b6160dc1e958c2b77886ed` | Stdio, sessionful HTTP | **4/4 tools** passed on both OpenAI and OpenRouter: generation, embedding, classification, transcription; additional vision, schema-output and tool-continuation cases | Initial OpenAI 401 responses were resolved by the operator's credential update; fresh retests passed. |
-| Context `7ecad1fe51de6d57a35f1c3792fa16e2b96ddcb3` | Authenticated stdio and HTTP | **14/23 tools** exercised; real document publication, query/expansion and citation checks, three resource-template families, ACL/index/history/memory operations, purge and post-purge denial | Not all application tools/formats were attempted. Slow stdio startup needed an explicit larger client timeout. |
+| Context `7ecad1fe51de6d57a35f1c3792fa16e2b96ddcb3` | Authenticated stdio and HTTP | Initial 14-tool sample extended by a fresh **23/23 normal-tool campaign** over HTTP; representative stdio operations and all three resource-template families also passed | Tool coverage is not exhaustive format/argument coverage or all 23 tools on both transports. Startup uses an explicit finite allowance; sandbox lifetime remains an upstream limitation. |
 | Sandbox `8c649a415ba7be6aa6e15a4dc51e56dc5990eae0` | Stdio | **6 tools** succeeded, six guidance resources were read, and uninterrupted create/exec/info/list/destroy was independently verified | Statistics ended the original session uncertainly. Restarted-server destroy falsely reported removal; this is retained as an upstream cleanup defect. `destroy_all` was not invoked. |
 
 `htlk-nlp` / `htlk-nlt` is a consuming host rather than an additional MCP server,
@@ -107,6 +111,13 @@ Historical failed jobs remained failed in the evidence. Admission of an ingestio
 job was never equated with publication. The follow-up used 16 graph commands:
 14 successes and two intentional post-purge denials.
 
+The subsequent [complete-tool campaign](context-mcp-interoperability-2026-11-06.md)
+used 56 further graph commands: 49 successes and seven intentional post-purge denials,
+with no unexpected graph failures. It verified actual signed upload/finalize, URL
+ingestion and pixel-exact media output, revision-preserving reprocess, cited memory
+reconciliation/synthesis, running-job cancellation and explicit repaired-job retry.
+All 23 tools had normal cases over HTTP; five also had stdio normal cases.
+
 ## Durable evidence and cleanup
 
 - Chrome/sandbox: six offline durable reopens verified 100 saved steps and 97
@@ -114,13 +125,17 @@ job was never equated with publication. The follow-up used 16 graph commands:
 - Brave/LLM: nine initial reopens verified 68 commands; the OpenAI refresh added
   two reopens verifying 13 commands. All inspections dispatched zero provider calls.
 - Context: nine initial reopens verified 73 commands and 72 raw-result digests;
-  the OpenAI follow-up added two reopens and 16 matching raw-result digests.
+  the OpenAI follow-up added two reopens and 16 matching raw-result digests. The
+  complete-tool campaign added three reopens and 56 matching raw-result digests,
+  again with zero provider dispatches.
 - Negative cases preserve local admission errors, explicit tool errors, declared
   contract violations, protocol rejections, and uncertain effects distinctly.
 - Campaign-owned browser/server/client processes and HTTP listeners were stopped.
   Context purges completed and its isolated dependency containers and volumes were
   removed. The sandbox exception and explicitly approved manual recovery are
-  described above.
+  described above. Physical sandbox-container absence is not claimed for the
+  complete context-tool follow-up; normal provider destroy receipts were accepted
+  under that existing upstream limitation.
 - Credential files were loaded privately into child environments. Silent
   credential-value equality scans found no credential values in retained campaign
   artifacts, including databases. No credentials or private evidence are committed.
