@@ -236,7 +236,7 @@ impl SqliteStore {
                 if raw.len()>limits.max_document_bytes{return Err(StoreError::Invalid)}
                 let actor=text(row,3,&limits)?;
                 let causation=text(row,5,&limits)?;
-                let command_id=if matches!(row.get_ref(6)?,tokio_rusqlite::types::ValueRef::Null){None}else{Some(text(row,6,&limits)?)};
+                let command_id=if matches!(row.get_ref(6)?,rusqlite::types::ValueRef::Null){None}else{Some(text(row,6,&limits)?)};
                 let kind=text(row,1,&limits)?;
                 let event=JournalEvent::parse(&kind)?;
                 let sequence:i64=row.get(0)?;
@@ -410,7 +410,7 @@ impl PreparedTransition {
     // callback accounting. The caller owns the transaction and commits all facts together.
     pub fn apply(
         self,
-        tx: &tokio_rusqlite::Transaction<'_>,
+        tx: &rusqlite::Transaction<'_>,
         lease: &RunLease,
         limits: &Limits,
     ) -> Result<CommitReceipt, StoreError> {
@@ -610,11 +610,7 @@ fn decode_stored(bytes: &[u8], limits: &Limits) -> Result<Value, StoreError> {
         }
     })
 }
-fn text(
-    row: &tokio_rusqlite::Row<'_>,
-    index: usize,
-    limits: &Limits,
-) -> Result<String, StoreError> {
+fn text(row: &rusqlite::Row<'_>, index: usize, limits: &Limits) -> Result<String, StoreError> {
     let text = row
         .get_ref(index)?
         .as_str()

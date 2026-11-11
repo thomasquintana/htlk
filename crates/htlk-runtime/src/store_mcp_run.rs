@@ -206,7 +206,7 @@ pub(super) fn admit(
 }
 
 pub(super) fn reserve(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     owner: &McpOwner,
     interaction: &McpStoredInteraction,
     now: i64,
@@ -326,7 +326,7 @@ pub(super) fn reserve(
 }
 
 pub(super) fn release(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     owner: &McpOwner,
     interaction: &McpStoredInteraction,
     now: i64,
@@ -396,7 +396,7 @@ pub(super) fn release(
 }
 
 fn commit(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     owner: &McpOwner,
     id: Digest,
     action: &str,

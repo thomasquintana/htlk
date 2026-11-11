@@ -850,10 +850,8 @@ fn load_task(
         return Err(StoreError::Corrupt);
     }
     let result = match (row.get::<_, Option<String>>(12)?, row.get_ref(13)?) {
-        (None, tokio_rusqlite::rusqlite::types::ValueRef::Null) => None,
-        (Some(kind), tokio_rusqlite::rusqlite::types::ValueRef::Blob(bytes))
-            if bytes.len() <= result_capacity =>
-        {
+        (None, rusqlite::types::ValueRef::Null) => None,
+        (Some(kind), rusqlite::types::ValueRef::Blob(bytes)) if bytes.len() <= result_capacity => {
             let payload = JsonDocument::new(bytes, limits).map_err(|_| StoreError::Corrupt)?;
             if payload.digest().to_string() != row.get::<_, String>(14)? {
                 return Err(StoreError::Corrupt);

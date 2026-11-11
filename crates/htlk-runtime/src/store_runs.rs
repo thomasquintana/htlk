@@ -150,7 +150,7 @@ impl HostRequest {
         Ok(())
     }
 }
-fn normalize_time(tx: &tokio_rusqlite::Transaction<'_>, observed: i64) -> Result<i64, StoreError> {
+fn normalize_time(tx: &rusqlite::Transaction<'_>, observed: i64) -> Result<i64, StoreError> {
     timestamp(observed)?;
     let watermark: i64 = tx.query_row(
         "SELECT last_time_ms FROM runtime_identity WHERE singleton=1",
@@ -169,7 +169,7 @@ fn normalize_time(tx: &tokio_rusqlite::Transaction<'_>, observed: i64) -> Result
     Ok(now)
 }
 fn receipt(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     request: &HostRequest,
     now: i64,
     limits: &Limits,
@@ -189,7 +189,7 @@ fn receipt(
     ))
 }
 fn check_input_reference(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     id: ArtifactId,
     content: crate::identity::ValueDigest,
     labels: &crate::records::SecurityLabels,

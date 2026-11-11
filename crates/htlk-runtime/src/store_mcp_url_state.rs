@@ -15,7 +15,7 @@ use htlk_executable::{
     cbor::{self, Limits, Value},
     digest::{Digest, hash_bytes},
 };
-use tokio_rusqlite::{OptionalExtension, params, rusqlite::Connection as Db};
+use rusqlite::{Connection as Db, OptionalExtension, params};
 
 /// Exact scope supplied only after the parent transaction checks authority.
 #[derive(Clone, Copy)]
@@ -71,11 +71,11 @@ fn bounded(bytes: &[u8], limits: &Limits) -> Result<(), StoreError> {
     Ok(())
 }
 fn blob(
-    row: &tokio_rusqlite::rusqlite::Row<'_>,
+    row: &rusqlite::Row<'_>,
     column: usize,
     limits: &Limits,
 ) -> Result<Option<Vec<u8>>, StoreError> {
-    use tokio_rusqlite::rusqlite::types::ValueRef;
+    use rusqlite::types::ValueRef;
     match row.get_ref(column)? {
         ValueRef::Null => Ok(None),
         ValueRef::Blob(bytes) if bytes.len() <= limits.max_document_bytes / 8 => {

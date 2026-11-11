@@ -29,6 +29,9 @@ mod runtime;
 mod runtime_type;
 mod schema_projection;
 pub mod source;
+mod sqlite_worker;
+#[cfg(test)]
+mod sqlite_worker_tests;
 pub mod store;
 mod uri_template;
 mod verified;

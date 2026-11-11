@@ -15,15 +15,20 @@ use htlk_runtime::{
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 struct Database(PathBuf);
 impl Database {
     fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         Self(std::env::temp_dir().join(
-            format!("htlk-work-audit-{}-{}.sqlite", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()),
+            format!("htlk-work-audit-{}-{}-{}.sqlite", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)),
         ))
     }
 }
@@ -149,10 +154,10 @@ impl McpClientAuthorizer for RacingPolicy {
             owner,
         }) = self.mutation.lock().unwrap().take()
         {
-            let mut db = tokio_rusqlite::rusqlite::Connection::open(path).unwrap();
+            let mut db = rusqlite::Connection::open(path).unwrap();
             let tx = db.transaction().unwrap();
-            tx.execute("UPDATE mcp_interactions SET protection=?2,revision=revision+1 WHERE interaction_id=?1", tokio_rusqlite::params![id, protection]).unwrap();
-            tx.execute("INSERT INTO mcp_events(owner_key,interaction_id,kind,generation,timestamp_ms,payload) VALUES(?1,?2,'native_operation_outcome',1,8,?3)", tokio_rusqlite::params![owner, id, payload]).unwrap();
+            tx.execute("UPDATE mcp_interactions SET protection=?2,revision=revision+1 WHERE interaction_id=?1", rusqlite::params![id, protection]).unwrap();
+            tx.execute("INSERT INTO mcp_events(owner_key,interaction_id,kind,generation,timestamp_ms,payload) VALUES(?1,?2,'native_operation_outcome',1,8,?3)", rusqlite::params![owner, id, payload]).unwrap();
             tx.commit().unwrap();
         }
         Ok(())

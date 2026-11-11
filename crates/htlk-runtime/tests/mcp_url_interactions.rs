@@ -7,6 +7,7 @@ use htlk_executable::{
 };
 use htlk_runtime::{HostContext, mcp::client::*, records::SecurityLabels, store::*};
 pub use htlk_runtime::{failure, identity, mcp, records, store};
+use rusqlite::{Connection as Db, TransactionBehavior};
 use std::{
     path::PathBuf,
     sync::{
@@ -14,7 +15,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tokio_rusqlite::{TransactionBehavior, rusqlite::Connection as Db};
 
 // Include the actual SQL core for explicit corruption/transaction fault injection.
 #[path = "../src/store_mcp_url_state.rs"]
@@ -872,7 +872,7 @@ fn replay_cannot_extend_deadlines_lower_protection_or_replace_url_metadata() {
     );
     db.execute(
         "UPDATE mcp_url_interactions SET params=zeroblob(?1) WHERE url_id=?2",
-        tokio_rusqlite::params![Limits::default().max_document_bytes / 8 + 1, id.to_string()],
+        rusqlite::params![Limits::default().max_document_bytes / 8 + 1, id.to_string()],
     )
     .unwrap();
     assert_eq!(
@@ -991,7 +991,7 @@ fn completion_racing_a_real_callback_response_preserves_both_facts() {
     assert_eq!(saved.completed_ms, Some(70));
     db.execute(
         "UPDATE mcp_interactions SET reply=?1 WHERE interaction_id=?2",
-        tokio_rusqlite::params![
+        rusqlite::params![
             br#"{"jsonrpc":"2.0","id":"race","result":{"action":"accept"}}"#,
             callback.id.to_string()
         ],

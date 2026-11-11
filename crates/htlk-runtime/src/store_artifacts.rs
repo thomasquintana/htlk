@@ -103,7 +103,7 @@ impl SqliteStore {
 }
 
 pub(super) fn check_artifact_write(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     run: &RunId,
     write: &RecordWrite,
     limits: &Limits,
@@ -257,7 +257,7 @@ impl SqliteStore {
 }
 
 pub(super) fn check_output_publication(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     run: &RunId,
     writes: &[RecordWrite],
     limits: &Limits,

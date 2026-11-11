@@ -34,6 +34,7 @@ pub fn native_profile(
         include_bytes!("failure.rs"),
         include_bytes!("records.rs"),
         include_bytes!("store.rs"),
+        include_bytes!("sqlite_worker.rs"),
         include_bytes!("store_transitions.rs"),
         include_bytes!("store_replay.rs"),
         include_bytes!("store.sql"),
@@ -113,6 +114,7 @@ pub fn native_profile(
         include_bytes!("store_mcp_url.rs"),
         include_bytes!("store_mcp_url_state.rs"),
         include_bytes!("store_mcp_url.sql"),
+        b"rusqlite=0.41.1;features=bundled,cache,fallible_uint",
     ]);
     let regex = EngineIdentity::new(
         "htlk.native-regex".into(),
