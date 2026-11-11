@@ -28,6 +28,10 @@ jobs:
     name: Validate release and build docs
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Match PR validation and keep all test/package binaries within runner disk.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -39,6 +43,8 @@ jobs:
 
       - name: Cache Cargo data
         uses: Swatinem/rust-cache@v2
+        with:
+          key: line-tables
 
       - name: Install Node.js
         uses: actions/setup-node@v7
