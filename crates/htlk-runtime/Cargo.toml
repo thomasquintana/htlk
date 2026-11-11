@@ -27,7 +27,7 @@ ryu-js.workspace = true
 sha2.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
-tokio-rusqlite.workspace = true
+rusqlite.workspace = true
 
 [lints]
 workspace = true

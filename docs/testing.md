@@ -21,6 +21,9 @@ The primary measurement uses Rust **1.98.0** and `cargo-llvm-cov` **0.9.1**.
 The separate branch measurement uses **nightly-2026-10-20**, since Rust branch
 instrumentation is experimental. Its baselines live in
 [`coverage-branch-thresholds.json`](../tools/coverage-branch-thresholds.json).
+CI sets `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to
+`line-tables-only` so complete test and package builds fit hosted runner disks
+while retaining source-line diagnostics and full coverage instrumentation.
 Toolchain upgrades require reviewing both reports: different LLVM/Rust versions
 can assign different line/region counts to the same source.
 

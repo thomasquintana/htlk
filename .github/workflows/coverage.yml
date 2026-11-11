@@ -12,6 +12,10 @@ jobs:
     name: ${{ matrix.mode }} coverage and complete suite
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Coverage maps do not require the much larger type-level debug data.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     strategy:
       fail-fast: false
       matrix:

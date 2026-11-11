@@ -1111,8 +1111,8 @@ fn failed_terminal_write_rolls_back_work_cancellation_and_the_rpc_receipt() {
         let original = request("1","sampling/createMessage",Some("{}"));
         let (work,task) = f.accept(&original,900).await;
         f.first.begin_mcp_work(&f.owner,work.id,20,16,8).await.unwrap();
-        let independent = tokio_rusqlite::Connection::open(&f._path.0).await.unwrap();
-        independent.call(|db| db.execute_batch("CREATE TRIGGER reject_task_cancellation BEFORE UPDATE ON mcp_received_tasks WHEN NEW.status='cancelled' BEGIN SELECT RAISE(ABORT,'injected failure'); END;")).await.unwrap();
+        let independent = rusqlite::Connection::open(&f._path.0).unwrap();
+        independent.execute_batch("CREATE TRIGGER reject_task_cancellation BEFORE UPDATE ON mcp_received_tasks WHEN NEW.status='cancelled' BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
         let cancel = control("2","tasks/cancel",task.task_id());
         assert_eq!(f.second.cancel_mcp_received_task_request(&f.owner,f.session.id,f.session.server,&cancel,20).await.unwrap_err(),StoreError::Database);
         let unchanged = f.first.mcp_received_task(&f.owner,f.session.id,f.session.server,task.task_id(),20).await.unwrap();
@@ -1121,7 +1121,7 @@ fn failed_terminal_write_rolls_back_work_cancellation_and_the_rpc_receipt() {
         assert_eq!(unchanged.state,McpWorkState::Intent);
         assert!(unchanged.outstanding && unchanged.reply.is_none());
         assert!(f.first.mcp_received_task_cancel_receipt(&f.owner,f.session.id,f.session.server,&cancel,20).await.unwrap().is_none());
-        independent.call(|db| db.execute_batch("DROP TRIGGER reject_task_cancellation;")).await.unwrap();
+        independent.execute_batch("DROP TRIGGER reject_task_cancellation;").unwrap();
         let response = f.handle(&cancel).await;
         let Value::Map(result) = field(&response,"result") else {panic!()};
         assert_eq!(result.get("status"),Some(&Value::Text("cancelled".into())));
@@ -1347,8 +1347,8 @@ fn independent_outbound_claims_scope_identity_and_recheck_terminal_and_final_evi
         assert_eq!(snapshot.final_payload.unwrap().1,final_result.as_bytes());
         assert_eq!(f.first.update_mcp_remote_task(&f.owner,f.session.id,f.session.server,key,Some(state),None,20).await.unwrap_err(),StoreError::Terminal);
         assert_eq!(f.first.resolve_mcp_remote_task(&f.owner,f.session.id,f.session.server,"remote-private",20).await.unwrap_err(),StoreError::Terminal);
-        let independent=tokio_rusqlite::Connection::open(&f._path.0).await.unwrap();
-        independent.call(|db|db.execute_batch("UPDATE mcp_remote_tasks SET final_payload=x'7b7d' WHERE final_kind='result';")).await.unwrap();
+        let independent=rusqlite::Connection::open(&f._path.0).unwrap();
+        independent.execute_batch("UPDATE mcp_remote_tasks SET final_payload=x'7b7d' WHERE final_kind='result';").unwrap();
         assert_eq!(f.first.inspect_mcp_remote_task_intent(&f.owner,f.session.server,key).await.unwrap_err(),StoreError::Corrupt);
     });
 }

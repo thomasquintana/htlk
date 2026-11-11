@@ -14,6 +14,11 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Fixed
 
+- Bundled SQLite uses the patched 3.54 engine line through pinned rusqlite 0.41.1,
+  fixing RUSTSEC-2026-0459 / CVE-2026-119375. A private asynchronous connection
+  worker preserves transactional store behavior without depending on an affected
+  tokio-rusqlite release. Public embedding APIs and the private store schema are
+  unchanged; native implementation identities and executable fingerprints change.
 - The native MCP catalog-browser example accepts an explicit bounded startup timeout
   for slower real servers while retaining separate catalog/subscription budgets.
 - MCP work inspection authorizes evidence and protection from one consistent

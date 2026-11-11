@@ -93,7 +93,7 @@ impl SqliteStore {
     }
 }
 pub(super) fn expired(
-    db: &tokio_rusqlite::rusqlite::Connection,
+    db: &rusqlite::Connection,
     id: ArtifactId,
     limits: &Limits,
 ) -> Result<Option<i64>, StoreError> {
@@ -127,7 +127,7 @@ pub(super) fn expired(
     Ok(Some(*time))
 }
 fn terminal_time(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     run: &RunId,
     limits: &Limits,
 ) -> Result<i64, StoreError> {
@@ -158,7 +158,7 @@ fn terminal_time(
     Err(StoreError::Corrupt)
 }
 fn protected_until(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     run: &RunId,
     audit: i64,
     limits: &Limits,
@@ -194,7 +194,7 @@ fn references(value: &Value, id: &str) -> bool {
 }
 
 pub(super) fn check_references(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     writes: &[RecordWrite],
     limits: &Limits,
 ) -> Result<(), StoreError> {

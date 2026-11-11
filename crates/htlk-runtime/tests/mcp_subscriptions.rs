@@ -724,15 +724,12 @@ fn independent_authority_checks_reject_cross_owner_server_and_corrupt_epoch_bind
         assert_ne!(alice_record.id(), bob_record.id());
         // Mutate the independent SQLite boundary, preserving foreign keys and a
         // valid session identity. The read must reject a cross-owner epoch binding.
-        let db = tokio_rusqlite::Connection::open(&f.path).await.unwrap();
+        let db = rusqlite::Connection::open(&f.path).unwrap();
         let id = alice_record.id().to_string();
-        db.call(move |db| {
-            db.execute(
-                "UPDATE mcp_resource_subscriptions SET session_id=?2 WHERE subscription_id=?1",
-                tokio_rusqlite::params![id, bob_epoch.id.to_string()],
-            )
-        })
-        .await
+        db.execute(
+            "UPDATE mcp_resource_subscriptions SET session_id=?2 WHERE subscription_id=?1",
+            rusqlite::params![id, bob_epoch.id.to_string()],
+        )
         .unwrap();
         assert!(matches!(
             f.store

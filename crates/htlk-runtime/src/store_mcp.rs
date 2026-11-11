@@ -7,7 +7,7 @@ use crate::{
     records::SecurityLabels,
 };
 use htlk_executable::{JsonDocument, digest::hash_bytes};
-use tokio_rusqlite::rusqlite::Connection as Db;
+use rusqlite::Connection as Db;
 #[path = "store_mcp_run.rs"]
 mod run;
 #[path = "store_mcp_tasks.rs"]
@@ -1573,7 +1573,7 @@ fn late_identity(
     )
 }
 fn late_reply(
-    row: &tokio_rusqlite::rusqlite::Row<'_>,
+    row: &rusqlite::Row<'_>,
     id: Digest,
     request: &[u8],
     limits: &Limits,
@@ -1778,15 +1778,13 @@ fn interaction(
     Ok(Some(record))
 }
 fn bounded_blob(
-    row: &tokio_rusqlite::rusqlite::Row<'_>,
+    row: &rusqlite::Row<'_>,
     index: usize,
     limits: &Limits,
 ) -> Result<Option<Vec<u8>>, StoreError> {
     match row.get_ref(index)? {
-        tokio_rusqlite::types::ValueRef::Null => Ok(None),
-        tokio_rusqlite::types::ValueRef::Blob(bytes)
-            if bytes.len() <= limits.max_document_bytes / 8 =>
-        {
+        rusqlite::types::ValueRef::Null => Ok(None),
+        rusqlite::types::ValueRef::Blob(bytes) if bytes.len() <= limits.max_document_bytes / 8 => {
             Ok(Some(bytes.to_vec()))
         }
         _ => Err(StoreError::Corrupt),

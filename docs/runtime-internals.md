@@ -7,12 +7,17 @@ records are not an additional supported wire format.
 
 ## Storage compatibility
 
-The SQLite application ID is `0x48544c4b`; the private schema version is **12**.
-An empty database initializes in one immediate transaction. Versions 1–11, future
+The SQLite application ID is `0x48544c4b`; the private schema version is **13**.
+An empty database initializes in one immediate transaction. Versions 1–12, future
 versions, foreign application IDs, and nonempty unrecognized databases fail without
 relabeling or deletion. There is no automatic migration or legacy binding decoder.
 Matching `0.1` format labels do not permit changed interpretation of saved effects.
 File stores require WAL, synchronous FULL, foreign keys, and bounded busy timeout.
+
+A private dedicated thread owns each SQLite connection. Cloned store handles share
+its FIFO operation queue. Dropping a caller future does not cancel queued storage
+work; explicit close drains earlier operations and closes all clones. Independent
+connections continue to arbitrate authority through immediate SQLite transactions.
 
 For an intentionally disposable development store: stop its owners, reconcile any
 test-owned external resources from retained evidence, identify the exact database

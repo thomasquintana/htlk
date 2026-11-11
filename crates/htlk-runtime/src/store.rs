@@ -6,13 +6,14 @@ use crate::{
     failure::FailureCode,
     identity::{RunId, ScopeInstanceId},
     records::RunStatus,
+    sqlite_worker::{Connection, Error as WorkerError},
 };
 use htlk_executable::{
     cbor::{self, Limits, Value},
     digest::Digest,
 };
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::{fmt, path::Path, time::Duration};
-use tokio_rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 const SCHEMA_VERSION: i64 = 13;
 const APPLICATION_ID: i64 = 0x48544c4b;
@@ -349,10 +350,7 @@ pub struct RunHeader {
     pub last_time_ms: i64,
 }
 
-fn load_header(
-    db: &tokio_rusqlite::rusqlite::Connection,
-    run: &RunId,
-) -> Result<RunHeader, StoreError> {
+fn load_header(db: &rusqlite::Connection, run: &RunId) -> Result<RunHeader, StoreError> {
     let row = db.query_row("SELECT fingerprint,root_scope,status,sequence,owner,fence,lease_expires_ms,last_time_ms FROM runs WHERE run_id=?1", [run.as_str()], |r| {
         Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,i64>(5)?,r.get::<_,Option<i64>>(6)?,r.get::<_,i64>(7)?))
     }).optional()?.ok_or(StoreError::Missing)?;
@@ -431,7 +429,7 @@ struct EventMeta<'a> {
     command: Option<&'a str>,
 }
 fn append_event(
-    tx: &tokio_rusqlite::Transaction<'_>,
+    tx: &rusqlite::Transaction<'_>,
     run: &str,
     sequence: i64,
     event: EventMeta<'_>,
@@ -512,9 +510,9 @@ impl StoreError {
             _ => FailureCode::Invariant,
         }
     }
-    fn from_worker(error: tokio_rusqlite::Error<Self>) -> Self {
+    fn from_worker(error: WorkerError<Self>) -> Self {
         match error {
-            tokio_rusqlite::Error::Error(error) => error,
+            WorkerError::Error(error) => error,
             _ => Self::Closed,
         }
     }
@@ -539,9 +537,17 @@ impl fmt::Display for StoreError {
     }
 }
 impl std::error::Error for StoreError {}
-impl From<tokio_rusqlite::rusqlite::Error> for StoreError {
-    fn from(_: tokio_rusqlite::rusqlite::Error) -> Self {
+impl From<rusqlite::Error> for StoreError {
+    fn from(_: rusqlite::Error) -> Self {
         Self::Database
+    }
+}
+impl From<WorkerError<rusqlite::Error>> for StoreError {
+    fn from(error: WorkerError<rusqlite::Error>) -> Self {
+        match error {
+            WorkerError::Error(_) => Self::Database,
+            WorkerError::Closed => Self::Closed,
+        }
     }
 }
 impl From<cbor::Error> for StoreError {

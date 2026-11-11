@@ -29,8 +29,10 @@ ryu-js = "=1.0.3"
 serde = "=1.0.229"
 serde_json = { version = "=1.0.151", features = ["float_roundtrip", "unbounded_depth"] }
 sha2 = "=0.10.9"
-tokio-rusqlite = { version = "0.7.0", default-features = false, features = [
+rusqlite = { version = "=0.41.1", default-features = false, features = [
     "bundled",
+    "cache",
+    "fallible_uint",
 ] }
 url = "=2.5.8"
 

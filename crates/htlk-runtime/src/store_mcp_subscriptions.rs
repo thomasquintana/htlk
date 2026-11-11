@@ -519,9 +519,9 @@ fn validate_keys(uri: &str, subscriber: &str, limits: &Limits) -> Result<(), Sto
     )?;
     Ok(())
 }
-fn worker_error(error: tokio_rusqlite::Error<StoreError>) -> StoreError {
+fn worker_error(error: crate::sqlite_worker::Error<StoreError>) -> StoreError {
     match error {
-        tokio_rusqlite::Error::Error(error) => error,
+        crate::sqlite_worker::Error::Error(error) => error,
         _ => StoreError::Closed,
     }
 }
