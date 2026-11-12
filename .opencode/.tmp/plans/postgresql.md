@@ -51,7 +51,7 @@ Status: complete (2026-11-11).
 
 ### Task 1 — Storage contract, inventory, and concrete design
 
-Status: pending.
+Status: complete (2026-11-11).
 
 Inventory every storage operation with atomic boundary, reads, locks, writes,
 results/errors, and observable tests. Cover graph/provenance; run identity/time and
@@ -65,6 +65,21 @@ Finalize driver, SQL execution boundaries, pooling/worker integration, schema
 identity, opaque identity mapping, error classification, lock order, and retries.
 
 Gate: every operation has an implementation route and an independent invariant.
+
+Concrete design decision: retain one set of domain transaction bodies behind a
+private typed relational interface. SQLite continues using patched rusqlite;
+PostgreSQL uses a synchronous native driver on a bounded dedicated worker, so the
+embedding APIs remain asynchronous without blocking actors. This supersedes the
+SQLx/pool proposal: an explicit finite worker queue and connection-per-handle are
+the resource boundary, and independent handles supply independent connections.
+PostgreSQL operations use one database/schema-scoped transaction writer gate for
+the initial qualified backend. Scoped parallel writers are a subsequent measured
+optimization, not a prerequisite to equivalent SQLite concurrency semantics.
+Use native PG DDL and reviewed dialect/binding variants, not duplicated domain
+reducers. PostgreSQL arbitrary string keys use raw UTF-8 BYTEA, digest-sized
+generated index keys, and exact-preimage collision guards; bytewise range queries
+retain original cursor order. Snapshot-consistent operations and nested domain
+transaction markers must retain rollback/commit behavior.
 
 ### Task 2 — Backend-neutral storage and unchanged SQLite contracts
 
@@ -225,3 +240,14 @@ whole and clearly records behavior, tests, compatibility, operational limits.
 
 - Task 0: complete. Next: inspect main's private worker and finalize inventory and
   concrete architecture before creating the storage façade.
+- Task 0 commit: 0b02b16. Re-read plan before task 1. Added portable equivalence
+  requirements and domain atomicity/invariant inventory. Latest main already
+  corrects the stale SQLite layout documentation. Reviewing a shared typed
+  relational execution seam to retain the already-audited transaction bodies and
+  private worker instead of duplicating domain state machines.
+- Task 1: inventoried all domains and compound boundaries in runtime-internals;
+  added portable equivalence requirements in runtime-spec. Concrete worker/driver,
+  writer-gate and opaque-key design above recorded before implementation. Next:
+  build the typed interface and façade. Validation: node tools/validate-docs.mjs
+  passed (30 docs, 213 links); node specs/validate-specs.mjs passed. No Rust examples,
+  embedded assets, or doctests were changed by this contract-only task.

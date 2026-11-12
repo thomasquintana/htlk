@@ -31,6 +31,35 @@ authentication, value checks, and application authorization. `StoreConfig` bound
 codec metadata, page sizes, and busy timeout. Structured errors omit database paths,
 submitted values, and raw SQLite diagnostics.
 
+### Storage operation boundaries
+
+Backend implementations preserve the following compound operations. Preparation
+and representation checking do not replace rechecking authoritative state inside
+the committing transaction. The runtime specification owns
+[backend equivalence](../specs/runtime-spec.md#141-storage-backend-equivalence).
+
+| Domain | Facts that share an atomic boundary | Independent observable invariant |
+| --- | --- | --- |
+| Registration | Immutable envelope and detached provenance | Failure publishing provenance leaves no partial registration |
+| Run initialization | Run header, initial records/artifacts, creation/initialization journal, outbox, host receipt | Duplicate principal/method/target/key creates one run; changed arguments conflict |
+| Authority | Owner, fence, expiry, committed time, ownership journal/outbox | Independent coordinators cannot simultaneously acquire a live run |
+| Transitions | Revisions/finality, root/outcome, command receipt, journal/outbox | One CAS winner; rollback publishes no partial output |
+| Terminal receipts | Final reply, terminal-only journal entry, outbox | A receipt cannot revive a terminal run |
+| Artifacts | Accepted metadata, complete output manifest, producer uniqueness | Staging is not publication; one producer slot has one immutable identity |
+| Retention | Reference checks, expiry tombstone, journal/outbox, collection decisions | New aliases cannot race expiry into accepted dangling references |
+| MCP work | Owner/epoch/interaction authority, counters, claim/reply, receipts/events | Quotas cannot overspend; an existing intent cannot authorize redispatch |
+| Run callbacks | MCP facts plus ancestor reservations and ordinary run transitions | A failed compound commit changes neither accounting domain |
+| URL interactions | Protected parameters/error links, consent receipt, reply protection | Consent and server completion remain separate immutable facts |
+| Subscriptions | Desired consumers, operation claim/outcome, revision and gap | Concurrent consumers produce one authoritative subscription operation |
+| Received tasks | Task state/result, underlying interaction facts, cancel receipt | Cancellation does not release uncertain underlying work |
+| Remote tasks | Intent, acceptance, snapshots, final/create/retrieval evidence | Retrieval failure cannot invent an execution outcome |
+
+Record, journal and evidence pages are bounded by rows and aggregate retained
+bytes. Multi-query reads requiring a coherent view use a database snapshot. Lazy
+expression/source decisions must not become eager database reads when adapting a
+backend. Recovery rebuilds derived indexes from authoritative metadata, and replay
+does not acquire provider capabilities.
+
 ### Host MCP interaction storage
 
 The store includes owner-scoped MCP leases, epochs, interactions, receipts, journal
