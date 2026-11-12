@@ -493,11 +493,20 @@ impl Connection {
         };
         let _ = behavior;
         self.execute_batch(begin)?;
+        let inspection_position_before = match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(db) => db.inspection_position.get(),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => None,
+        };
         Ok(Transaction {
             db: self,
             commit,
             rollback,
             finished: false,
+            #[cfg(feature = "sqlite")]
+            inspection_position: std::cell::Cell::new(None),
+            inspection_position_before,
         })
     }
     #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
@@ -551,8 +560,29 @@ pub(crate) struct Transaction<'a> {
     commit: &'static str,
     rollback: &'static str,
     finished: bool,
+    #[cfg(any(feature = "sqlite", not(feature = "postgres")))]
+    inspection_position: std::cell::Cell<Option<i64>>,
+    inspection_position_before: Option<i64>,
 }
 impl Transaction<'_> {
+    // PostgreSQL domain transactions are savepoints inside one worker-operation
+    // transaction: all released savepoints must publish the same physical pin.
+    pub(crate) fn inspection_position(&self) -> Option<i64> {
+        match self.db {
+            #[cfg(feature = "postgres")]
+            Connection::Postgres(db) => db.inspection_position.get(),
+            #[cfg(any(feature = "sqlite", not(feature = "postgres")))]
+            _ => self.inspection_position.get(),
+        }
+    }
+    pub(crate) fn set_inspection_position(&self, position: Option<i64>) {
+        match self.db {
+            #[cfg(feature = "postgres")]
+            Connection::Postgres(db) => db.inspection_position.set(position),
+            #[cfg(any(feature = "sqlite", not(feature = "postgres")))]
+            _ => self.inspection_position.set(position),
+        }
+    }
     pub(crate) fn commit(mut self) -> Result<()> {
         self.db.execute_batch(self.commit)?;
         self.finished = true;
@@ -569,6 +599,7 @@ impl Drop for Transaction<'_> {
     fn drop(&mut self) {
         if !self.finished {
             let _ = self.db.execute_batch(self.rollback);
+            self.set_inspection_position(self.inspection_position_before);
         }
     }
 }

@@ -1,4 +1,4 @@
--- Native PostgreSQL layout 1. Canonical CBOR remains authoritative.
+-- Native PostgreSQL layout 2. Canonical CBOR remains authoritative.
 -- Arbitrary UTF-8 identities are BYTEA (including NUL). Generated SHA-256 keys
 -- bound B-tree entries without narrowing admitted identity sizes. The preimage
 -- registry rejects collisions before any ON CONFLICT operation can conflate keys.
@@ -98,6 +98,67 @@ CREATE TABLE records (
 );
 CREATE TRIGGER records_keys BEFORE INSERT OR UPDATE OF run_id,record_id ON records
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('run_id','record_id');
+
+-- Journal-transaction historical projections; never recovery authority or a
+-- retention root. Ordinals keep paging indexes bounded for arbitrary UTF-8 IDs.
+CREATE TABLE inspection_clock (
+    singleton BIGINT PRIMARY KEY CHECK(singleton=1),
+    position BIGINT NOT NULL CHECK(position>=0)
+);
+INSERT INTO inspection_clock VALUES(1,0);
+CREATE TABLE inspection_commits (
+    position BIGINT PRIMARY KEY,
+    run_upper BIGINT NOT NULL,
+    record_upper BIGINT NOT NULL,
+    change_upper BIGINT NOT NULL
+);
+INSERT INTO inspection_commits VALUES(0,0,0,0);
+CREATE TABLE inspection_runs (
+    run_number BIGSERIAL PRIMARY KEY,
+    run_id BYTEA NOT NULL,
+    run_key BYTEA GENERATED ALWAYS AS (sha256(run_id)) STORED UNIQUE REFERENCES runs(run_key),
+    created_position BIGINT NOT NULL
+);
+CREATE TABLE inspection_headers (
+    run_number BIGINT NOT NULL REFERENCES inspection_runs(run_number),
+    position BIGINT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    root_scope TEXT NOT NULL,
+    status TEXT NOT NULL,
+    sequence BIGINT NOT NULL,
+    owner BYTEA,
+    fence BIGINT NOT NULL,
+    lease_expires_ms BIGINT,
+    last_time_ms BIGINT NOT NULL,
+    PRIMARY KEY(run_number,position)
+);
+CREATE TABLE inspection_record_keys (
+    record_number BIGSERIAL PRIMARY KEY,
+    run_id BYTEA NOT NULL,
+    run_key BYTEA GENERATED ALWAYS AS (sha256(run_id)) STORED REFERENCES runs(run_key),
+    family TEXT NOT NULL,
+    record_id BYTEA NOT NULL,
+    record_key BYTEA GENERATED ALWAYS AS (sha256(record_id)) STORED,
+    created_position BIGINT NOT NULL,
+    UNIQUE(run_key,family,record_key)
+);
+CREATE INDEX inspection_record_page ON inspection_record_keys(run_key,family,record_number);
+CREATE TABLE inspection_records (
+    record_number BIGINT NOT NULL REFERENCES inspection_record_keys(record_number),
+    position BIGINT NOT NULL,
+    revision BIGINT NOT NULL,
+    final BIGINT NOT NULL,
+    payload BYTEA NOT NULL,
+    PRIMARY KEY(record_number,position)
+);
+CREATE TABLE inspection_changes (
+    change_id BIGSERIAL PRIMARY KEY,
+    position BIGINT NOT NULL,
+    run_number BIGINT NOT NULL REFERENCES inspection_runs(run_number),
+    record_number BIGINT NOT NULL CHECK(record_number>=0),
+    sequence BIGINT NOT NULL,
+    UNIQUE(position,run_number,record_number)
+);
 CREATE UNIQUE INDEX accepted_artifact_identity ON records(record_key) WHERE family='artifact';
 CREATE INDEX records_by_identity ON records(family,record_key);
 CREATE TABLE commands (

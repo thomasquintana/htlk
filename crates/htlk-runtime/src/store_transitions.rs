@@ -220,14 +220,23 @@ impl SqliteStore {
         after: i64,
         page_size: usize,
     ) -> Result<Vec<JournalEntry>, StoreError> {
+        self.journal_until(run, after, i64::MAX, page_size).await
+    }
+    pub(super) async fn journal_until(
+        &self,
+        run: &RunId,
+        after: i64,
+        through: i64,
+        page_size: usize,
+    ) -> Result<Vec<JournalEntry>, StoreError> {
         let count = self.page_size(page_size)?;
         if after < 0 {
             return Err(StoreError::Invalid);
         }
         let (run, limits) = (run.clone(), self.config.limits.clone());
         self.connection.call(move |db|->Result<Vec<JournalEntry>,StoreError>{
-            let mut statement=db.prepare("SELECT sequence,event_type,record_version,actor,timestamp_ms,causation,command_id,payload FROM journal WHERE run_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3")?;
-            let mut rows=statement.query(params![run.as_str(),after,count])?;
+            let mut statement=db.prepare("SELECT sequence,event_type,record_version,actor,timestamp_ms,causation,command_id,payload FROM journal WHERE run_id=?1 AND sequence>?2 AND sequence<=?4 ORDER BY sequence LIMIT ?3")?;
+            let mut rows=statement.query(params![run.as_str(),after,count,through])?;
             let mut result=Vec::new();
             let mut bytes=0usize;
             while let Some(row)=rows.next()? {
@@ -601,7 +610,7 @@ pub(super) fn command_digest(
     )
     .map_err(|_| StoreError::Invalid)
 }
-fn decode_stored(bytes: &[u8], limits: &Limits) -> Result<Value, StoreError> {
+pub(super) fn decode_stored(bytes: &[u8], limits: &Limits) -> Result<Value, StoreError> {
     cbor::decode(bytes, limits).map_err(|e| {
         if matches!(e.kind(), cbor::ErrorKind::LimitExceeded { .. }) {
             StoreError::Invalid
@@ -610,7 +619,11 @@ fn decode_stored(bytes: &[u8], limits: &Limits) -> Result<Value, StoreError> {
         }
     })
 }
-fn text(row: &rusqlite::Row<'_>, index: usize, limits: &Limits) -> Result<String, StoreError> {
+pub(super) fn text(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    limits: &Limits,
+) -> Result<String, StoreError> {
     let text = row
         .get_ref(index)?
         .as_str()

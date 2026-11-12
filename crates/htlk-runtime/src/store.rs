@@ -16,7 +16,7 @@ use htlk_executable::{
 };
 use std::{fmt, path::Path, time::Duration};
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 const APPLICATION_ID: i64 = 0x48544c4b;
 const SCHEMA: &str = include_str!("store.sql");
 const REGISTRATION_SCHEMA: &str = include_str!("store_registration.sql");
@@ -28,6 +28,13 @@ const MCP_URL_SCHEMA: &str = include_str!("store_mcp_url.sql");
 const MCP_SUBSCRIPTIONS_SCHEMA: &str = include_str!("store_mcp_subscriptions.sql");
 const MCP_TASKS_SCHEMA: &str = include_str!("store_mcp_tasks.sql");
 const MCP_REMOTE_TASKS_SCHEMA: &str = include_str!("store_mcp_remote_tasks.sql");
+const INSPECTION_SCHEMA: &str = include_str!("store_inspection.sql");
+#[path = "store_inspection.rs"]
+mod inspection;
+pub use inspection::{
+    HistoricalRecord, InspectionArtifactState, InspectionChange, InspectionRunFilter,
+    InspectionRunPage, InspectionSnapshot, StorePosition,
+};
 #[path = "store_mcp.rs"]
 mod mcp;
 pub use mcp::{
@@ -71,7 +78,8 @@ pub struct StoreConfig {
     /// How long a competing SQLite writer may delay an operation. PostgreSQL uses
     /// its separate `PostgresConfig::lock_timeout` setting.
     pub busy_timeout: Duration,
-    /// Maximum rows returned by a single journal or outbox read.
+    /// Maximum rows returned by a journal, outbox or inspection read; filtered
+    /// inspection run pages also bound the number of candidate headers examined.
     pub max_page_size: usize,
 }
 impl Default for StoreConfig {
@@ -157,6 +165,7 @@ impl Store {
                     tx.execute_batch(MCP_SUBSCRIPTIONS_SCHEMA)?;
                     tx.execute_batch(MCP_TASKS_SCHEMA)?;
                     tx.execute_batch(MCP_REMOTE_TASKS_SCHEMA)?;
+                    tx.execute_batch(INSPECTION_SCHEMA)?;
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
                     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 } else if application != APPLICATION_ID || version != SCHEMA_VERSION {
@@ -460,6 +469,7 @@ fn append_event(
         "INSERT INTO outbox(run_id,sequence) VALUES(?1,?2)",
         params![run, sequence],
     )?;
+    inspection::project(tx, run, event.kind, payload, limits)?;
     Ok(())
 }
 fn event_value(run: &str, sequence: i64, event: &EventMeta<'_>, payload: &[u8]) -> Value {
@@ -1328,14 +1338,17 @@ mod tests {
                 let tx=db.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 tx.execute("INSERT INTO runs(run_id,fingerprint,root_scope,status,sequence,fence,last_time_ms) VALUES(?1,?2,?3,'running',1,0,0)",params![legacy.run_id.as_str(),legacy.fingerprint.to_string(),legacy.root_scope.to_string()])?;
                 let payload=cbor::encode(&Value::Array(vec![Value::Text(legacy.fingerprint.to_string()),Value::Text(legacy.root_scope.to_string())]),&Limits::default())?;
-                append_event(&tx,legacy.run_id.as_str(),1,EventMeta{kind:"run_created",actor:"principal",timestamp:0,causation:"start-request",command:None},&payload,&Limits::default())?;
+                // Construct the old minimal layout directly: current append_event
+                // also maintains projections that this legacy store must not have.
+                tx.execute("INSERT INTO journal(run_id,sequence,event_type,record_version,actor,timestamp_ms,causation,payload) VALUES(?1,1,'run_created','0.1','principal',0,'start-request',?2)",params![legacy.run_id.as_str(),payload])?;
+                tx.execute("INSERT INTO outbox(run_id,sequence) VALUES(?1,1)",[legacy.run_id.as_str()])?;
                 tx.commit()?;Ok(())
             }).await.unwrap();
             assert!(matches!(SqliteStore::open(temporary.path(),StoreConfig::default()).await, Err(StoreError::Schema)));
             let retained=raw.call(|db|->Result<_,StoreError>{
                 let version=db.pragma_query_value(None,"user_version",|r|r.get::<_,i64>(0))?;
                 let header=db.query_row("SELECT root_scope,status,sequence,fence FROM runs WHERE run_id='legacy'",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?)))?;
-                let migrated=db.query_row("SELECT count(*) FROM sqlite_schema WHERE name='graphs'",[],|r|r.get::<_,i64>(0))?;
+                let migrated=db.query_row("SELECT count(*) FROM sqlite_schema WHERE name='graphs' OR name LIKE 'inspection_%'",[],|r|r.get::<_,i64>(0))?;
                 let events=db.query_row("SELECT count(*) FROM journal",[],|r|r.get::<_,i64>(0))?;
                 Ok((version,header,migrated,events))
             }).await.unwrap();
