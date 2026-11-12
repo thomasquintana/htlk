@@ -12,6 +12,8 @@ pub(crate) enum Error {
     #[cfg(feature = "postgres")]
     Schema,
     #[cfg(feature = "postgres")]
+    Corrupt,
+    #[cfg(feature = "postgres")]
     CommitUnknown,
 }
 pub(crate) type Result<T> = std::result::Result<T, Error>;
@@ -230,9 +232,46 @@ impl Row<'_> {
     }
 }
 
+#[cfg(feature = "sqlite")]
+pub(crate) struct SqliteConnection {
+    inner: rusqlite::Connection,
+    max_field_bytes: usize,
+}
+#[cfg(feature = "sqlite")]
+impl SqliteConnection {
+    fn new(inner: rusqlite::Connection) -> Self {
+        Self {
+            inner,
+            max_field_bytes: usize::MAX,
+        }
+    }
+    fn close(self) -> std::result::Result<(), (Box<Self>, Error)> {
+        let Self {
+            inner,
+            max_field_bytes,
+        } = self;
+        inner.close().map_err(|(inner, error)| {
+            (
+                Box::new(Self {
+                    inner,
+                    max_field_bytes,
+                }),
+                error.into(),
+            )
+        })
+    }
+}
+#[cfg(feature = "sqlite")]
+impl Deref for SqliteConnection {
+    type Target = rusqlite::Connection;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 pub(crate) enum Connection {
     #[cfg(feature = "sqlite")]
-    Sqlite(Box<rusqlite::Connection>),
+    Sqlite(Box<SqliteConnection>),
     #[cfg(feature = "postgres")]
     Postgres(Box<crate::store_postgres::Database>),
     #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
@@ -248,7 +287,9 @@ impl Connection {
     pub(crate) fn open(path: impl AsRef<Path>) -> Result<Self> {
         #[cfg(feature = "sqlite")]
         {
-            Ok(Self::Sqlite(Box::new(rusqlite::Connection::open(path)?)))
+            Ok(Self::Sqlite(Box::new(SqliteConnection::new(
+                rusqlite::Connection::open(path)?,
+            ))))
         }
         #[cfg(not(feature = "sqlite"))]
         {
@@ -259,9 +300,9 @@ impl Connection {
     pub(crate) fn open_in_memory() -> Result<Self> {
         #[cfg(feature = "sqlite")]
         {
-            Ok(Self::Sqlite(Box::new(
+            Ok(Self::Sqlite(Box::new(SqliteConnection::new(
                 rusqlite::Connection::open_in_memory()?,
-            )))
+            ))))
         }
         #[cfg(not(feature = "sqlite"))]
         {
@@ -273,7 +314,7 @@ impl Connection {
             #[cfg(feature = "sqlite")]
             Self::Sqlite(db) => (*db)
                 .close()
-                .map_err(|(db, error)| (Self::Sqlite(Box::new(db)), error.into())),
+                .map_err(|(db, error)| (Self::Sqlite(db), error)),
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => Ok(()),
             #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
@@ -291,6 +332,20 @@ impl Connection {
             Self::Disabled => {
                 let _ = timeout;
                 Err(Error::Invalid)
+            }
+        }
+    }
+    pub(crate) fn set_max_field_bytes(&mut self, maximum: usize) {
+        match self {
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(db) => db.max_field_bytes = maximum,
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => {
+                let _ = maximum;
+            }
+            #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+            Self::Disabled => {
+                let _ = maximum;
             }
         }
     }
@@ -365,7 +420,7 @@ impl Connection {
     pub(crate) fn prepare(&self, sql: &str) -> Result<Statement<'_>> {
         match self {
             #[cfg(feature = "sqlite")]
-            Self::Sqlite(db) => Ok(Statement::Sqlite(db.prepare(sql)?)),
+            Self::Sqlite(db) => Ok(Statement::Sqlite(db.prepare(sql)?, db.max_field_bytes)),
             #[cfg(feature = "postgres")]
             Self::Postgres(db) => Ok(Statement::Postgres {
                 db,
@@ -508,7 +563,7 @@ impl Drop for Transaction<'_> {
 
 pub(crate) enum Statement<'a> {
     #[cfg(feature = "sqlite")]
-    Sqlite(rusqlite::Statement<'a>),
+    Sqlite(rusqlite::Statement<'a>, usize),
     #[cfg(feature = "postgres")]
     Postgres {
         db: &'a crate::store_postgres::Database,
@@ -522,9 +577,12 @@ impl Statement<'_> {
         let values = params.values()?;
         let inner = match self {
             #[cfg(feature = "sqlite")]
-            Self::Sqlite(statement) => RowSource::Sqlite(statement.query(
-                rusqlite::params_from_iter(values.into_iter().map(sqlite_value)),
-            )?),
+            Self::Sqlite(statement, maximum) => RowSource::Sqlite(
+                statement.query(rusqlite::params_from_iter(
+                    values.into_iter().map(sqlite_value),
+                ))?,
+                *maximum,
+            ),
             #[cfg(feature = "postgres")]
             Self::Postgres { db, sql } => RowSource::Postgres(db.rows(sql, values)?),
             #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
@@ -551,7 +609,7 @@ impl Statement<'_> {
 }
 enum RowSource<'a> {
     #[cfg(feature = "sqlite")]
-    Sqlite(rusqlite::Rows<'a>),
+    Sqlite(rusqlite::Rows<'a>, usize),
     #[cfg(feature = "postgres")]
     Postgres(crate::store_postgres::Cursor<'a>),
     #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
@@ -565,13 +623,17 @@ impl Rows<'_> {
     pub(crate) fn next(&mut self) -> Result<Option<&Row<'_>>> {
         let values = match &mut self.inner {
             #[cfg(feature = "sqlite")]
-            RowSource::Sqlite(rows) => match rows.next()? {
+            RowSource::Sqlite(rows, maximum) => match rows.next()? {
                 None => None,
                 Some(row) => Some(
                     (0..row.as_ref().column_count())
                         .map(|index| {
                             use rusqlite::types::ValueRef;
-                            Ok(match row.get_ref(index)? {
+                            let value = row.get_ref(index)?;
+                            if matches!(value, ValueRef::Text(bytes) | ValueRef::Blob(bytes) if bytes.len() > *maximum) {
+                                return Err(Error::Invalid);
+                            }
+                            Ok(match value {
                                 ValueRef::Null => Value::Null,
                                 ValueRef::Integer(value) => Value::Integer(value),
                                 ValueRef::Real(value) => Value::Real(value),

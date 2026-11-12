@@ -4,16 +4,15 @@ use crate::{
     sqlite_worker,
     store::{Store, StoreConfig, StoreError},
     store_db::{self, Error, Value},
+    store_postgres_client::{Client, Error as ClientError},
 };
-use postgres::{
-    Client,
-    types::{ToSql, Type},
-};
+use postgres::types::{ToSql, Type};
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
     fmt,
     ops::Deref,
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -110,8 +109,10 @@ impl PostgresStore {
     ) -> Result<Self, StoreError> {
         settings.validate()?;
         super::store::validate_config(&config)?;
+        let maximum =
+            i64::try_from(config.limits.max_document_bytes).map_err(|_| StoreError::Invalid)?;
         let connection = sqlite_worker::Connection::start(move || {
-            Database::connect(settings, initialize)
+            Database::connect(settings, initialize, maximum)
                 .map(|db| store_db::Connection::Postgres(Box::new(db)))
         })
         .await?;
@@ -146,10 +147,15 @@ pub(crate) struct Database {
     broken: Cell<bool>,
     cursor_failed: Cell<bool>,
     statements: RefCell<BTreeMap<String, postgres::Statement>>,
+    maximum_field_bytes: i64,
 }
 impl Database {
-    fn connect(settings: PostgresConfig, initialize: bool) -> store_db::Result<Self> {
-        let mut options: postgres::Config =
+    fn connect(
+        settings: PostgresConfig,
+        initialize: bool,
+        maximum_field_bytes: i64,
+    ) -> store_db::Result<Self> {
+        let mut options: tokio_postgres::Config =
             settings.connection.parse().map_err(|_| Error::Invalid)?;
         options.connect_timeout(settings.connect_timeout);
         if options.get_ssl_mode() != postgres::config::SslMode::Disable {
@@ -158,9 +164,14 @@ impl Database {
         let tls = native_tls::TlsConnector::builder()
             .build()
             .map_err(|_| Error::Database)?;
-        let mut client = options
-            .connect(postgres_native_tls::MakeTlsConnector::new(tls))
-            .map_err(pg_error)?;
+        let client = Client::connect(
+            options,
+            postgres_native_tls::MakeTlsConnector::new(tls),
+            settings.connect_timeout,
+            settings.statement_timeout,
+        )
+        .map_err(pg_error)?;
+        client.set_deadline(Some(Instant::now() + settings.operation_timeout));
         let version: i32 = client
             .query_one("SELECT current_setting('server_version_num')::int", &[])
             .map_err(pg_error)?
@@ -219,14 +230,18 @@ impl Database {
             client.batch_execute(SCHEMA).map_err(pg_error)?;
             client
                 .execute(
-                    "INSERT INTO htlk_metadata VALUES(1,$1,$2)",
-                    &[&APPLICATION_ID, &SCHEMA_VERSION],
+                    "INSERT INTO htlk_metadata VALUES(1,$1,$2,$3)",
+                    &[
+                        &APPLICATION_ID,
+                        &SCHEMA_VERSION,
+                        &htlk_executable::digest::hash_bytes(SCHEMA.as_bytes()).to_string(),
+                    ],
                 )
                 .map_err(pg_error)?;
         }
         let metadata = client
             .query_one(
-                "SELECT application,version FROM htlk_metadata WHERE singleton=1",
+                "SELECT left(application,64),version,left(layout_digest,128),octet_length(application),octet_length(layout_digest) FROM htlk_metadata WHERE singleton=1",
                 &[],
             )
             .map_err(|_| Error::Schema)?;
@@ -235,10 +250,18 @@ impl Database {
             .map_err(|_| Error::Schema)?
             != APPLICATION_ID
             || metadata.try_get::<_, i64>(1).map_err(|_| Error::Schema)? != SCHEMA_VERSION
+            || metadata
+                .try_get::<_, String>(2)
+                .map_err(|_| Error::Schema)?
+                != htlk_executable::digest::hash_bytes(SCHEMA.as_bytes()).to_string()
+            || metadata.try_get::<_, i32>(3).map_err(|_| Error::Schema)?
+                != APPLICATION_ID.len() as i32
+            || metadata.try_get::<_, i32>(4).map_err(|_| Error::Schema)? != 71
         {
             return Err(Error::Schema);
         }
         client.batch_execute("COMMIT").map_err(pg_error)?;
+        client.set_deadline(None);
         Ok(Self {
             client: RefCell::new(client),
             settings,
@@ -248,6 +271,7 @@ impl Database {
             broken: Cell::new(false),
             cursor_failed: Cell::new(false),
             statements: RefCell::new(BTreeMap::new()),
+            maximum_field_bytes,
         })
     }
     pub(crate) fn begin(&self) -> store_db::Result<()> {
@@ -255,6 +279,9 @@ impl Database {
             return Err(Error::Database);
         }
         self.started.set(Some(Instant::now()));
+        self.client
+            .borrow()
+            .set_deadline(Some(Instant::now() + self.settings.operation_timeout));
         self.cursor_failed.set(false);
         self.batch("BEGIN ISOLATION LEVEL READ COMMITTED")?;
         if let Err(error) = self.batch("SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), 1213484107))") {
@@ -277,7 +304,7 @@ impl Database {
         match result {
             Ok(()) => Ok(()),
             Err(error) => {
-                let unknown = error.as_db_error().is_none();
+                let unknown = success && !error.known_commit_rollback();
                 if unknown || self.client.borrow_mut().batch_execute("ROLLBACK").is_err() {
                     self.broken.set(true);
                 }
@@ -344,7 +371,7 @@ impl Database {
     }
     pub(crate) fn query_one(&self, sql: &str, values: Vec<Value>) -> store_db::Result<Vec<Value>> {
         self.deadline()?;
-        let sql = dialect(sql)?;
+        let sql = bounded_projection(&dialect(sql)?, self.maximum_field_bytes)?;
         let mut client = self.client.borrow_mut();
         let statement = self.prepare(&mut client, &sql)?;
         let params = parameters(statement.params(), values)?;
@@ -357,7 +384,7 @@ impl Database {
     }
     pub(crate) fn rows(&self, sql: &str, values: Vec<Value>) -> store_db::Result<Cursor<'_>> {
         self.deadline()?;
-        let sql = dialect(sql)?;
+        let sql = bounded_projection(&dialect(sql)?, self.maximum_field_bytes)?;
         let next = self.cursor.get().checked_add(1).ok_or(Error::Invalid)?;
         self.cursor.set(next);
         let name = format!("htlk_cursor_{next}");
@@ -569,11 +596,116 @@ fn dialect(sql: &str) -> store_db::Result<String> {
         result.insert_str(end, "::bigint");
         search = end + 8;
     }
-    Ok(result)
+    Ok(indexed_predicates(&result))
 }
-fn pg_error(error: postgres::Error) -> Error {
-    let _ = error;
-    Error::Database
+fn indexed_predicates(sql: &str) -> String {
+    let Some(where_at) = sql.find(" WHERE ") else {
+        return sql.into();
+    };
+    let (prefix, predicates) = sql.split_at(where_at);
+    static KEYS: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = KEYS.get_or_init(|| regex::Regex::new(r"\b([a-zA-Z_][a-zA-Z_0-9]*\.)?(run_id|record_id|producer_id|port|command_id|principal|target|idempotency_key|subscriber_key|uri|task_id|origin_run)=\$([0-9]+)\b").expect("fixed internal key vocabulary"));
+    let optimized = pattern
+        .replace_all(predicates, |capture: &regex::Captures<'_>| {
+            let alias = capture.get(1).map_or("", |m| m.as_str());
+            let key = match &capture[2] {
+                "origin_run" if sql.contains("mcp_interactions") => {
+                    return format!(
+                        "(sha256({alias}origin_run)=sha256(${}) AND {})",
+                        &capture[3], &capture[0]
+                    );
+                }
+                "run_id" => "run_key",
+                "record_id" => "record_key",
+                "producer_id" => "producer_key",
+                "port" => "port_key",
+                "command_id" if sql.contains("FROM commands") => "command_key",
+                "principal" if sql.contains("receipts") => "principal_key",
+                "target" if sql.contains("host_receipts") => "target_key",
+                "idempotency_key" => "idempotency_key_hash",
+                "subscriber_key" => "subscriber_key_hash",
+                "uri" if sql.contains("mcp_resource_subscriptions") => "uri_key",
+                "task_id" if sql.contains("mcp_remote_tasks") => "task_key",
+                _ => return capture[0].to_owned(),
+            };
+            format!(
+                "({alias}{key}=sha256(${}) AND {})",
+                &capture[3], &capture[0]
+            )
+        })
+        .into_owned();
+    format!("{prefix}{optimized}")
+}
+fn pg_error(error: impl Into<ClientError>) -> Error {
+    match error.into() {
+        ClientError::Protocol(error) if error.code().is_some_and(|code| code.code() == "HT001") => {
+            Error::Corrupt
+        }
+        ClientError::Protocol(error) if error.code().is_some_and(|code| code.code() == "22001") => {
+            Error::Invalid
+        }
+        _ => Error::Database,
+    }
+}
+
+// Only simple fields in the closed SELECT vocabulary are guarded. Expressions
+// (counts, comparisons, fixed-size generated identities) retain their SQL meaning.
+fn bounded_projection(sql: &str, maximum: i64) -> store_db::Result<String> {
+    let Some(body) = sql.strip_prefix("SELECT ") else {
+        return Err(Error::Invalid);
+    };
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut from = None;
+    for (index, ch) in body.char_indices() {
+        match ch {
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.checked_sub(1).ok_or(Error::Invalid)?,
+            _ => {}
+        }
+        if !quoted && depth == 0 && body[index..].starts_with(" FROM ") {
+            from = Some(index);
+            break;
+        }
+    }
+    let Some(from) = from else {
+        return Ok(sql.into());
+    };
+    let fields = &body[..from];
+    let mut guarded = Vec::new();
+    let mut start = 0;
+    depth = 0;
+    quoted = false;
+    for (index, ch) in fields
+        .char_indices()
+        .chain(std::iter::once((fields.len(), ',')))
+    {
+        match ch {
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.checked_sub(1).ok_or(Error::Invalid)?,
+            _ => {}
+        }
+        if ch == ',' && depth == 0 && !quoted {
+            let field = fields[start..index].trim();
+            if field
+                .bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+                && field
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+            {
+                let name = field.rsplit('.').next().ok_or(Error::Invalid)?;
+                guarded.push(format!("htlk_field({field},{maximum}) AS {name}"));
+            } else {
+                guarded.push(field.into());
+            }
+            start = index + 1;
+        }
+    }
+    Ok(format!("SELECT {}{}", guarded.join(","), &body[from..]))
 }
 
 #[cfg(test)]
@@ -587,6 +719,7 @@ mod tests {
         cbor::{Limits, Value as Cbor},
         digest::Digest,
     };
+    use postgres::Client;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn settings() -> PostgresConfig {

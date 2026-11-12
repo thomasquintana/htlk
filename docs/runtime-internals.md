@@ -66,6 +66,8 @@ The optional `postgres` feature provides native PostgreSQL tables in a dedicated
 host-selected schema. `PostgresStore::initialize` transactionally creates an empty
 recognized layout; `PostgresStore::open` requires existing state. The metadata
 application is `htlk.runtime.postgres`, layout version **1**. Initialization and
+opening also compare the exact embedded layout digest; a matching version label
+cannot reinterpret a different private layout. Initialization and
 runtime operations arbitrate through the same database/schema-scoped transaction
 advisory lock. Each admitted operation uses one primary connection and a READ
 COMMITTED transaction; domain transaction boundaries use savepoints inside it.
@@ -75,6 +77,9 @@ Read operations currently acquire the same gate for coherent multi-query views.
 The PostgreSQL driver caches at most 256 prepared statements. Single-row lookups
 use their native prepared query directly; scans use server cursors with a bounded
 16-row wire buffer and incremental domain decoding/page accounting.
+Indexed point predicates retain exact-byte comparisons alongside generated lookup
+keys. Identity triggers recheck insertions and identity-column changes; ordinary
+revision/lease updates do not repeat unchanged preimage registration.
 
 Cloned handles share a dedicated worker and a queue of at most 256 waiting calls.
 Independent opens create independent connections. Timeouts bound connection,
@@ -83,6 +88,12 @@ cancel admitted work. Close drains earlier work and closes every clone of that
 handle. There is no automatic replay of database operations. A lost commit reply
 returns `StoreError::CommitUnknown` and quarantines the connection; reopen and
 reconcile the original durable receipt before further effectful progress.
+The worker drives its own Tokio PostgreSQL protocol runtime. The connection
+deadline covers TCP, TLS negotiation and authentication; protocol I/O also observes
+the operation deadline. Timed-out protocol tasks are aborted and their connections
+cannot be reused. Only explicit integrity/serialization/deadlock rollback or a
+pre-send refusal establishes a known failed commit; other ambiguous COMMIT failures
+retain uncertainty.
 
 Canonical CBOR and protected values remain BYTEA. Arbitrary indexed string
 identities also retain exact UTF-8 BYTEA, including NUL. Generated SHA-256 lookup
@@ -92,6 +103,11 @@ digests or locale collation. Private flags use checked BIGINT 0/1 values, while
 counters, revisions, fences, and milliseconds retain signed i64 bounds. Staged
 artifact bytes do not publish accepted metadata. The native layout has its own
 constraints and deferred producer links; it does not embed a SQLite database.
+The driver bounds selected text/byte fields before retaining owned row buffers:
+SQLite checks borrowed field lengths before copying, and PostgreSQL guards
+projected fields on the server before transmitting them. Oversized fields fail
+instead of becoming NULL or optional absence. Metadata compatibility reads are
+bounded independently of the stored metadata's claimed version or digest.
 
 ### Host MCP interaction storage
 

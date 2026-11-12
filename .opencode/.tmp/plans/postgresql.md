@@ -271,7 +271,7 @@ and native identity contributions did not change in this task.
 
 ### Task 7 — Conformance, faults, concurrency, and resource qualification
 
-Status: pending.
+Status: complete (2026-11-12).
 
 - Shared backend fixtures: isolated open, independent connection, reopen, subprocess
   descriptor, fault injection, independent SQL inspection. Unique PG schema/store.
@@ -296,6 +296,38 @@ Status: pending.
   retention and pool pressure; qualify scoped locks only with correctness evidence.
 
 Gate: complete both-backend behavioral suite and PostgreSQL-specific faults pass.
+
+Evidence: 9 native fault/conformance campaigns pass on PostgreSQL 16 and 18:
+observed COMMIT/lost acknowledgement, committed MCP intent never returning Started
+again, stalled TLS/authentication, lock/statement/operation timeouts, exact-preimage
+corruption, oversized fields, deferred rollback, and an isolated Docker database
+killed with SIGKILL then restarted on its original volume. Docker may change its
+ephemeral published port after start; the campaign discovers that endpoint and
+cleans only its own container/volume. Queue saturation/cancelled-admission evidence
+passes (manual polling disables Tokio's cooperative budget to test queue capacity).
+Schema metadata now carries the exact layout digest; compatibility reads are
+capped. SQLite fields are bounded before copying and PostgreSQL fields before
+transmission. Generated indexes participate in exact-byte point predicates; only
+WHERE predicates are optimized, never UPDATE assignments. A real remote-task
+acceptance regression exposed and verified this boundary. Unchanged-identity update
+triggers avoid redundant registration. Cache/wire buffers stay bounded at 256/16.
+
+Broad evidence: root SQLite integration targets, all four component-crate suites,
+all workspace doctests and root examples passed in grouped runs. The first combined
+workspace command hit the terminal's 600s limit at root stress; its remaining
+targets were explicitly completed, not reported as a passed combined command.
+All eight PostgreSQL deep E2E campaigns passed: the 16-workflow standalone/modular
+HTTP/SSE campaign took 685.91s and the remaining seven together took 106.23s.
+PG18 root targets passed in grouped runs; cancellation's first-dispatch readiness
+barrier now has finite backend I/O patience rather than cancelling before observing
+the intended dispatch. PG16's 67 durable MCP scenarios and all 45 unit tests passed;
+task/URL/work/fault suites reran after the WHERE-only optimization fix. PG stress
+took 104.12s vs SQLite 13.71s: this is serialized network storage, not a claimed
+parallel-writer performance improvement. Workspace all-target/all-feature and
+PG-only library Clippy passed. Explicit fixture/checker passed with current golden
+da8892d8d8e1b4c0153f6afb52ebb0615aff4a3a3d0425a2f68a47ea235032c4.
+Node docs/spec/helper and updated documentation checks passed; notices regenerated
+with pinned cargo-about. Commit this task, then release integration.
 
 ### Task 8 — Integration, documentation, packaging, and pull request
 
@@ -373,3 +405,18 @@ whole and clearly records behavior, tests, compatibility, operational limits.
 - Re-read plan after task 6. Next: full deep E2E/backend matrix, controlled network
   commit-ack fault, connection/lock/queue/resource bounds, PostgreSQL 16 qualification,
   then examples, CI services/coverage/release, packaging, complete checks and PR.
+- Task 6 commit: 77b6de5. Re-read plan at task 7. Timeout inspection found the sync
+  driver's TCP connect timeout did not bound TLS/authentication or stalled protocol
+  responses. The worker now drives tokio-postgres 0.7.18 on its own current-thread
+  runtime with whole-handshake and per-I/O/admitted-operation deadlines. Domain
+  transactions remain synchronous on that same dedicated worker; no state-machine
+  duplication or actor blocking is introduced. Protocol timeouts abort/quarantine
+  the connection. COMMIT errors are considered known rollback only for explicit
+  integrity/serialization/deadlock rollback or local pre-send refusal; other
+  ambiguous commit failures must reconcile the original receipt.
+- Re-read plan after task 7. PG18 service: htlk-postgres port 58754; PG16 service:
+  htlk-postgres16 port 65281. Both are agent-created disposable services. Native
+  identities include store_postgres_client.rs and pinned tokio-postgres 0.7.18 in
+  Rust and independent Node lists. Next: feature-only target checks, host/MCP
+  examples and guides, CI/coverage/release services and qualification matrix,
+  packaging/full final checks, all intended commits, push and new PR.

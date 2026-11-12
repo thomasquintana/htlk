@@ -64,6 +64,12 @@ export HTLK_TEST_POSTGRES_URL='host=127.0.0.1 port=55432 user=postgres password=
 Tests allocate uniquely named schemas within that disposable database. They do not
 use application deployment credentials or external MCP services. Select another
 unused host port if necessary.
+Docker is also required for the isolated server-crash campaign. That test creates
+its own disposable container, kills the database process after acknowledged commits,
+restarts the same volume, and checks receipts, records, journal and higher-fence
+takeover. It does not restart the configured shared test service. Set
+`HTLK_TEST_POSTGRES_VERSION=16` to use PostgreSQL 16 for this isolated campaign;
+the default is 18.
 
 Shared runtime campaigns select their test-only factory with
 `HTLK_TEST_BACKEND=postgres`; the default is SQLite. Production store constructors
@@ -71,6 +77,15 @@ never inspect these variables. File-store scenarios derive the PostgreSQL schema
 from the exact test path, so independent connections and killed/restarted subprocesses
 reopen the same state. Real wall-clock campaigns use longer finite I/O/lease budgets
 for PostgreSQL; fake-clock deadline tests retain their exact logical timestamps.
+
+`crates/htlk-runtime/tests/postgres_store.rs` additionally uses an independent
+plaintext loopback protocol proxy that observes PostgreSQL's successful COMMIT
+response and drops it before delivery. Reopening must recover the original command
+receipt, and a committed MCP intent must return existing work rather than another
+dispatch claim. Separate tests cover stalled TLS/authentication, lock/statement/
+operation deadlines, deferred-constraint rollback, oversized stored fields, and
+conflicting lookup preimages. Worker tests fill the entire bounded queue and prove
+that abandoned admitted calls run while cancelled capacity waiters do not.
 
 The ordinary Rust suite includes every E2E, crash, and stress campaign. The retained
 Node tests independently exercise documentation, coverage, and discovery helpers:

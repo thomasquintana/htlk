@@ -127,8 +127,10 @@ impl Store {
         memory: bool,
     ) -> Result<Self, StoreError> {
         let busy = config.busy_timeout;
+        let maximum = config.limits.max_document_bytes;
         connection
             .call(move |db| -> Result<(), StoreError> {
+                db.set_max_field_bytes(maximum);
                 db.busy_timeout(busy)?;
                 db.pragma_update(None, "foreign_keys", true)?;
                 db.pragma_update(None, "synchronous", "FULL")?;
@@ -561,6 +563,8 @@ impl From<rusqlite::Error> for StoreError {
             rusqlite::Error::CommitUnknown => Self::CommitUnknown,
             #[cfg(feature = "postgres")]
             rusqlite::Error::Schema => Self::Schema,
+            #[cfg(feature = "postgres")]
+            rusqlite::Error::Corrupt => Self::Corrupt,
             _ => Self::Database,
         }
     }

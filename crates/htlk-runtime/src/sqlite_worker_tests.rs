@@ -195,3 +195,63 @@ fn failed_open_and_worker_exit_return_errors_without_hanging() {
         db.close().await.unwrap();
     });
 }
+
+#[test]
+fn a_full_queue_preserves_admitted_calls_and_cancelled_admission_has_no_effect() {
+    actix::System::new().block_on(async {
+        let db = Connection::open_in_memory().await.unwrap();
+        db.call(|db| db.execute_batch("CREATE TABLE admitted(value INTEGER)"))
+            .await
+            .unwrap();
+        let (started, running) = tokio::sync::oneshot::channel();
+        let (release, blocked) = mpsc::channel();
+        let first = db.clone();
+        let waiter = actix::spawn(async move {
+            first
+                .call(move |_| -> Result<(), ()> {
+                    started.send(()).unwrap();
+                    blocked.recv_timeout(Duration::from_secs(10)).unwrap();
+                    Ok(())
+                })
+                .await
+                .unwrap();
+        });
+        running.await.unwrap();
+        for value in 0..256 {
+            let admitted = tokio::task::unconstrained(
+                db.call(move |db| db.execute("INSERT INTO admitted VALUES(?1)", [value])),
+            );
+            let mut admitted = pin!(admitted);
+            assert!(
+                admitted
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+        }
+        {
+            let overflow = tokio::task::unconstrained(
+                db.call(|db| db.execute("INSERT INTO admitted VALUES(999)", [])),
+            );
+            let mut overflow = pin!(overflow);
+            assert!(
+                overflow
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+        }
+        release.send(()).unwrap();
+        waiter.await.unwrap();
+        let counts: (i64, i64) = db
+            .call(|db| {
+                db.query_row("SELECT count(*),max(value) FROM admitted", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(counts, (256, 255));
+        db.close().await.unwrap();
+    });
+}

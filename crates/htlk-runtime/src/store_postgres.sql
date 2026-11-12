@@ -5,8 +5,23 @@
 CREATE TABLE htlk_metadata (
     singleton BIGINT PRIMARY KEY CHECK(singleton=1),
     application TEXT NOT NULL,
-    version BIGINT NOT NULL
+    version BIGINT NOT NULL,
+    layout_digest TEXT NOT NULL
 );
+-- Bound stored fields on the server before transmitting their bytes. Overloads
+-- preserve exact SQL types, NULLs and original projected column names.
+CREATE FUNCTION htlk_field(value BYTEA, maximum BIGINT) RETURNS BYTEA
+LANGUAGE plpgsql IMMUTABLE STRICT AS $$ BEGIN
+    IF octet_length(value)>maximum THEN RAISE EXCEPTION 'runtime stored field exceeds configured limit' USING ERRCODE='22001'; END IF;
+    RETURN value;
+END $$;
+CREATE FUNCTION htlk_field(value TEXT, maximum BIGINT) RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE STRICT AS $$ BEGIN
+    IF octet_length(value)>maximum THEN RAISE EXCEPTION 'runtime stored field exceeds configured limit' USING ERRCODE='22001'; END IF;
+    RETURN value;
+END $$;
+CREATE FUNCTION htlk_field(value BIGINT, maximum BIGINT) RETURNS BIGINT
+LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT value $$;
 CREATE TABLE htlk_opaque_keys (
     digest BYTEA PRIMARY KEY CHECK(octet_length(digest)=32),
     original BYTEA NOT NULL
@@ -21,7 +36,7 @@ BEGIN
                 ON CONFLICT(digest) DO NOTHING;
             SELECT original INTO STRICT retained FROM htlk_opaque_keys WHERE digest=sha256(key_bytes);
             IF retained <> key_bytes THEN
-                RAISE EXCEPTION 'HTLK identity integrity failure' USING ERRCODE='23514';
+                RAISE EXCEPTION 'HTLK identity integrity failure' USING ERRCODE='HT001';
             END IF;
         END IF;
     END LOOP;
@@ -41,7 +56,7 @@ CREATE TABLE runs (
     last_time_ms BIGINT NOT NULL CHECK(last_time_ms>=0),
     CHECK((owner IS NULL)=(lease_expires_ms IS NULL))
 );
-CREATE TRIGGER runs_keys BEFORE INSERT OR UPDATE ON runs
+CREATE TRIGGER runs_keys BEFORE INSERT OR UPDATE OF run_id ON runs
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('run_id');
 CREATE INDEX committed_run_time ON runs(last_time_ms);
 CREATE TABLE journal (
@@ -57,7 +72,7 @@ CREATE TABLE journal (
     payload BYTEA NOT NULL,
     PRIMARY KEY(run_key,sequence)
 );
-CREATE TRIGGER journal_keys BEFORE INSERT OR UPDATE ON journal
+CREATE TRIGGER journal_keys BEFORE INSERT OR UPDATE OF run_id ON journal
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('run_id');
 CREATE TABLE outbox (
     run_id BYTEA NOT NULL,
@@ -67,7 +82,7 @@ CREATE TABLE outbox (
     PRIMARY KEY(run_key,sequence),
     FOREIGN KEY(run_key,sequence) REFERENCES journal(run_key,sequence)
 );
-CREATE TRIGGER outbox_keys BEFORE INSERT OR UPDATE ON outbox
+CREATE TRIGGER outbox_keys BEFORE INSERT OR UPDATE OF run_id ON outbox
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('run_id');
 CREATE INDEX outbox_pending ON outbox(delivered,run_key,sequence);
 CREATE TABLE records (
@@ -81,9 +96,10 @@ CREATE TABLE records (
     payload BYTEA NOT NULL,
     PRIMARY KEY(run_key,family,record_key)
 );
-CREATE TRIGGER records_keys BEFORE INSERT OR UPDATE ON records
+CREATE TRIGGER records_keys BEFORE INSERT OR UPDATE OF run_id,record_id ON records
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('run_id','record_id');
 CREATE UNIQUE INDEX accepted_artifact_identity ON records(record_key) WHERE family='artifact';
+CREATE INDEX records_by_identity ON records(family,record_key);
 CREATE TABLE commands (
     run_id BYTEA NOT NULL,
     run_key BYTEA GENERATED ALWAYS AS (sha256(run_id)) STORED,
@@ -94,7 +110,7 @@ CREATE TABLE commands (
     PRIMARY KEY(run_key,command_key),
     FOREIGN KEY(run_key,sequence) REFERENCES journal(run_key,sequence)
 );
-CREATE TRIGGER commands_keys BEFORE INSERT OR UPDATE ON commands
+CREATE TRIGGER commands_keys BEFORE INSERT OR UPDATE OF run_id,command_id ON commands
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('run_id','command_id');
 
 CREATE TABLE graphs (fingerprint TEXT PRIMARY KEY, graph_id BYTEA NOT NULL, envelope BYTEA NOT NULL);
@@ -125,7 +141,7 @@ CREATE TABLE artifact_producers (
     FOREIGN KEY(run_key,family,artifact_key) REFERENCES records(run_key,family,record_key)
         DEFERRABLE INITIALLY DEFERRED
 );
-CREATE TRIGGER producers_keys BEFORE INSERT OR UPDATE ON artifact_producers
+CREATE TRIGGER producers_keys BEFORE INSERT OR UPDATE OF producer_id,port,run_id ON artifact_producers
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('producer_id','port','run_id');
 CREATE TABLE runtime_identity (
     singleton BIGINT PRIMARY KEY CHECK(singleton=1),
@@ -148,7 +164,7 @@ CREATE TABLE host_receipts (
     expires_at_ms BIGINT NOT NULL CHECK(expires_at_ms>=0),
     PRIMARY KEY(principal_key,method,target_key,idempotency_key_hash)
 );
-CREATE TRIGGER host_receipts_keys BEFORE INSERT OR UPDATE ON host_receipts
+CREATE TRIGGER host_receipts_keys BEFORE INSERT OR UPDATE OF principal,target,idempotency_key,run_id ON host_receipts
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('principal','target','idempotency_key','run_id');
 CREATE TABLE late_responses (
     run_id BYTEA NOT NULL,
@@ -159,7 +175,7 @@ CREATE TABLE late_responses (
     protection BYTEA NOT NULL,
     PRIMARY KEY(run_key,attempt_id,content_digest)
 );
-CREATE TRIGGER late_keys BEFORE INSERT OR UPDATE ON late_responses
+CREATE TRIGGER late_keys BEFORE INSERT OR UPDATE OF run_id ON late_responses
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('run_id');
 
 CREATE TABLE mcp_owners (
@@ -211,6 +227,7 @@ CREATE TABLE mcp_interactions (
     CHECK((origin_invocation IS NULL)=(origin_run IS NULL))
 );
 CREATE INDEX mcp_interactions_owner ON mcp_interactions(owner_key,interaction_id);
+CREATE INDEX mcp_interactions_origin ON mcp_interactions(sha256(origin_run),origin_invocation,origin_attempt);
 CREATE TABLE mcp_receipts (
     owner_key TEXT NOT NULL REFERENCES mcp_owners(owner_key),
     principal BYTEA NOT NULL,
@@ -222,7 +239,7 @@ CREATE TABLE mcp_receipts (
     work_delivery TEXT NOT NULL CHECK(work_delivery IN ('not_started','uncertain','completed')),
     PRIMARY KEY(owner_key,principal_key,idempotency_key_hash)
 );
-CREATE TRIGGER mcp_receipts_keys BEFORE INSERT OR UPDATE ON mcp_receipts
+CREATE TRIGGER mcp_receipts_keys BEFORE INSERT OR UPDATE OF principal,idempotency_key ON mcp_receipts
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('principal','idempotency_key');
 CREATE TABLE mcp_events (
     sequence BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -290,7 +307,7 @@ CREATE TABLE mcp_url_receipts (
     result_digest TEXT NOT NULL,
     PRIMARY KEY(owner_key,principal_key,idempotency_key_hash)
 );
-CREATE TRIGGER url_receipts_keys BEFORE INSERT OR UPDATE ON mcp_url_receipts
+CREATE TRIGGER url_receipts_keys BEFORE INSERT OR UPDATE OF principal,idempotency_key ON mcp_url_receipts
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('principal','idempotency_key');
 CREATE TABLE mcp_resource_subscriptions (
     subscription_id TEXT PRIMARY KEY,
@@ -307,7 +324,7 @@ CREATE TABLE mcp_resource_subscriptions (
     UNIQUE(owner_key,server_digest,uri_key),
     CHECK((state='uncertain')=(operation_id IS NOT NULL))
 );
-CREATE TRIGGER subscription_keys BEFORE INSERT OR UPDATE ON mcp_resource_subscriptions
+CREATE TRIGGER subscription_keys BEFORE INSERT OR UPDATE OF uri ON mcp_resource_subscriptions
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('uri');
 CREATE INDEX mcp_subscriptions_owner ON mcp_resource_subscriptions(owner_key,subscription_id);
 CREATE TABLE mcp_subscription_consumers (
@@ -317,7 +334,7 @@ CREATE TABLE mcp_subscription_consumers (
     desired BIGINT NOT NULL CHECK(desired IN (0,1)),
     PRIMARY KEY(subscription_id,subscriber_key_hash)
 );
-CREATE TRIGGER consumer_keys BEFORE INSERT OR UPDATE ON mcp_subscription_consumers
+CREATE TRIGGER consumer_keys BEFORE INSERT OR UPDATE OF subscriber_key ON mcp_subscription_consumers
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('subscriber_key');
 CREATE TABLE mcp_subscription_operations (
     operation_id TEXT PRIMARY KEY,
@@ -403,6 +420,6 @@ CREATE TABLE mcp_remote_tasks (
     CHECK((origin_run IS NULL)=(origin_attempt IS NULL)),
     UNIQUE(owner_key,server_digest,session_id,task_key)
 );
-CREATE TRIGGER remote_task_keys BEFORE INSERT OR UPDATE ON mcp_remote_tasks
+CREATE TRIGGER remote_task_keys BEFORE INSERT OR UPDATE OF task_id ON mcp_remote_tasks
     FOR EACH ROW EXECUTE FUNCTION htlk_check_keys('task_id');
 CREATE INDEX mcp_remote_tasks_owner ON mcp_remote_tasks(owner_key,server_digest);
