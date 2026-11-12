@@ -85,16 +85,23 @@ tokio.workspace = true
 name = "interactive_guide"
 path = "examples/interactive_guide/main.rs"
 test = true
+required-features = ["sqlite"]
 
 [[example]]
 name = "mcp_capability_spike"
 path = "examples/mcp_capability_spike/main.rs"
 test = true
+required-features = ["sqlite"]
 
 [[example]]
 name = "mcp_live_session"
 path = "examples/live_session/main.rs"
 test = true
+required-features = ["sqlite"]
+
+[[example]]
+name = "runtime_workflow"
+required-features = ["sqlite"]
 
 [lints]
 workspace = true

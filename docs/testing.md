@@ -78,6 +78,19 @@ from the exact test path, so independent connections and killed/restarted subpro
 reopen the same state. Real wall-clock campaigns use longer finite I/O/lease budgets
 for PostgreSQL; fake-clock deadline tests retain their exact logical timestamps.
 
+To execute shared workflows, native MCP peers, crash/restart and stress scenarios
+on PostgreSQL after configuring the service:
+
+```console
+HTLK_TEST_BACKEND=postgres cargo test --workspace --all-features --locked
+```
+
+CI and releases run that complete campaign on PostgreSQL 16 and 18 through
+`.github/workflows/postgres.yml`. Default-feature and backend-only compilation are
+checked independently, including PostgreSQL-only host-example tests. SQLite-native
+format/fault tests require its feature; shared behavioral tests select the enabled
+backend when only one is compiled.
+
 `crates/htlk-runtime/tests/postgres_store.rs` additionally uses an independent
 plaintext loopback protocol proxy that observes PostgreSQL's successful COMMIT
 response and drops it before delivery. Reopening must recover the original command
@@ -102,6 +115,8 @@ rustup toolchain install 1.98.0 --profile minimal --component llvm-tools-preview
 cargo +stable install cargo-llvm-cov --version 0.9.1 --locked
 mkdir -p target/coverage
 cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --json --output-path target/coverage/coverage.json
+HTLK_TEST_BACKEND=postgres cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --no-clean --no-report
+cargo +1.98.0 llvm-cov report --workspace --json --output-path target/coverage/coverage.json
 cargo +1.98.0 llvm-cov report --workspace --html --output-dir target/coverage
 node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-thresholds.json
 ```
@@ -112,6 +127,8 @@ For branch coverage:
 rustup toolchain install nightly-2026-10-20 --profile minimal --component llvm-tools-preview
 mkdir -p target/coverage
 cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --json --output-path target/coverage/coverage.json
+HTLK_TEST_BACKEND=postgres cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --no-clean --no-report
+cargo +nightly-2026-10-20 llvm-cov report --workspace --json --output-path target/coverage/coverage.json
 node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-branch-thresholds.json
 ```
 

@@ -18,6 +18,10 @@ jobs:
     name: Coverage and deep tests
     uses: ./.github/workflows/coverage.yml
 
+  postgres:
+    name: PostgreSQL qualification
+    uses: ./.github/workflows/postgres.yml
+
   workflows:
     name: Workflow syntax
     runs-on: ubuntu-latest
@@ -44,6 +48,20 @@ jobs:
       # Keep source-line diagnostics while bounding the full suite's binary size.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      HTLK_TEST_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=htlk-test dbname=htlk_test sslmode=disable
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: htlk-test
+          POSTGRES_DB: htlk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d htlk_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -81,6 +99,13 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Check independent backend feature builds
+        run: |
+          cargo check -p htlk-runtime --no-default-features --lib --locked
+          cargo check -p htlk-runtime --no-default-features --features sqlite --all-targets --locked
+          cargo check -p htlk-runtime --no-default-features --features postgres --all-targets --locked
+          cargo check -p htlk --no-default-features --features postgres --all-targets --locked
+
       - name: Run tests
         run: cargo test --workspace --all-features --locked
 
@@ -98,7 +123,7 @@ jobs:
           retention-days: 30
 
       - name: Verify workspace packages
-        run: cargo package --workspace --locked --target-dir "$RUNNER_TEMP/htlk-package-$GITHUB_SHA"
+        run: cargo package --workspace --all-features --locked --target-dir "$RUNNER_TEMP/htlk-package-$GITHUB_SHA"
 
   dependencies:
     name: Dependency policy

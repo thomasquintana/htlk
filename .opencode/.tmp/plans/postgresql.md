@@ -331,7 +331,7 @@ with pinned cargo-about. Commit this task, then release integration.
 
 ### Task 8 — Integration, documentation, packaging, and pull request
 
-Status: pending.
+Status: integration complete; final commit/push/PR in progress (2026-11-12).
 
 - Feature builds/lints: default, SQLite-only, PG-only, both, all-features. Compile,
   docs and packages must not require a live database; tests provision one explicitly.
@@ -420,3 +420,38 @@ whole and clearly records behavior, tests, compatibility, operational limits.
   Rust and independent Node lists. Next: feature-only target checks, host/MCP
   examples and guides, CI/coverage/release services and qualification matrix,
   packaging/full final checks, all intended commits, push and new PR.
+- Task 7 commit: dfe9932. Re-read plan before task 8. SQLite-native inline/fault
+  tests are feature-gated rather than pulling rusqlite into PG-only builds. Shared
+  test factories default to the enabled backend when only PostgreSQL is compiled.
+- Task 8 integration: added PostgreSQL-only and pure-evaluation feature builds,
+  feature-gated SQLite-specific examples/tests, a typed MCP host storage selector
+  (--postgres-env/schema/mode), and independent initialize/reopen no-content-call
+  example tests. Shared statement finish explicitly ends borrow/resource lifetime
+  in backend-free builds as well. PostgreSQL-only all-target checks pass for both
+  runtime and facade; PG-only unit/example tests pass; pure-only and PG-only Clippy
+  with denied warnings pass. Runtime/MCP guides and checked README construction
+  example document configuration, TLS, grants, connection/lease bounds, backups,
+  exact layout and ambiguous-commit recovery.
+- CI/release now call a PostgreSQL 16/18 complete-suite reusable workflow. Quality,
+  release and coverage provision PG18, coverage accumulates both backends for line
+  and branch evidence, and publishing requires PostgreSQL qualification. Existing
+  line-tables/disk-budget and dependency-policy fixes are preserved. actionlint
+  passes. The source identity golden was explicitly regenerated and independently
+  checked: bc8bb1811bbad9b70cca6b5be1068bfaccef5cddbf57b25c712ebe23577a4753.
+- Final required `cargo test --workspace --all-features --locked` PASSED in full
+  (not the earlier timed-out command); full log is tool_1d063cc180010YnmUAPytgtkRX.
+  RUSTDOCFLAGS=-D warnings workspace all-feature docs passed, including the new
+  no-run PostgreSQL helper. All five all-feature packages verified from a fresh
+  target at /var/folders/gb/g744mwgj3nn6mtf4dgdg58p00000gn/T/opencode/htlk-postgres-package.WS5Ewh.
+  Remaining: final helper/dependency/format checks, final diff review, task-8 commit,
+  remove completed plan from tracked tree (retain requested ignored temporary copy),
+  push and create PR against main; preserve the user's existing changelog heading.
+- Final checks: formatting, actionlint, documentation/spec validators, independent
+  executable fixture validation and all 20 Node helper tests pass. cargo deny
+  advisories/bans/licenses/sources pass (permitted duplicate-version warnings);
+  independent cargo-about regeneration matches tracked notices exactly. SQLite-only,
+  PostgreSQL-only and backend-free builds/lints pass. Reverse dependency lookup for
+  rusqlite in the PG-only normal graph reports no matching package, as intended.
+  All local implementation/qualification tasks are complete. Re-read plan for final
+  commit/PR alignment; keep every intended change committed and the pre-existing
+  changelog heading untouched.

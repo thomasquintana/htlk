@@ -12,6 +12,8 @@ User-visible changes and compatibility boundaries are recorded here, following
 - Runtime and durable MCP persistence accept the backend-neutral `Store` handle.
   `SqliteStore` remains a source-compatible name for the SQLite constructors.
   Native implementation identities and executable fingerprints change.
+- The facade forwards `sqlite` (default) and `postgres` Cargo features; PostgreSQL-only
+  builds omit bundled SQLite. Pure evaluators can be built without either backend.
 - Coverage baselines are advisory recommendations in CI. Invalid or missing
   measurements and absent branch instrumentation still fail validation; complete
   instrumented test suites and report artifacts remain required.
@@ -38,6 +40,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- The MCP catalog browser accepts `--postgres-env`, `--postgres-schema`, and
+  `--postgres-mode initialize|open` for host-owned durable PostgreSQL configuration.
+  Initialization and reopen are exercised against independent no-content-call peers.
 - Optional native PostgreSQL storage supports fenced run transactions, immutable
   registration, command/host receipts, journals and outbox recovery. Exact opaque
   identities, including long strings and NUL, retain their bytewise semantics.

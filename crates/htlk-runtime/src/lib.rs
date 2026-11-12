@@ -30,7 +30,7 @@ mod runtime_type;
 mod schema_projection;
 pub mod source;
 mod sqlite_worker;
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod sqlite_worker_tests;
 pub mod store;
 mod store_db;

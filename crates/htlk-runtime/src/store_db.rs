@@ -1,6 +1,8 @@
 //! Private typed relational boundary shared by the storage transaction bodies.
 //!
 //! Drivers own SQL execution and row lifetimes; domain code owns acceptance rules.
+// Pure-evaluation builds retain API types but cannot construct driver state.
+#![cfg_attr(not(any(feature = "sqlite", feature = "postgres")), allow(dead_code))]
 
 use std::{fmt, ops::Deref, path::Path, time::Duration};
 
@@ -275,6 +277,7 @@ pub(crate) enum Connection {
     #[cfg(feature = "postgres")]
     Postgres(Box<crate::store_postgres::Database>),
     #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    #[allow(dead_code)] // Pure-evaluation builds cannot construct a storage handle.
     Disabled,
 }
 #[derive(Clone, Copy)]
@@ -464,6 +467,7 @@ impl Connection {
     pub(crate) fn transaction(&mut self) -> Result<Transaction<'_>> {
         self.transaction_with_behavior(TransactionBehavior::Deferred)
     }
+    #[cfg(any(feature = "sqlite", feature = "postgres"))]
     pub(crate) fn transaction_with_behavior(
         &mut self,
         behavior: TransactionBehavior,
@@ -495,6 +499,14 @@ impl Connection {
             rollback,
             finished: false,
         })
+    }
+    #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    pub(crate) fn transaction_with_behavior(
+        &mut self,
+        behavior: TransactionBehavior,
+    ) -> Result<Transaction<'_>> {
+        let _ = behavior;
+        Err(Error::Invalid)
     }
     pub(crate) fn last_insert_rowid(&self) -> i64 {
         match self {
@@ -570,9 +582,13 @@ pub(crate) enum Statement<'a> {
         sql: String,
     },
     #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    #[allow(dead_code)] // No statement is issued without an enabled backend.
     Disabled(std::marker::PhantomData<&'a ()>),
 }
 impl Statement<'_> {
+    // End the statement's borrow/resource lifetime before committing its transaction.
+    pub(crate) fn finish(self) {}
+    #[cfg(any(feature = "sqlite", feature = "postgres"))]
     pub(crate) fn query(&mut self, params: impl Params) -> Result<Rows<'_>> {
         let values = params.values()?;
         let inner = match self {
@@ -596,6 +612,11 @@ impl Statement<'_> {
             current: None,
         })
     }
+    #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    pub(crate) fn query(&mut self, params: impl Params) -> Result<Rows<'_>> {
+        let _ = params;
+        Err(Error::Invalid)
+    }
     pub(crate) fn query_map<T, F: FnMut(&Row<'_>) -> Result<T>>(
         &mut self,
         params: impl Params,
@@ -613,6 +634,7 @@ enum RowSource<'a> {
     #[cfg(feature = "postgres")]
     Postgres(crate::store_postgres::Cursor<'a>),
     #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    #[allow(dead_code)] // No row cursor is opened in a pure-evaluation build.
     Disabled(std::marker::PhantomData<&'a ()>),
 }
 pub(crate) struct Rows<'a> {
@@ -620,6 +642,7 @@ pub(crate) struct Rows<'a> {
     current: Option<Row<'static>>,
 }
 impl Rows<'_> {
+    #[cfg(any(feature = "sqlite", feature = "postgres"))]
     pub(crate) fn next(&mut self) -> Result<Option<&Row<'_>>> {
         let values = match &mut self.inner {
             #[cfg(feature = "sqlite")]
@@ -658,6 +681,10 @@ impl Rows<'_> {
             marker: std::marker::PhantomData,
         });
         Ok(self.current.as_ref())
+    }
+    #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    pub(crate) fn next(&mut self) -> Result<Option<&Row<'_>>> {
+        Err(Error::Invalid)
     }
 }
 pub(crate) struct MappedRows<'a, F> {

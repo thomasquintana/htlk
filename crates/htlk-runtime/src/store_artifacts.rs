@@ -333,7 +333,7 @@ fn artifact_error(error: ArtifactError) -> StoreError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::{

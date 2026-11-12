@@ -27,13 +27,13 @@ in the compiler. Runtime verification independently checks the same selections.
 An empty registry does not install optional libraries; the [MCP guide](mcp-guide.md)
 explains the content library and adapters.
 
-Construct `Runtime` from a `SqliteStore`, shared immutable registry, explicit
+Construct `Runtime` from a backend-neutral `Store`, shared immutable registry, explicit
 `RuntimePolicy`, codec limits, and bounded admitted-cache capacity. There is no
 default allow policy. `HostContext` must come from your authenticated session or
 transport; constructing it validates representation, not identity. Ordinary graph
 inputs cannot choose the principal or confer grants.
 
-Use a file store for durable operation. In-memory stores disappear when their last
+Use a file-backed SQLite store or PostgreSQL for durable operation. SQLite in-memory stores disappear when their last
 handle closes. File stores use SQLite WAL, FULL synchronization, foreign keys,
 and transactional fencing. Only the current private schema version is accepted;
 see [storage compatibility](runtime-internals.md#storage-compatibility).
@@ -42,6 +42,68 @@ The native adapter cannot enforce hard external token/cost budgets. Explicit har
 limits, including zero, are rejected with `E_BUDGET_UNSUPPORTED` before starting or
 installing affected work. Usage estimates and compiler capability flags do not
 establish a trusted hard meter.
+
+## Choose and provision storage
+
+SQLite is enabled by default. `SqliteStore` is the compatible name for the shared
+store handle's `open`/`in_memory` constructors. To enable PostgreSQL through the
+facade, select its Cargo feature:
+
+```toml
+htlk = { version = "0.1.0", features = ["postgres"] }
+```
+
+For PostgreSQL-only builds, add `default-features = false`. The same feature names
+are available on `htlk-runtime`. Pure evaluation can be built with neither backend;
+storage construction then returns an invalid-configuration error.
+
+Use `PostgresConfig::new` with a host-owned connection string, usually loaded from
+an environment variable or secret configuration. Set its dedicated `schema` and
+finite connection/lock/statement/operation deadlines. `StoreConfig` retains shared
+codec/page bounds; its legacy busy timeout applies to SQLite. Native PostgreSQL
+storage is qualified on PostgreSQL 16 and 18 and supports all runtime and durable
+MCP operations. Select a writable primary with UTF-8 database encoding and fsync
+enabled. The connection sets synchronous commit on. Verified TLS uses the host's
+platform certificate trust; `sslmode=disable` explicitly selects an unencrypted
+local connection.
+
+1. Provision a database and a dedicated empty HTLK schema, or grant the provisioning
+   role permission to create that schema.
+2. Call `PostgresStore::initialize(settings, config).await?` with the provisioning
+   role. Empty state is initialized transactionally; foreign or incompatible state
+   is rejected. The store does not automatically migrate or delete state.
+3. Grant the runtime role schema USAGE, table SELECT/INSERT/UPDATE/DELETE,
+   sequence USAGE/SELECT, and function EXECUTE within that HTLK schema.
+4. Open the recognized state with `PostgresStore::open`. This path creates no
+   objects. Pass the handle to `Runtime::new` and clone the same handle for durable
+   `McpClientPersistence`; use the runtime's actual trusted clock as well.
+
+The checked PostgreSQL construction helper is in the
+[runtime crate README](../crates/htlk-runtime/README.md#storage-backends).
+Clones share one connection worker and at most 256 queued operations. Independently
+opened handles use independent connections and arbitrate through database
+transactions. The current PostgreSQL implementation serializes reads/writes per
+HTLK schema, preserving the same fenced authority and compound callback-accounting
+boundaries as SQLite. Size host connection counts, leases and workflow deadlines
+for observed database/provider latency; reopening does not extend saved deadlines.
+
+For backup/restore, retain the complete schema, including namespace, counters,
+sequences, receipts, journal, artifact bytes and protected MCP evidence. Use
+PostgreSQL logical backup/restore or physical/PITR procedures appropriate to the
+deployment. Quiesce owners before logical restoration and resume only one
+authoritative destination. Replication/failover configuration must retain the
+committed database copy on which recovery relies. Recovery reacquires higher
+fences and reconciles stored work; it does not recall providers just because the
+database or runtime restarted. SQLite-to-PostgreSQL transfer is not an automatic
+schema upgrade; use a fresh PostgreSQL store for new deployments.
+
+An operational storage failure is separate from a confirmed workflow outcome.
+`StoreError::CommitUnknown` means the server may have committed despite losing its
+acknowledgement. The connection is quarantined. Open a healthy handle and reconcile
+the original command/host idempotency receipt or MCP work intent before proceeding.
+Do not translate that uncertainty into another external dispatch. See
+[PostgreSQL internals](runtime-internals.md#postgresql-layout-and-execution) for
+layout and protocol boundaries.
 
 ## Register executable bytes
 

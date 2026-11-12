@@ -47,7 +47,7 @@ use htlk_runtime::{
     clock::SystemClock,
     failure::{FailureCode, RuntimeFailure},
     mcp::{McpCancellation, McpEndpoint, McpFuture, client::*},
-    store::{McpSubscriptionLimits, SqliteStore, StoreConfig},
+    store::{McpSubscriptionLimits, Store, StoreConfig},
 };
 use std::{collections::BTreeMap, error::Error, path::Path, sync::Arc, time::Duration};
 
@@ -67,6 +67,9 @@ Options must precede stdio/http; all remaining stdio arguments go to the child.
 Options:
   --connect-timeout-ms N  Native startup/default timeout: 1000..120000 ms (default: 5000)
   --store PATH         SQLite evidence/intent store (default: in-memory)
+  --postgres-env NAME  PostgreSQL connection from this environment variable (postgres feature)
+  --postgres-schema N  Dedicated PostgreSQL schema (default: htlk)
+  --postgres-mode MODE initialize or open; open requires existing layout (default: initialize)
   --root FILE_URI      One explicit file:// advisory root (default: no roots)
   --subscribe URI      Monitor this exact resource; never read its content
   --watch-seconds N    Idle reception for 0..60 seconds (default: 0)
@@ -81,8 +84,17 @@ fails explicitly. Resource monitoring requires --subscribe and --watch-seconds >
 Form/URL requests are inspected and declined; sampling is not advertised.
 Shutdown closes the exact epoch, stops the client, and releases its owner lease.";
 
+enum Storage {
+    Memory,
+    Sqlite(String),
+    Postgres {
+        environment: String,
+        schema: String,
+        initialize: bool,
+    },
+}
 struct Options {
-    store: Option<String>,
+    store: Storage,
     root: Option<String>,
     subscribe: Option<String>,
     watch_seconds: u64,
@@ -93,6 +105,80 @@ struct Options {
 
 fn input() -> Box<dyn Error> {
     "invalid arguments or host configuration (values redacted); use --help".into()
+}
+
+fn storage(flags: &mut BTreeMap<String, String>) -> Result<Storage> {
+    let path = flags.remove("--store");
+    let environment = flags.remove("--postgres-env");
+    let schema = flags.remove("--postgres-schema");
+    let mode = flags.remove("--postgres-mode");
+    if let Some(environment) = environment {
+        if path.is_some()
+            || !cfg!(feature = "postgres")
+            || environment.len() > 128
+            || !environment
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit()))
+        {
+            return Err(input());
+        }
+        let schema = schema.unwrap_or_else(|| "htlk".into());
+        if schema.len() > 63
+            || !schema
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit()))
+        {
+            return Err(input());
+        }
+        let initialize = match mode.as_deref().unwrap_or("initialize") {
+            "initialize" => true,
+            "open" => false,
+            _ => return Err(input()),
+        };
+        Ok(Storage::Postgres {
+            environment,
+            schema,
+            initialize,
+        })
+    } else {
+        if schema.is_some() || mode.is_some() || !cfg!(feature = "sqlite") {
+            return Err(input());
+        }
+        Ok(path.map_or(Storage::Memory, Storage::Sqlite))
+    }
+}
+
+async fn open_store(storage: &Storage) -> Result<Store> {
+    match storage {
+        Storage::Memory => Ok(Store::in_memory(StoreConfig::default()).await?),
+        Storage::Sqlite(path) => Ok(Store::open(path, StoreConfig::default()).await?),
+        Storage::Postgres {
+            environment,
+            schema,
+            initialize,
+        } => {
+            #[cfg(feature = "postgres")]
+            {
+                use htlk_runtime::store::{PostgresConfig, PostgresStore};
+                let connection = std::env::var(environment).map_err(|_| input())?;
+                let mut config = PostgresConfig::new(connection);
+                config.schema = schema.clone();
+                let store = if *initialize {
+                    PostgresStore::initialize(config, StoreConfig::default()).await?
+                } else {
+                    PostgresStore::open(config, StoreConfig::default()).await?
+                };
+                Ok(store.into())
+            }
+            #[cfg(not(feature = "postgres"))]
+            {
+                let _ = (environment, schema, initialize);
+                Err(input())
+            }
+        }
+    }
 }
 
 fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Option<Options>> {
@@ -110,6 +196,9 @@ fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Option<Op
         if !matches!(
             arg.as_str(),
             "--store"
+                | "--postgres-env"
+                | "--postgres-schema"
+                | "--postgres-mode"
                 | "--root"
                 | "--subscribe"
                 | "--watch-seconds"
@@ -134,6 +223,7 @@ fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Option<Op
         return Err(input());
     }
     let limits = Limits::default();
+    let store = storage(&mut flags)?;
     let connect_timeout_ms = flags
         .remove("--connect-timeout-ms")
         .map(|n| n.parse::<u64>().map_err(|_| input()))
@@ -205,7 +295,7 @@ fn parse(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Option<Op
         }
     };
     Ok(Some(Options {
-        store: flags.remove("--store"),
+        store,
         root,
         subscribe: flags.remove("--subscribe"),
         watch_seconds,
@@ -436,11 +526,7 @@ async fn monitor(
 
 async fn run(options: Options) -> Result<()> {
     let limits = Limits::default();
-    let store = if let Some(path) = &options.store {
-        SqliteStore::open(path, StoreConfig::default()).await?
-    } else {
-        SqliteStore::in_memory(StoreConfig::default()).await?
-    };
+    let store = open_store(&options.store).await?;
     let persistence = McpClientPersistence::new(store.clone(), Arc::new(SystemClock));
     let roots = options
         .root
@@ -580,6 +666,9 @@ mod tests {
 
     fn arguments(timeout: Option<&str>) -> Vec<OsString> {
         let mut args = Vec::new();
+        if cfg!(all(feature = "postgres", not(feature = "sqlite"))) {
+            args.extend(["--postgres-env".into(), "HTLK_TEST_POSTGRES_URL".into()]);
+        }
         if let Some(timeout) = timeout {
             args.extend(["--connect-timeout-ms".into(), timeout.into()]);
         }
@@ -706,6 +795,7 @@ mod tests {
         parse(args).unwrap().unwrap()
     }
 
+    #[cfg(feature = "sqlite")]
     #[test]
     fn delayed_stdio_startup_uses_cli_timeout_without_extending_catalog_budget() {
         let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
@@ -779,5 +869,91 @@ mod tests {
                 | "resources/list"
                 | "resources/templates/list"
         )));
+    }
+
+    #[test]
+    fn storage_selection_is_explicit_and_invalid_combinations_are_redacted() {
+        let endpoint = ["stdio", "timeout-peer", "1", "/unused-server"];
+        for flags in [
+            vec!["--store", "file.sqlite", "--postgres-env", "DATABASE_URL"],
+            vec!["--postgres-schema", "orphan"],
+            vec!["--postgres-mode", "open"],
+            vec![
+                "--postgres-env",
+                "DATABASE_URL",
+                "--postgres-mode",
+                "private-invalid-mode",
+            ],
+            vec![
+                "--postgres-env",
+                "DATABASE_URL",
+                "--postgres-schema",
+                "bad;schema",
+            ],
+        ] {
+            let args = flags.into_iter().chain(endpoint).map(OsString::from);
+            assert_eq!(parse(args).err().unwrap().to_string(), input().to_string());
+        }
+        if cfg!(feature = "postgres") {
+            let args = [
+                "--postgres-env",
+                "DATABASE_URL",
+                "--postgres-schema",
+                "example",
+                "--postgres-mode",
+                "open",
+            ]
+            .into_iter()
+            .chain(endpoint)
+            .map(OsString::from);
+            let options = parse(args).unwrap().unwrap();
+            assert!(matches!(
+                options.store,
+                Storage::Postgres {
+                    initialize: false,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn postgres_initialize_and_reopen_browse_only_the_advertised_catalogs() {
+        let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("node"))
+            .find(|path| path.is_absolute() && path.is_file())
+            .expect("Node.js is required");
+        let logs = Logs::new();
+        let schema = format!(
+            "htlk_example_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        actix::System::new().block_on(async {
+            for (name, initialize) in [("initialize", true), ("reopen", false)] {
+                let mut options = delayed_peer(&node, &logs.0.join(name), None, "0", "0");
+                options.store = Storage::Postgres {
+                    environment: "HTLK_TEST_POSTGRES_URL".into(),
+                    schema: schema.clone(),
+                    initialize,
+                };
+                run(options).await.unwrap();
+                assert_eq!(
+                    logs.methods(name),
+                    [
+                        "initialize",
+                        "notifications/initialized",
+                        "tools/list",
+                        "prompts/list",
+                        "resources/list",
+                        "resources/templates/list"
+                    ]
+                );
+            }
+        });
     }
 }

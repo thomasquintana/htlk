@@ -1308,7 +1308,7 @@ impl SqliteStore {
             let labels = old.labels.union(&evidence.labels, &limits).map_err(|_| StoreError::Invalid)?;
             let protection = cbor::encode(&labels.to_value(&limits).map_err(|_| StoreError::Invalid)?, &limits)?;
             if protection.len() > limits.max_document_bytes / 8 { return Err(StoreError::Invalid); }
-            drop(rows); drop(statement);
+            drop(rows); statement.finish();
             run::release(&tx, &owner, &old, now, &limits)?;
             tx.execute("UPDATE mcp_interactions SET outstanding=0,settlement_digest=?2,protection=?3,work_delivery=?4,revision=revision+1 WHERE interaction_id=?1", params![id.to_string(), late_digest.to_string(), protection, evidence.work_delivery.as_str()])?;
             if tx.execute("UPDATE mcp_owners SET outstanding=outstanding-1 WHERE owner_key=?1 AND outstanding>0", [owner.key().to_string()])? != 1 { return Err(StoreError::Corrupt); }
@@ -1417,7 +1417,7 @@ fn register_run_owner(
         return Err(StoreError::Fenced);
     }
     drop(rows);
-    drop(statement);
+    statement.finish();
     let previous: Option<i64> = db
         .query_row(
             "SELECT generation FROM mcp_owners WHERE owner_key=?1",
@@ -1805,7 +1805,7 @@ fn fact(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod audit_tests {
     use super::*;
 

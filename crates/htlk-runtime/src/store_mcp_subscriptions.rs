@@ -497,7 +497,7 @@ impl SqliteStore {
                 if bytes>limits.max_document_bytes {if result.is_empty(){return Err(StoreError::Invalid);}break;}
                 result.push(record);
             }
-            drop(rows);drop(statement);tx.commit()?;Ok(result)
+            drop(rows);statement.finish();tx.commit()?;Ok(result)
         }).await.map_err(worker_error)
     }
 }

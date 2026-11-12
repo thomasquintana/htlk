@@ -113,7 +113,8 @@ impl From<TestStore> for Store {
 pub fn postgres_selected() -> bool {
     match std::env::var("HTLK_TEST_BACKEND").as_deref() {
         Ok("postgres") => true,
-        Ok("sqlite") | Err(_) => false,
+        Ok("sqlite") => false,
+        Err(_) => cfg!(all(feature = "postgres", not(feature = "sqlite"))),
         Ok(value) => panic!("unsupported HTLK_TEST_BACKEND: {value}"),
     }
 }
