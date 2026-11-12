@@ -60,6 +60,24 @@ fn schema(identity: &[u8]) -> String {
     format!("htlk_test_{}", &digest[7..47])
 }
 
+#[cfg(feature = "postgres")]
+pub fn postgres_admin<R: Send + 'static>(
+    path: impl AsRef<Path>,
+    work: impl FnOnce(&mut postgres::Client) -> R + Send + 'static,
+) -> R {
+    let schema = schema(path.as_ref().as_os_str().as_encoded_bytes());
+    let url = std::env::var("HTLK_TEST_POSTGRES_URL").unwrap();
+    std::thread::spawn(move || {
+        let mut client = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+        client
+            .batch_execute(&format!("SET search_path TO \"{schema}\", pg_catalog"))
+            .unwrap();
+        work(&mut client)
+    })
+    .join()
+    .expect("PostgreSQL independent inspector panicked")
+}
+
 pub fn remove_file(path: impl AsRef<Path>) -> std::io::Result<()> {
     if postgres_selected() {
         #[cfg(feature = "postgres")]

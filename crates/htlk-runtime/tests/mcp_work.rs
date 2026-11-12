@@ -1,4 +1,6 @@
 //! Protected work snapshots and reconciled outcomes stay distinct from wire replies.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument,
     cbor::{self, Limits, Value},
@@ -10,7 +12,7 @@ use htlk_runtime::{
     failure::{FailureCode, RuntimeFailure},
     mcp::client::*,
     records::SecurityLabels,
-    store::{SqliteStore, StoreConfig},
+    store::StoreConfig,
 };
 use std::{
     collections::BTreeMap,
@@ -20,6 +22,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use test_store::TestStore as SqliteStore;
 
 struct Database(PathBuf);
 impl Database {
@@ -154,11 +157,24 @@ impl McpClientAuthorizer for RacingPolicy {
             owner,
         }) = self.mutation.lock().unwrap().take()
         {
-            let mut db = rusqlite::Connection::open(path).unwrap();
-            let tx = db.transaction().unwrap();
-            tx.execute("UPDATE mcp_interactions SET protection=?2,revision=revision+1 WHERE interaction_id=?1", rusqlite::params![id, protection]).unwrap();
-            tx.execute("INSERT INTO mcp_events(owner_key,interaction_id,kind,generation,timestamp_ms,payload) VALUES(?1,?2,'native_operation_outcome',1,8,?3)", rusqlite::params![owner, id, payload]).unwrap();
-            tx.commit().unwrap();
+            if test_store::postgres_selected() {
+                #[cfg(feature = "postgres")]
+                test_store::postgres_admin(path, move |db| {
+                    let mut tx = db.transaction().unwrap();
+                    tx.execute("UPDATE mcp_interactions SET protection=$2,revision=revision+1 WHERE interaction_id=$1", &[&id, &protection]).unwrap();
+                    tx.execute("INSERT INTO mcp_events(owner_key,interaction_id,kind,generation,timestamp_ms,payload) VALUES($1,$2,'native_operation_outcome',1,8,$3)", &[&owner, &id, &payload]).unwrap();
+                    tx.commit().unwrap();
+                });
+            } else {
+                #[cfg(feature = "sqlite")]
+                {
+                    let mut db = rusqlite::Connection::open(path).unwrap();
+                    let tx = db.transaction().unwrap();
+                    tx.execute("UPDATE mcp_interactions SET protection=?2,revision=revision+1 WHERE interaction_id=?1", rusqlite::params![id, protection]).unwrap();
+                    tx.execute("INSERT INTO mcp_events(owner_key,interaction_id,kind,generation,timestamp_ms,payload) VALUES(?1,?2,'native_operation_outcome',1,8,?3)", rusqlite::params![owner, id, payload]).unwrap();
+                    tx.commit().unwrap();
+                }
+            }
         }
         Ok(())
     }

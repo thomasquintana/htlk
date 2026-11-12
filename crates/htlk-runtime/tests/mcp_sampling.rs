@@ -1,4 +1,6 @@
 //! Independent peers observe real native child work and protected completion reuse.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument, McpTransport, ServerIdentity,
     cbor::{Limits, Value},
@@ -9,7 +11,7 @@ use htlk_runtime::{
     clock::SystemClock,
     failure::{FailureCode, RuntimeFailure},
     mcp::{McpCancellation, McpDelivery, McpEndpoint, McpRequest, client::*},
-    store::{SqliteStore, StoreConfig},
+    store::StoreConfig,
 };
 use std::{
     collections::BTreeMap,
@@ -19,6 +21,7 @@ use std::{
     },
     time::Duration,
 };
+use test_store::TestStore as SqliteStore;
 
 fn doc(raw: &str) -> JsonDocument {
     JsonDocument::new(raw.as_bytes(), &Limits::default()).unwrap()
@@ -345,7 +348,7 @@ fn combined_multimodal_sampling_uses_one_native_work_claim_and_recovers_after_re
                 assert_eq!(session.ended(), Some(McpSessionEnd::CallbackFailure));
                 assert_eq!(store.mcp_owner_usage(&owner).await.unwrap().calls_spent, 1);
                 assert_eq!(store.mcp_owner_usage(&owner).await.unwrap().outstanding, 1);
-                client.shutdown().await.unwrap(); store.close().await.unwrap(); std::fs::remove_file(path).unwrap();
+                client.shutdown().await.unwrap(); store.close().await.unwrap(); test_store::remove_file(path).unwrap();
                 return;
             }
             let count = if campaign == "interrupt" { 1 } else if mode == "stdio" { 2 } else { 3 };
@@ -443,7 +446,7 @@ fn combined_multimodal_sampling_uses_one_native_work_claim_and_recovers_after_re
             assert_eq!(model.calls.load(Ordering::SeqCst), count);
             reopened.close().await.unwrap();
             drop(peer);
-            std::fs::remove_file(path).unwrap();
+            test_store::remove_file(path).unwrap();
         });
     }
 }

@@ -236,7 +236,7 @@ notice regeneration produced identical notices, and docs/spec checks passed.
 
 ### Task 6 — Complete durable MCP support
 
-Status: pending.
+Status: complete (2026-11-11).
 
 - Owners/generations/epochs and immutable session isolation.
 - Interactions, quotas, work claims, replies, cancellations, delivery evidence,
@@ -251,6 +251,23 @@ Status: pending.
 
 Gate: all durable MCP conformance, principal/epoch isolation, quota races,
 completion/cancellation/retrieval-error accounting, and reopen scenarios pass.
+
+Evidence: all 67 crate MCP scenarios across interaction ledger, subscriptions,
+received/remote tasks, callbacks, sampling, work evidence, URL live transport, and
+sessions passed on PG18 and SQLite. All 36 root MCP/runtime conformance, delivery,
+callback-budget, data/error/result, reply-label, and inspection scenarios passed
+on both. Test-only independent native SQL retains the same cross-owner corruption,
+task-cancellation trigger rollback, altered result digest, and policy-race oracles.
+Raw SQLite URL-state fault tests remain backend-specific and unmodified in intent.
+Run-owned callbacks verified every actual ancestor's counters on one graph worker;
+lost reply acceptance/retrieval failure/cancellation retain original uncertainty.
+The real-time late-native-reply test scales attempt, reply delay AND cancellation
+grace together for PG (otherwise its delayed reply correctly falls outside the
+original 100ms grace). Independent native SQL observes the actual retained bytes
+and private-parent protection; no in-process dispatch count substitutes for it.
+SQLite retains the original 500/550/100ms timing. Workspace all-target/all-feature
+Clippy, docs/spec and independent native-fixture checks passed. Production source
+and native identity contributions did not change in this task.
 
 ### Task 7 — Conformance, faults, concurrency, and resource qualification
 
@@ -349,3 +366,10 @@ whole and clearly records behavior, tests, compatibility, operational limits.
 - Re-read plan after task 5. Next: complete durable MCP conformance with native
   fault tests retained, including run-owned atomic reservation accounting, URLs,
   subscriptions, received/remote tasks, late evidence and owner-journal paging.
+- Task 5 commit: 8b55781. Re-read plan at task 6. Parameterizing durable MCP suites
+  and retaining their corruption/fault oracles through backend-native independent
+  SQL. Production APIs do not inspect test variables and all core state-machine
+  bodies remain shared.
+- Re-read plan after task 6. Next: full deep E2E/backend matrix, controlled network
+  commit-ack fault, connection/lock/queue/resource bounds, PostgreSQL 16 qualification,
+  then examples, CI services/coverage/release, packaging, complete checks and PR.

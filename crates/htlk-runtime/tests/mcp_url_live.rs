@@ -1,4 +1,6 @@
 //! Independent stdio, HTTP JSON/idle SSE and coalesced POST SSE URL lifecycles.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument, McpTransport, ServerIdentity,
     cbor::{Limits, Value},
@@ -10,7 +12,7 @@ use htlk_runtime::{
     failure::{FailureCode, RuntimeFailure},
     mcp::{McpCancellation, McpDelivery, McpEndpoint, McpFuture, client::*},
     records::SecurityLabels,
-    store::{SqliteStore, StoreConfig},
+    store::StoreConfig,
 };
 use std::{
     collections::BTreeMap,
@@ -19,6 +21,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use test_store::TestStore as SqliteStore;
 const PEER: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/support/mcp_url_peer.mjs"

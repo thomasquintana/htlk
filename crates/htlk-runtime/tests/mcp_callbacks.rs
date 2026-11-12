@@ -1,4 +1,6 @@
 //! Actual nested client services, addressed replies, and durable callback deduplication.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument, McpTransport, ServerIdentity,
     cbor::{Limits, Value},
@@ -10,7 +12,7 @@ use htlk_runtime::{
     failure::{FailureCode, RuntimeFailure},
     mcp::{McpCancellation, McpDelivery, McpEndpoint, McpFuture, client::*},
     records::SecurityLabels,
-    store::{McpOwnerUsage, SqliteStore, StoreConfig},
+    store::{McpOwnerUsage, StoreConfig},
 };
 use std::{
     collections::BTreeMap,
@@ -20,6 +22,7 @@ use std::{
     },
     time::Duration,
 };
+use test_store::TestStore as SqliteStore;
 
 const PEER: &str = r#"
 import {createInterface} from 'node:readline';

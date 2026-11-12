@@ -10,7 +10,7 @@ use htlk::runtime::{
         McpRequest,
     },
     records::{RunStatus, SecurityLabels},
-    store::{RecordFamily, SqliteStore, StoreConfig},
+    store::{RecordFamily, StoreConfig},
 };
 use htlk_executable::{
     Identifier, JsonDocument, McpBinding,
@@ -25,6 +25,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use support::store::TestStore as SqliteStore;
 const SOURCE: &str = r#"ir_version="0.1" graph test.delivery{inputs={}outputs={value=json}nodes{args=eval(json,{query="question"}) lookup=call(mcp.tool("research","lookup")){retry{max_attempts=2 on=["MCP_TRANSPORT"] backoff_ms=[0]}}}edges{edge args{from=args.outputs.value to=lookup.inputs.arguments}edge value{from=lookup.outputs.value to=outputs.value}}}"#;
 struct Policy {
     safe: bool,

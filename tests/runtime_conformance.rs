@@ -11,7 +11,7 @@ use htlk::{
         identity::InvocationId,
         mcp::{McpAdapter, McpFuture, McpRequest},
         records::{InputValue, ManifestEntry, RunStatus, SecurityLabels},
-        store::{SqliteStore, StoreConfig},
+        store::StoreConfig,
     },
 };
 use htlk_executable::{
@@ -27,6 +27,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 struct Policy;
 impl RuntimePolicy for Policy {
     fn authorize(

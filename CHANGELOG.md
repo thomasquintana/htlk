@@ -43,6 +43,8 @@ User-visible changes and compatibility boundaries are recorded here, following
   identities, including long strings and NUL, retain their bytewise semantics.
   Artifact publication, retention/collection, live extension, and saved-checkpoint
   recovery preserve the same transactional invariants across both backends.
+  Durable MCP sessions, callback accounting, URL consent, subscriptions, received
+  tasks, remote tasks, and protected late evidence use the selected store as well.
   Known transaction rollback keeps connections reusable; uncertain commits require
   reopening and reconciling the original receipt. SQLite remains the default.
 - Accounted MCP host work now has a stable single-operation claim and a native child

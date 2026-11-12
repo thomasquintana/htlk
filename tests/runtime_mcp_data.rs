@@ -10,7 +10,7 @@ use htlk::{
         failure::{FailureCode, RuntimeFailure},
         mcp::{McpAdapter, McpFuture, McpRequest},
         records::{RunStatus, SecurityLabels},
-        store::{SqliteStore, StoreConfig},
+        store::StoreConfig,
     },
 };
 use htlk_executable::{
@@ -23,6 +23,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 const SOURCE: &str = r#"
     ir_version="0.1" graph test.data {
         inputs={} outputs={fixed=McpResourceResult, expanded=McpResourceResult, prompt=McpPromptResult}
