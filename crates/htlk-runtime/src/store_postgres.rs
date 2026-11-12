@@ -11,6 +11,7 @@ use postgres::{
 };
 use std::{
     cell::{Cell, RefCell},
+    collections::{BTreeMap, VecDeque},
     fmt,
     ops::Deref,
     time::{Duration, Instant},
@@ -144,6 +145,7 @@ pub(crate) struct Database {
     started: Cell<Option<Instant>>,
     broken: Cell<bool>,
     cursor_failed: Cell<bool>,
+    statements: RefCell<BTreeMap<String, postgres::Statement>>,
 }
 impl Database {
     fn connect(settings: PostgresConfig, initialize: bool) -> store_db::Result<Self> {
@@ -245,6 +247,7 @@ impl Database {
             started: Cell::new(None),
             broken: Cell::new(false),
             cursor_failed: Cell::new(false),
+            statements: RefCell::new(BTreeMap::new()),
         })
     }
     pub(crate) fn begin(&self) -> store_db::Result<()> {
@@ -274,8 +277,11 @@ impl Database {
         match result {
             Ok(()) => Ok(()),
             Err(error) => {
-                self.broken.set(true);
-                if success && error.as_db_error().is_none() {
+                let unknown = error.as_db_error().is_none();
+                if unknown || self.client.borrow_mut().batch_execute("ROLLBACK").is_err() {
+                    self.broken.set(true);
+                }
+                if success && unknown {
                     Err(Error::CommitUnknown)
                 } else {
                     Err(pg_error(error))
@@ -309,7 +315,7 @@ impl Database {
             sql.push_str(" RETURNING epoch");
         }
         let mut client = self.client.borrow_mut();
-        let statement = client.prepare(&sql).map_err(pg_error)?;
+        let statement = self.prepare(&mut client, &sql)?;
         let params = parameters(statement.params(), values)?;
         let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|v| &**v).collect();
         if epoch {
@@ -324,6 +330,31 @@ impl Database {
     pub(crate) fn last_insert_id(&self) -> i64 {
         self.last_insert.get()
     }
+    fn prepare(&self, client: &mut Client, sql: &str) -> store_db::Result<postgres::Statement> {
+        if let Some(statement) = self.statements.borrow().get(sql) {
+            return Ok(statement.clone());
+        }
+        let statement = client.prepare(sql).map_err(pg_error)?;
+        let mut statements = self.statements.borrow_mut();
+        if statements.len() >= 256 {
+            statements.clear();
+        }
+        statements.insert(sql.into(), statement.clone());
+        Ok(statement)
+    }
+    pub(crate) fn query_one(&self, sql: &str, values: Vec<Value>) -> store_db::Result<Vec<Value>> {
+        self.deadline()?;
+        let sql = dialect(sql)?;
+        let mut client = self.client.borrow_mut();
+        let statement = self.prepare(&mut client, &sql)?;
+        let params = parameters(statement.params(), values)?;
+        let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|v| &**v).collect();
+        let row = client
+            .query_opt(&statement, &refs)
+            .map_err(pg_error)?
+            .ok_or(Error::Missing)?;
+        decode_row(&row)
+    }
     pub(crate) fn rows(&self, sql: &str, values: Vec<Value>) -> store_db::Result<Cursor<'_>> {
         self.deadline()?;
         let sql = dialect(sql)?;
@@ -331,7 +362,7 @@ impl Database {
         self.cursor.set(next);
         let name = format!("htlk_cursor_{next}");
         let mut client = self.client.borrow_mut();
-        let query = client.prepare(&sql).map_err(pg_error)?;
+        let query = self.prepare(&mut client, &sql)?;
         let statement = client
             .prepare_typed(
                 &format!("DECLARE {name} NO SCROLL CURSOR FOR {sql}"),
@@ -345,6 +376,7 @@ impl Database {
             db: self,
             name,
             done: false,
+            buffered: VecDeque::new(),
         })
     }
 }
@@ -353,6 +385,7 @@ pub(crate) struct Cursor<'a> {
     db: &'a Database,
     name: String,
     done: bool,
+    buffered: VecDeque<postgres::Row>,
 }
 impl Cursor<'_> {
     pub(crate) fn next(&mut self) -> store_db::Result<Option<Vec<Value>>> {
@@ -360,52 +393,55 @@ impl Cursor<'_> {
             return Ok(None);
         }
         self.db.deadline()?;
-        let rows = self
-            .db
-            .client
-            .borrow_mut()
-            .query(&format!("FETCH FORWARD 1 FROM {}", self.name), &[])
-            .map_err(pg_error)?;
-        let Some(row) = rows.first() else {
+        if self.buffered.is_empty() {
+            self.buffered.extend(
+                self.db
+                    .client
+                    .borrow_mut()
+                    .query(&format!("FETCH FORWARD 16 FROM {}", self.name), &[])
+                    .map_err(pg_error)?,
+            );
+        }
+        let Some(row) = self.buffered.pop_front() else {
             self.done = true;
             return Ok(None);
         };
-        row.columns()
-            .iter()
-            .enumerate()
-            .map(|(index, column)| {
-                Ok(match *column.type_() {
-                    Type::BOOL => row
-                        .try_get::<_, Option<bool>>(index)
-                        .map_err(pg_error)?
-                        .map_or(Value::Null, |v| Value::Integer(i64::from(v))),
-                    Type::INT8 => row
-                        .try_get::<_, Option<i64>>(index)
-                        .map_err(pg_error)?
-                        .map_or(Value::Null, Value::Integer),
-                    Type::INT4 => row
-                        .try_get::<_, Option<i32>>(index)
-                        .map_err(pg_error)?
-                        .map_or(Value::Null, |v| Value::Integer(i64::from(v))),
-                    Type::BYTEA => {
-                        match row.try_get::<_, Option<Vec<u8>>>(index).map_err(pg_error)? {
-                            None => Value::Null,
-                            Some(bytes) if opaque_column(column.name()) => {
-                                Value::Text(String::from_utf8(bytes).map_err(|_| Error::Invalid)?)
-                            }
-                            Some(bytes) => Value::Blob(bytes),
-                        }
-                    }
-                    Type::TEXT | Type::VARCHAR | Type::NAME => row
-                        .try_get::<_, Option<String>>(index)
-                        .map_err(pg_error)?
-                        .map_or(Value::Null, Value::Text),
-                    _ => return Err(Error::Invalid),
-                })
-            })
-            .collect::<store_db::Result<Vec<_>>>()
-            .map(Some)
+        decode_row(&row).map(Some)
     }
+}
+fn decode_row(row: &postgres::Row) -> store_db::Result<Vec<Value>> {
+    row.columns()
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            Ok(match *column.type_() {
+                Type::BOOL => row
+                    .try_get::<_, Option<bool>>(index)
+                    .map_err(pg_error)?
+                    .map_or(Value::Null, |v| Value::Integer(i64::from(v))),
+                Type::INT8 => row
+                    .try_get::<_, Option<i64>>(index)
+                    .map_err(pg_error)?
+                    .map_or(Value::Null, Value::Integer),
+                Type::INT4 => row
+                    .try_get::<_, Option<i32>>(index)
+                    .map_err(pg_error)?
+                    .map_or(Value::Null, |v| Value::Integer(i64::from(v))),
+                Type::BYTEA => match row.try_get::<_, Option<Vec<u8>>>(index).map_err(pg_error)? {
+                    None => Value::Null,
+                    Some(bytes) if opaque_column(column.name()) => {
+                        Value::Text(String::from_utf8(bytes).map_err(|_| Error::Invalid)?)
+                    }
+                    Some(bytes) => Value::Blob(bytes),
+                },
+                Type::TEXT | Type::VARCHAR | Type::NAME => row
+                    .try_get::<_, Option<String>>(index)
+                    .map_err(pg_error)?
+                    .map_or(Value::Null, Value::Text),
+                _ => return Err(Error::Invalid),
+            })
+        })
+        .collect::<store_db::Result<Vec<_>>>()
 }
 impl Drop for Cursor<'_> {
     fn drop(&mut self) {

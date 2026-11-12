@@ -4,7 +4,7 @@ use htlk::runtime::{
     Attestation, Authorization, HostContext, Runtime, RuntimeConfig, RuntimePolicy,
     failure::{FailureCode, RuntimeFailure},
     records::SecurityLabels,
-    store::{SqliteStore, StoreConfig},
+    store::StoreConfig,
 };
 use htlk_executable::{
     Identifier,
@@ -15,6 +15,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+use support::store::TestStore as SqliteStore;
 use support::{catalogs, native_compiler};
 
 struct Policy {

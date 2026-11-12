@@ -8,10 +8,7 @@ use htlk::{
         failure::{FailureCode, RuntimeFailure},
         identity::{ArtifactId, InvocationId, ScopeInstanceId},
         records::{InputManifest, InputValue, ManifestEntry, RunStatus, SecurityLabels},
-        store::{
-            JournalEvent, RecordFamily, RecordKey, ReplayState, SqliteStore, StoreConfig,
-            StoreError,
-        },
+        store::{JournalEvent, RecordFamily, RecordKey, ReplayState, StoreConfig, StoreError},
     },
 };
 use htlk_executable::{
@@ -26,6 +23,7 @@ use std::{
         atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     },
 };
+use support::store::TestStore as SqliteStore;
 use support::{catalogs, native_compiler};
 
 struct Clock(AtomicI64);

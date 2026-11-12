@@ -38,6 +38,11 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Optional native PostgreSQL storage supports fenced run transactions, immutable
+  registration, command/host receipts, journals and outbox recovery. Exact opaque
+  identities, including long strings and NUL, retain their bytewise semantics.
+  Known transaction rollback keeps connections reusable; uncertain commits require
+  reopening and reconciling the original receipt. SQLite remains the default.
 - Accounted MCP host work now has a stable single-operation claim and a native child
   RPC wrapper bound to the actual callback session, ancestor reservation, deadline
   and cancellation. Protected routing/native outcome evidence and known sampling

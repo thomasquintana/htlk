@@ -72,6 +72,9 @@ COMMITTED transaction; domain transaction boundaries use savepoints inside it.
 The lock is acquired before domain reads, preserving SQLite's serialized writer
 semantics across processes, including retention, callbacks, and journal cursors.
 Read operations currently acquire the same gate for coherent multi-query views.
+The PostgreSQL driver caches at most 256 prepared statements. Single-row lookups
+use their native prepared query directly; scans use server cursors with a bounded
+16-row wire buffer and incremental domain decoding/page accounting.
 
 Cloned handles share a dedicated worker and a queue of at most 256 waiting calls.
 Independent opens create independent connections. Timeouts bound connection,

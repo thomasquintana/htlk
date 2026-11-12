@@ -12,7 +12,7 @@ use htlk::{
         failure::{FailureCode, RuntimeFailure},
         mcp::{McpEndpoint, NativeMcpAdapter},
         records::RunStatus,
-        store::{RecordFamily, SqliteStore, StoreConfig},
+        store::{RecordFamily, StoreConfig},
         *,
     },
 };
@@ -28,6 +28,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use support::store::TestStore as SqliteStore;
 
 struct Worker(Child);
 impl Drop for Worker {
@@ -141,7 +142,7 @@ fn subprocess_worker() {
         let _engine = ExecutionEngine::launch(
             runtime.clone(),
             ExecutionConfig {
-                lease_ms: 100,
+                lease_ms: support::store::lease_ms(100),
                 poll_interval: Duration::from_millis(2),
                 ..Default::default()
             },

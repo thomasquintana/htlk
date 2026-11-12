@@ -65,6 +65,13 @@ Tests allocate uniquely named schemas within that disposable database. They do n
 use application deployment credentials or external MCP services. Select another
 unused host port if necessary.
 
+Shared runtime campaigns select their test-only factory with
+`HTLK_TEST_BACKEND=postgres`; the default is SQLite. Production store constructors
+never inspect these variables. File-store scenarios derive the PostgreSQL schema
+from the exact test path, so independent connections and killed/restarted subprocesses
+reopen the same state. Real wall-clock campaigns use longer finite I/O/lease budgets
+for PostgreSQL; fake-clock deadline tests retain their exact logical timestamps.
+
 The ordinary Rust suite includes every E2E, crash, and stress campaign. The retained
 Node tests independently exercise documentation, coverage, and discovery helpers:
 

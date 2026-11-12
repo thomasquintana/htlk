@@ -384,9 +384,27 @@ impl Connection {
         params: impl Params,
         f: impl FnOnce(&Row<'_>) -> Result<T>,
     ) -> Result<T> {
-        let mut statement = self.prepare(sql)?;
-        let mut rows = statement.query(params)?;
-        f(rows.next()?.ok_or(Error::Missing)?)
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(db) => {
+                let values = db.query_one(sql, params.values()?)?;
+                f(&Row {
+                    values,
+                    marker: std::marker::PhantomData,
+                })
+            }
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => {
+                let mut statement = self.prepare(sql)?;
+                let mut rows = statement.query(params)?;
+                f(rows.next()?.ok_or(Error::Missing)?)
+            }
+            #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+            Self::Disabled => {
+                let _ = (sql, params, f);
+                Err(Error::Invalid)
+            }
+        }
     }
     pub(crate) fn transaction(&mut self) -> Result<Transaction<'_>> {
         self.transaction_with_behavior(TransactionBehavior::Deferred)

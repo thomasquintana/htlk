@@ -7,7 +7,7 @@ use htlk::runtime::{
     failure::{FailureCode, RuntimeFailure},
     identity::RunId,
     records::{InputValue, RunStatus, SecurityLabels},
-    store::{RecordFamily, RecordKey, RunHeader, SqliteStore, StoreConfig},
+    store::{RecordFamily, RecordKey, RunHeader, StoreConfig},
 };
 use htlk_executable::{
     Identifier,
@@ -15,6 +15,7 @@ use htlk_executable::{
     digest::Digest,
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use support::store::TestStore as SqliteStore;
 use support::{catalogs, native_compiler};
 struct Policy;
 #[test]

@@ -163,7 +163,7 @@ layout, but their PostgreSQL conformance is established in tasks 4–6.
 
 ### Task 4 — PostgreSQL core transaction engine
 
-Status: pending.
+Status: complete (2026-11-11).
 
 Port in order: registration/provenance; namespace/run ID and host receipts; creation,
 acquire/renew/header; transition CAS/finality/root replacement; command receipt;
@@ -185,6 +185,23 @@ Lost COMMIT response is uncertain: reconcile original receipt before effectful
 progress. Database retries must never dispatch network/provider operations.
 
 Gate: independent pools/processes preserve atomicity/fencing/idempotency/replay.
+
+Evidence: 22 shared registration/start/execution/boundary tests passed on PG18;
+independent connection acquisition/CAS, receipt/replay/outbox, injected outbox and
+deferred-COMMIT rollback tests passed with direct native SQL assertions. A known
+deferred rollback now leaves the connection reusable; unknown commits still
+quarantine it. Shared four-checkpoint process-kill recovery passed (46.06s), with
+no adapter/provider redispatch. The complete 24-run/two-engine/1,2,4-worker campaign
+passed on PG18 (108.80s); the same six SQLite targets passed (25 tests total).
+Native statement cache is bounded to 256 entries, direct single-row queries avoid
+cursor round trips, and scan cursor wire buffers are bounded to 16 rows. Real-I/O
+campaigns use finite PG-aware lease/wall-clock budgets after the original 100ms
+crash lease demonstrably caused inspection renewal churn; fake clocks and logical
+deadline oracles are unchanged. All 44 all-feature unit tests and 17 fixed identity/
+admission tests passed; workspace all-target/all-feature Clippy and PG-only library
+Clippy passed with denied warnings. Explicit fixture generation and independent
+checker passed (b0b4a31aa505208e1851f393b81e4ea4a8b5aefefef327c69a8d432934c65713).
+Documentation/spec checks passed. Next: artifact/reference retention qualification.
 
 ### Task 5 — Artifacts, retention, and recovery
 
@@ -301,3 +318,11 @@ whole and clearly records behavior, tests, compatibility, operational limits.
   doctests passed; updated documentation/spec validators passed. Generated notices
   retain the generator's exact upstream license text (including upstream CRLF).
   Re-read plan after task 3; core acceptance and fault qualification is next.
+- Task 3 commit: 7aeede8. Re-read plan before task 4. Adding a test-only backend
+  fixture (production constructors never inspect test environment), sharing actual
+  runtime scenarios between SQLite and PostgreSQL with exact path-based reopen and
+  subprocess store identity. PostgreSQL correctness baseline retains the global
+  transaction gate; no scoped-lock optimization is being claimed.
+- Re-read plan after task 4. Commit core qualification and proceed to task 5;
+  PostgreSQL fixture is shared in crates/htlk-runtime/tests/support/store.rs and
+  root tests/support/mod.rs. Preserve native SQLite fault-injection tests.
