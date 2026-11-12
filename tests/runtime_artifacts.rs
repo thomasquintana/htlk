@@ -7,8 +7,8 @@ use htlk::runtime::{
     identity::{RunId, ScopeInstanceId},
     records::SecurityLabels,
     store::{
-        RecordFamily, RecordKey, RecordWrite, RunLease, RunSeed, SqliteStore, StoreConfig,
-        Transition, TransitionContext,
+        RecordFamily, RecordKey, RecordWrite, RunLease, RunSeed, StoreConfig, Transition,
+        TransitionContext,
     },
 };
 use htlk_executable::{
@@ -20,6 +20,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use support::store::TestStore as SqliteStore;
 use support::{catalogs, native_compiler};
 
 struct Policy {

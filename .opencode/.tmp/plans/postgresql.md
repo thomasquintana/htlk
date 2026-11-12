@@ -205,7 +205,7 @@ Documentation/spec checks passed. Next: artifact/reference retention qualificati
 
 ### Task 5 — Artifacts, retention, and recovery
 
-Status: pending.
+Status: complete (2026-11-11).
 
 - Native stage/metadata/bytes/publication/producers and recovery implementation.
 - Immutable exact byte equality, full output-manifest acceptance in one commit.
@@ -216,6 +216,23 @@ Status: pending.
 
 Gate: expiry versus alias/publication, GC versus staging/publication, reopen and
 no-provider-call recovery invariants, including independent processes.
+
+Evidence: all 32 shared artifact, retention, recovery, extension, scope-selection,
+exact deadline, wait, source and alignment scenarios passed on PG18 and SQLite.
+Added a two-connection race between new aliases and expiry, plus inline staging/
+publication versus collection: every accepted artifact remains readable; expiry
+cannot coexist with an accepted new alias. Existing tests verify audit promises,
+cross-run roots, immutable tombstones, shared-byte collection, identity-preserving
+reopen, no-adapter recovery and rejected corrupt checkpoints. The task-4 process
+kill campaign already covers durable response/intent/wait/loop checkpoints.
+Test-only cleanup now drops the exact path-derived PG schema instead of attempting
+to unlink a nonexistent SQLite file. Engine-lifecycle scope tests use an explicit
+fixed clock (they do not test clock progression); their exact 100ms lease and the
+separate 1200ms takeover oracle remain intact. Real I/O wait budgets are finite and
+backend-aware. Workspace all-target/all-feature Clippy passed. No production
+source contribution changed, so native fixture bytes remain task-4's reviewed
+golden. Root dev dependency enables independent PG cleanup/inspection; all-feature
+notice regeneration produced identical notices, and docs/spec checks passed.
 
 ### Task 6 — Complete durable MCP support
 
@@ -326,3 +343,9 @@ whole and clearly records behavior, tests, compatibility, operational limits.
 - Re-read plan after task 4. Commit core qualification and proceed to task 5;
   PostgreSQL fixture is shared in crates/htlk-runtime/tests/support/store.rs and
   root tests/support/mod.rs. Preserve native SQLite fault-injection tests.
+- Task 4 commit: ee0ac92. Re-read plan before task 5. Parameterizing artifact,
+  retention, recovery, extension, explicit run-selection, exact fake-clock deadline,
+  wait, source and alignment scenarios using the same test-only factory.
+- Re-read plan after task 5. Next: complete durable MCP conformance with native
+  fault tests retained, including run-owned atomic reservation accounting, URLs,
+  subscriptions, received/remote tasks, late evidence and owner-journal paging.

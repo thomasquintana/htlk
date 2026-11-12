@@ -44,8 +44,7 @@ impl TestStore {
         let url = std::env::var("HTLK_TEST_POSTGRES_URL")
             .expect("PostgreSQL tests require HTLK_TEST_POSTGRES_URL");
         let mut settings = PostgresConfig::new(url);
-        let digest = htlk_executable::digest::hash_bytes(identity).to_string();
-        settings.schema = format!("htlk_test_{}", &digest[7..47]);
+        settings.schema = schema(identity);
         PostgresStore::initialize(settings, config)
             .await
             .map(|store| Self(store.into()))
@@ -53,6 +52,34 @@ impl TestStore {
     pub async fn close(self) -> Result<(), StoreError> {
         self.0.close().await
     }
+}
+
+#[cfg(feature = "postgres")]
+fn schema(identity: &[u8]) -> String {
+    let digest = htlk_executable::digest::hash_bytes(identity).to_string();
+    format!("htlk_test_{}", &digest[7..47])
+}
+
+pub fn remove_file(path: impl AsRef<Path>) -> std::io::Result<()> {
+    if postgres_selected() {
+        #[cfg(feature = "postgres")]
+        {
+            let schema = schema(path.as_ref().as_os_str().as_encoded_bytes());
+            let url = std::env::var("HTLK_TEST_POSTGRES_URL").unwrap();
+            return std::thread::spawn(move || {
+                let mut client = postgres::Client::connect(&url, postgres::NoTls)
+                    .map_err(std::io::Error::other)?;
+                client
+                    .batch_execute(&format!("DROP SCHEMA \"{schema}\" CASCADE"))
+                    .map_err(std::io::Error::other)
+            })
+            .join()
+            .expect("PostgreSQL cleanup worker panicked");
+        }
+        #[cfg(not(feature = "postgres"))]
+        panic!("PostgreSQL cleanup requires the postgres feature");
+    }
+    std::fs::remove_file(path)
 }
 impl Deref for TestStore {
     type Target = Store;

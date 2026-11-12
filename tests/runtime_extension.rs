@@ -9,7 +9,7 @@ use htlk::{
         failure::{FailureCode, RuntimeFailure},
         mcp::{McpAdapter, McpFuture, McpRequest},
         records::{InputValue, RunStatus, SecurityLabels},
-        store::{RecordFamily, RecordKey, SqliteStore, StoreConfig},
+        store::{RecordFamily, RecordKey, StoreConfig},
     },
 };
 use htlk_executable::{
@@ -25,6 +25,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 const PLANNING: &str = r#"
     ir_version="0.1" graph test.planning {
         inputs={context=string, optional_context=optional(string)} outputs={context=string}

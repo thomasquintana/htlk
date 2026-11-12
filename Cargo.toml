@@ -75,6 +75,7 @@ postgres = ["htlk-runtime/postgres"]
 
 [dev-dependencies]
 actix.workspace = true
+postgres.workspace = true
 htlk-executable.workspace = true
 htlk-analyzer.workspace = true
 tokio.workspace = true

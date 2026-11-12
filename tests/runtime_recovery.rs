@@ -9,8 +9,8 @@ use htlk::runtime::{
     mcp::{McpAdapter, McpFuture, McpRequest},
     records::{InputValue, RunStatus, SecurityLabels},
     store::{
-        RecordFamily, RecordKey, RecordWrite, ReplayState, SqliteStore, StoreConfig, StoredRecord,
-        Transition, TransitionContext,
+        RecordFamily, RecordKey, RecordWrite, ReplayState, StoreConfig, StoredRecord, Transition,
+        TransitionContext,
     },
 };
 use htlk_executable::{
@@ -26,6 +26,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 struct Policy;
 impl RuntimePolicy for Policy {
     fn authorize(&self, _: &HostContext, _: Authorization<'_>) -> Result<(), RuntimeFailure> {
@@ -198,7 +199,7 @@ fn reopened_loop_resumes_committed_feedback_and_the_same_open_wait() {
         // absent checkpoint and preserve the complete immutable record.
         assert_eq!(store.record(&run.run_id,&skipped.key).await.unwrap(),skipped);
         for record in before{let after=store.record(&run.run_id,&record.key).await.unwrap();let (Value::Map(before),Value::Map(after))=(&record.payload,&after.payload)else{panic!()};assert_eq!(before.get("input_hash"),after.get("input_hash"));}
-        runtime.submit_reply(&caller,first,Value::Bool(false),"first").await.unwrap();engine.shutdown().await.unwrap();store.close().await.unwrap();std::fs::remove_file(&path).unwrap();
+        runtime.submit_reply(&caller,first,Value::Bool(false),"first").await.unwrap();engine.shutdown().await.unwrap();store.close().await.unwrap();support::store::remove_file(&path).unwrap();
     })
 }
 #[test]
@@ -233,7 +234,7 @@ fn reopened_response_recorded_checkpoint_finishes_with_no_mcp_adapter_and_matche
         let engine=ExecutionEngine::launch(recovered.clone(),config).unwrap();let view=terminal(&recovered,&caller,&run.run_id).await;assert_eq!(view.header.status,RunStatus::Succeeded);assert_eq!(adapter.sent.load(Ordering::SeqCst),1);assert!(view.header.fence>lease.fence());
         let entries=reopened.journal(&run.run_id,0,100).await.unwrap();let mut replay=ReplayState::begin(&entries[0],&Limits::default()).unwrap();for entry in &entries[1..]{replay.apply(entry,&Limits::default()).unwrap();}assert_eq!(replay.header(),&view.header);
         for family in [RecordFamily::Scope,RecordFamily::Invocation,RecordFamily::Artifact,RecordFamily::Usage,RecordFamily::Reservation,RecordFamily::Attempt,RecordFamily::Response,RecordFamily::Guard,RecordFamily::Binding,RecordFamily::Observation]{for record in reopened.records(&run.run_id,family,None,100).await.unwrap(){assert_eq!(replay.record(&record.key),Some(&record));}}
-        engine.shutdown().await.unwrap();reopened.close().await.unwrap();std::fs::remove_file(&path).unwrap();
+        engine.shutdown().await.unwrap();reopened.close().await.unwrap();support::store::remove_file(&path).unwrap();
     })
 }
 #[test]

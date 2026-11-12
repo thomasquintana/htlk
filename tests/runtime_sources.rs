@@ -9,7 +9,7 @@ use htlk::{
         failure::{FailureCode, RuntimeFailure},
         records::SecurityLabels,
         source::{SourceAttachment, SourceEntry, SourceOrigin, SourceSidecar},
-        store::{SqliteStore, StoreConfig},
+        store::StoreConfig,
     },
 };
 use htlk_executable::{
@@ -21,6 +21,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use support::store::TestStore as SqliteStore;
 struct Policy {
     private: AtomicBool,
 }
