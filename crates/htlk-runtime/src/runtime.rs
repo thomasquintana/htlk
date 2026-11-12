@@ -7,7 +7,7 @@ use crate::{
     failure::{FailureBoundary, FailureCode, RuntimeFailure},
     identity::ArtifactId,
     records::{RuntimeRecordError, SecurityLabels},
-    store::{SqliteStore, StoreError},
+    store::{Store, StoreError},
     verify_executable_owned,
 };
 use htlk_executable::{
@@ -375,7 +375,7 @@ pub struct GraphRegistration {
 /// trusted policy. Registration executes no graph work. Execution consumers build
 /// on the same admitted-cache/storage boundary.
 pub struct Runtime {
-    pub(crate) store: SqliteStore,
+    pub(crate) store: Store,
     pub(crate) registry: Arc<NativeRegistry>,
     pub(crate) policy: Arc<dyn RuntimePolicy>,
     pub(crate) config: RuntimeConfig,
@@ -394,7 +394,7 @@ impl Runtime {
     /// # Errors
     /// Returns unsupported codec configuration or cache limits.
     pub fn new(
-        store: SqliteStore,
+        store: impl Into<Store>,
         registry: Arc<NativeRegistry>,
         policy: Arc<dyn RuntimePolicy>,
         config: RuntimeConfig,
@@ -420,7 +420,7 @@ impl Runtime {
             return Err(RuntimeError::failure(FailureCode::Profile));
         }
         Ok(Self {
-            store,
+            store: store.into(),
             registry,
             policy,
             config,

@@ -1,4 +1,4 @@
-//! Trusted SQLite coordination infrastructure. This is a storage boundary for
+//! Trusted transactional coordination infrastructure. This is a storage boundary for
 //! coordinators, not an authenticated host API. It exposes no raw SQL connection.
 //! Database transactions, not actor mailboxes, establish fenced run authority.
 
@@ -82,14 +82,20 @@ impl Default for StoreConfig {
     }
 }
 
-/// Cloneable asynchronous SQLite storage handle. Clones share the database worker;
-/// separately opened handles are protected by SQLite transactions and run fences.
+/// Cloneable asynchronous storage handle. Clones share a connection worker;
+/// independently opened handles arbitrate authority through database transactions.
 #[derive(Clone)]
-pub struct SqliteStore {
+pub struct Store {
     connection: Connection,
     config: StoreConfig,
 }
-impl SqliteStore {
+/// Compatibility name for the store's SQLite constructors.
+///
+/// Existing hosts can keep using `SqliteStore::open` and `SqliteStore::in_memory`.
+/// Runtime consumers use [`Store`] without coupling execution to a database driver.
+pub type SqliteStore = Store;
+
+impl Store {
     /// Opens a current durable store or initializes an empty one using WAL, FULL
     /// synchronization and foreign keys. Incompatible state is never migrated,
     /// reinterpreted or deleted; disposable development stores need explicit reset.

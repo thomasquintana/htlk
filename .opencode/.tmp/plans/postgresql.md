@@ -83,7 +83,7 @@ transaction markers must retain rollback/commit behavior.
 
 ### Task 2 — Backend-neutral storage and unchanged SQLite contracts
 
-Status: pending.
+Status: complete (2026-11-11).
 
 - Introduce cloneable Store façade and private backend dispatch.
 - Runtime and McpClientPersistence accept impl Into<Store>; no viral generics.
@@ -98,6 +98,17 @@ Status: pending.
 
 Gate: SQLite tests pass through façade; independent admission/lazy-read invariants
 and transactional checks remain intact.
+
+Implementation: Store is the common handle; SqliteStore is a source-compatible
+alias retaining existing constructors and all storage methods. Runtime and MCP
+persistence accept Into<Store>. The private worker/relational backend dispatch and
+PostgreSQL-specific configuration are implemented in task 3, keeping this façade
+commit independently verifiable. Existing transaction bodies remain shared.
+Validation: 28 storage unit tests; 17 identity/admission tests; 16 runtime
+registration/run/artifact/retention tests; 19 binding/MCP configuration/interaction
+tests; 3 runtime doctests; formatting and docs/spec checks all passed. Deliberately
+regenerated native-empty via the explicit generator and passed independent Node
+fixture validation (fingerprint 6474d225d85c4c217ee66d6b20eb5aad2c28a58a11e8ca7c59b7a07ac578b045).
 
 ### Task 3 — PostgreSQL foundation and native layout
 
@@ -251,3 +262,6 @@ whole and clearly records behavior, tests, compatibility, operational limits.
   build the typed interface and façade. Validation: node tools/validate-docs.mjs
   passed (30 docs, 213 links); node specs/validate-specs.mjs passed. No Rust examples,
   embedded assets, or doctests were changed by this contract-only task.
+- Task 1 commit: 033c290. Re-read plan after completion. Task 2 façade validated;
+  next: commit task 2, then implement shared relational primitives and native PG
+  worker/schema/configuration while preserving the security-fixed SQLite worker.

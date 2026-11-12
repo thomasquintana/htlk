@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Changed
 
+- Runtime and durable MCP persistence accept the backend-neutral `Store` handle.
+  `SqliteStore` remains a source-compatible name for the SQLite constructors.
+  Native implementation identities and executable fingerprints change.
 - Coverage baselines are advisory recommendations in CI. Invalid or missing
   measurements and absent branch instrumentation still fail validation; complete
   instrumented test suites and report artifacts remain required.
