@@ -1,7 +1,9 @@
-//! Trusted SQLite coordination infrastructure. This is a storage boundary for
+//! Trusted transactional coordination infrastructure. This is a storage boundary for
 //! coordinators, not an authenticated host API. It exposes no raw SQL connection.
 //! Database transactions, not actor mailboxes, establish fenced run authority.
 
+use crate::store_db as rusqlite;
+use crate::store_db::{OptionalExtension, TransactionBehavior, params};
 use crate::{
     failure::FailureCode,
     identity::{RunId, ScopeInstanceId},
@@ -12,7 +14,6 @@ use htlk_executable::{
     cbor::{self, Limits, Value},
     digest::Digest,
 };
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::{fmt, path::Path, time::Duration};
 
 const SCHEMA_VERSION: i64 = 13;
@@ -67,7 +68,8 @@ pub use transitions::{
 pub struct StoreConfig {
     /// Complete record/journal byte and depth ceilings.
     pub limits: Limits,
-    /// How long a competing SQLite writer may delay an operation.
+    /// How long a competing SQLite writer may delay an operation. PostgreSQL uses
+    /// its separate `PostgresConfig::lock_timeout` setting.
     pub busy_timeout: Duration,
     /// Maximum rows returned by a single journal or outbox read.
     pub max_page_size: usize,
@@ -82,14 +84,23 @@ impl Default for StoreConfig {
     }
 }
 
-/// Cloneable asynchronous SQLite storage handle. Clones share the database worker;
-/// separately opened handles are protected by SQLite transactions and run fences.
+/// Cloneable asynchronous storage handle. Clones share a connection worker;
+/// independently opened handles arbitrate authority through database transactions.
 #[derive(Clone)]
-pub struct SqliteStore {
-    connection: Connection,
-    config: StoreConfig,
+pub struct Store {
+    pub(crate) connection: Connection,
+    pub(crate) config: StoreConfig,
 }
-impl SqliteStore {
+/// Compatibility name for the store's SQLite constructors.
+///
+/// Existing hosts can keep using `SqliteStore::open` and `SqliteStore::in_memory`.
+/// Runtime consumers use [`Store`] without coupling execution to a database driver.
+pub type SqliteStore = Store;
+
+#[cfg(feature = "postgres")]
+pub use crate::store_postgres::{PostgresConfig, PostgresStore};
+
+impl Store {
     /// Opens a current durable store or initializes an empty one using WAL, FULL
     /// synchronization and foreign keys. Incompatible state is never migrated,
     /// reinterpreted or deleted; disposable development stores need explicit reset.
@@ -116,8 +127,10 @@ impl SqliteStore {
         memory: bool,
     ) -> Result<Self, StoreError> {
         let busy = config.busy_timeout;
+        let maximum = config.limits.max_document_bytes;
         connection
             .call(move |db| -> Result<(), StoreError> {
+                db.set_max_field_bytes(maximum);
                 db.busy_timeout(busy)?;
                 db.pragma_update(None, "foreign_keys", true)?;
                 db.pragma_update(None, "synchronous", "FULL")?;
@@ -396,7 +409,7 @@ fn check_lease_times(now: i64, expiry: i64) -> Result<(), StoreError> {
     }
     Ok(())
 }
-fn validate_config(config: &StoreConfig) -> Result<(), StoreError> {
+pub(crate) fn validate_config(config: &StoreConfig) -> Result<(), StoreError> {
     config.limits.validate()?;
     if config.max_page_size == 0
         || config.max_page_size > 4096
@@ -476,6 +489,8 @@ pub enum StoreError {
     Expired,
     /// Backend database operation failed.
     Database,
+    /// The server may have committed; reopen and reconcile the original receipt.
+    CommitUnknown,
     /// Connection worker is unavailable.
     Closed,
     /// Database identity/version is incompatible.
@@ -513,6 +528,7 @@ impl StoreError {
     fn from_worker(error: WorkerError<Self>) -> Self {
         match error {
             WorkerError::Error(error) => error,
+            WorkerError::Database(error) => error.into(),
             _ => Self::Closed,
         }
     }
@@ -524,6 +540,7 @@ impl fmt::Display for StoreError {
             Self::Deadline(_) => "runtime acceptance deadline elapsed",
             Self::Expired => "runtime artifact retention expired",
             Self::Database => "runtime database operation failed",
+            Self::CommitUnknown => "runtime database commit outcome is uncertain",
             Self::Closed => "runtime database connection is closed",
             Self::Schema => "runtime database schema is incompatible; explicitly rebuild disposable development state",
             Self::Missing => "runtime record was not found",
@@ -538,16 +555,32 @@ impl fmt::Display for StoreError {
 }
 impl std::error::Error for StoreError {}
 impl From<rusqlite::Error> for StoreError {
-    fn from(_: rusqlite::Error) -> Self {
-        Self::Database
+    fn from(error: rusqlite::Error) -> Self {
+        match error {
+            rusqlite::Error::Missing => Self::Missing,
+            rusqlite::Error::Invalid => Self::Invalid,
+            #[cfg(feature = "postgres")]
+            rusqlite::Error::CommitUnknown => Self::CommitUnknown,
+            #[cfg(feature = "postgres")]
+            rusqlite::Error::Schema => Self::Schema,
+            #[cfg(feature = "postgres")]
+            rusqlite::Error::Corrupt => Self::Corrupt,
+            _ => Self::Database,
+        }
     }
 }
 impl From<WorkerError<rusqlite::Error>> for StoreError {
     fn from(error: WorkerError<rusqlite::Error>) -> Self {
         match error {
-            WorkerError::Error(_) => Self::Database,
+            WorkerError::Error(error) | WorkerError::Database(error) => error.into(),
             WorkerError::Closed => Self::Closed,
         }
+    }
+}
+#[cfg(feature = "sqlite")]
+impl From<::rusqlite::Error> for StoreError {
+    fn from(_: ::rusqlite::Error) -> Self {
+        Self::Database
     }
 }
 impl From<cbor::Error> for StoreError {
@@ -556,7 +589,7 @@ impl From<cbor::Error> for StoreError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use std::{

@@ -1,4 +1,6 @@
 //! Common exact native compiler configuration for facade integration tests.
+#[path = "../../crates/htlk-runtime/tests/support/store.rs"]
+pub mod store;
 use htlk::{compiler::*, runtime::NativeRegistry};
 use htlk_executable::{cbor::Limits, *};
 use std::collections::BTreeMap;

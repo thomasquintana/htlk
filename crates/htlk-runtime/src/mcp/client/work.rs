@@ -425,7 +425,7 @@ fn usage(value: &Value) -> Result<McpUsage, RuntimeFailure> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod audit_tests {
     use super::*;
     use crate::clock::CoordinatorClock;

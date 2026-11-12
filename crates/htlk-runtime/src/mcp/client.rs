@@ -664,16 +664,19 @@ pub trait McpEventHandler: Send + Sync {
 /// and clock. Store access alone is not frontend authorization.
 #[derive(Clone)]
 pub struct McpClientPersistence {
-    store: crate::store::SqliteStore,
+    store: crate::store::Store,
     clock: Arc<dyn crate::clock::CoordinatorClock>,
 }
 impl McpClientPersistence {
     /// Links the existing trusted store and clock without opening any connection.
     pub fn new(
-        store: crate::store::SqliteStore,
+        store: impl Into<crate::store::Store>,
         clock: Arc<dyn crate::clock::CoordinatorClock>,
     ) -> Self {
-        Self { store, clock }
+        Self {
+            store: store.into(),
+            clock,
+        }
     }
     /// Acquires an explicit host-session namespace under the authenticated host.
     /// Existing live ownership cannot be overwritten, including by the same caller.

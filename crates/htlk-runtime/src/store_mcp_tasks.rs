@@ -403,7 +403,7 @@ impl SqliteStore {
             if let Some(cursor) = &cursor { load_task(&tx, &owner, server, cursor, &limits)?.ok_or(StoreError::Missing)?; }
             let mut statement = tx.prepare("SELECT task_id FROM mcp_received_tasks WHERE owner_key=?1 AND server_digest=?2 AND generation=?3 AND expires_ms>?4 AND task_id>?5 ORDER BY task_id LIMIT ?6")?;
             let ids = statement.query_map(params![owner.key().to_string(),server.to_string(),owner.generation(),now,cursor.unwrap_or_default(),count + 1], |r| r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
-            drop(statement);
+            statement.finish();
             let more = ids.len() > count as usize;
             let mut tasks = Vec::new();
             let mut bytes = 0usize;

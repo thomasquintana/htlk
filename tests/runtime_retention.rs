@@ -9,7 +9,7 @@ use htlk::runtime::{
     identity::{ArtifactId, RunId},
     records::{InputValue, RunStatus, SecurityLabels},
     retention::RetentionDisposition,
-    store::{ReplayState, SqliteStore, StoreConfig},
+    store::{ReplayState, StoreConfig},
 };
 use htlk_executable::{
     Identifier,
@@ -24,6 +24,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 struct Policy;
 impl RuntimePolicy for Policy {
     fn authorize(&self, c: &HostContext, _: Authorization<'_>) -> Result<(), RuntimeFailure> {
@@ -110,4 +111,58 @@ fn retention_protects_active_and_audited_cross_run_references_and_never_reuses_e
         assert_eq!(runtime.read_artifact(&caller,c).await.unwrap().value,Value::Text("shared".into()));assert_eq!(runtime.read_artifact(&caller,a).await.unwrap_err().code(),FailureCode::RetentionExpired);
         engine.shutdown().await.unwrap();
     })
+}
+
+#[test]
+fn independent_connections_arbitrate_new_aliases_expiry_and_inline_publication_against_collection()
+{
+    actix::System::new().block_on(async {
+        let (compiler, registry) = support::native_compiler_with_timeouts(10000, 1000);
+        let graph = compiler.compile_source(r#"ir_version="0.1" graph test.retention_race{inputs={value=json}outputs={value=json}nodes{}edges{edge value{from=inputs.value to=outputs.value}}}"#, &support::catalogs()).unwrap();
+        let path = std::env::temp_dir().join(format!("htlk-retention-race-{}-{}.sqlite", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let left = SqliteStore::open(&path, StoreConfig::default()).await.unwrap();
+        let right = SqliteStore::open(&path, StoreConfig::default()).await.unwrap();
+        let clock = Arc::new(Clock(AtomicI64::new(1000)));
+        let registry = Arc::new(registry);
+        let config = RuntimeConfig { idempotency_retention_ms: 1, audit_retention_ms: 10, ..Default::default() };
+        let a = Arc::new(Runtime::new(left.clone(), registry.clone(), Arc::new(Policy), config.clone()).unwrap().with_clock(clock.clone()));
+        let b = Arc::new(Runtime::new(right.clone(), registry, Arc::new(Policy), config).unwrap().with_clock(clock.clone()));
+        let caller = HostContext::new("alice".into(), &Limits::default()).unwrap();
+        a.register_graph(&caller, &graph.executable_bytes, &[]).await.unwrap();
+        let engine = ExecutionEngine::launch(a.clone(), ExecutionConfig { poll_interval: Duration::from_millis(1), ..Default::default() }).unwrap();
+        let inputs = BTreeMap::from([("value".parse().unwrap(), InputValue::Inline(Value::Text("retention race".into())))]);
+        let first = a.start_run(&caller, graph.fingerprint, &inputs, "source", None).await.unwrap();
+        let artifact = result(&a, &caller, &first.run_id).await;
+        clock.0.store(2000, Ordering::SeqCst);
+        let alias = BTreeMap::from([("value".parse().unwrap(), InputValue::Artifact(artifact))]);
+        let (started, expiry) = tokio::join!(b.start_run(&caller, graph.fingerprint, &alias, "alias", None), a.expire_artifact(&caller, artifact));
+        match started {
+            Ok(started) => {
+                assert_eq!(expiry.unwrap(), RetentionDisposition::Protected);
+                assert_eq!(result(&a, &caller, &started.run_id).await, artifact);
+                b.collect_garbage(&caller, None, 100).await.unwrap();
+                assert_eq!(a.read_artifact(&caller, artifact).await.unwrap().value, Value::Text("retention race".into()));
+            }
+            Err(error) => {
+                assert_eq!(error.code(), FailureCode::RetentionExpired);
+                assert_eq!(expiry.unwrap(), RetentionDisposition::Expired { at_ms: 2000 });
+                assert_eq!(a.read_artifact(&caller, artifact).await.unwrap_err().code(), FailureCode::RetentionExpired);
+            }
+        }
+        let inline = BTreeMap::from([("value".parse().unwrap(), InputValue::Inline(Value::Text("fresh proposal".into())))]);
+        let (started, collected) = tokio::join!(b.start_run(&caller, graph.fingerprint, &inline, "inline", None), a.collect_garbage(&caller, None, 100));
+        collected.unwrap();
+        match started {
+            Ok(started) => {
+                let accepted = result(&a, &caller, &started.run_id).await;
+                assert_eq!(b.read_artifact(&caller, accepted).await.unwrap().value, Value::Text("fresh proposal".into()));
+            }
+            // Collection may remove unaccepted staging bytes before publication;
+            // transactional admission must then reject rather than accept a gap.
+            Err(error) => assert_eq!(error.code(), FailureCode::Invariant),
+        }
+        engine.shutdown().await.unwrap();
+        left.close().await.unwrap(); right.close().await.unwrap();
+        support::store::remove_file(path).unwrap();
+    });
 }

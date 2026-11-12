@@ -7,7 +7,7 @@ use htlk::runtime::{
     failure::RuntimeFailure,
     mcp::{McpAdapter, McpFuture, McpPolicy, McpRequest},
     records::{RunStatus, SecurityLabels},
-    store::{RecordFamily, SqliteStore, StoreConfig},
+    store::{RecordFamily, StoreConfig},
 };
 use htlk_executable::{
     Identifier, JsonDocument, McpBinding,
@@ -22,6 +22,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use support::store::TestStore as SqliteStore;
 struct Policy {
     calls: AtomicUsize,
     validating: AtomicBool,

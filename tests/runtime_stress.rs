@@ -1,4 +1,4 @@
-//! Bounded all-PR campaigns for competing SQLite coordinators and host commands.
+//! Bounded all-PR campaigns for competing database coordinators and host commands.
 #[allow(dead_code)]
 #[path = "support/e2e.rs"]
 mod e2e;
@@ -9,7 +9,7 @@ use htlk::runtime::{
     execution::{ExecutionConfig, ExecutionEngine},
     failure::FailureCode,
     records::{InputValue, RunStatus},
-    store::{RecordFamily, SqliteStore, StoreConfig},
+    store::{RecordFamily, StoreConfig},
 };
 use htlk_executable::{Identifier, cbor::Value};
 use std::{
@@ -17,18 +17,19 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 
 #[test]
 fn competing_coordinators_and_duplicate_host_commands_preserve_one_authoritative_result() {
     actix::System::new().block_on(async {
         for workers in [1,2,4]{
             let directory=e2e::TempDir::new();let path=directory.path().join("shared.sqlite");
-            let(compiler,registry)=support::native_compiler_with_timeouts(60000,10000);let registry=Arc::new(registry);
+            let(compiler,registry)=support::native_compiler_with_timeouts(support::store::io_budget_ms(60000),support::store::io_budget_ms(10000));let registry=Arc::new(registry);
             let graph=compiler.compile_source(r#"ir_version="0.1"task leaf{inputs={seed=integer}outputs={value=integer}nodes{}edges{edge value{from=inputs.seed to=outputs.value}}}graph test.competing{inputs={seed=integer}outputs={value=integer}nodes{leaf=use(leaf)copy=eval(integer,inputs.value){inputs={value=integer}}}edges{edge seed{from=inputs.seed to=leaf.inputs.seed}edge copy{from=leaf.outputs.value to=copy.inputs.value}edge value{from=copy.outputs.value to=outputs.value}}}"#,&support::catalogs()).unwrap();
             let store=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();let second=SqliteStore::open(&path,StoreConfig::default()).await.unwrap();
             let left=Arc::new(Runtime::new(store.clone(),registry.clone(),Arc::new(e2e::Policy),RuntimeConfig::default()).unwrap());let right=Arc::new(Runtime::new(second.clone(),registry,Arc::new(e2e::Policy),RuntimeConfig::default()).unwrap());
             left.register_graph(&e2e::caller(),&graph.executable_bytes,&[]).await.unwrap();
-            let config=ExecutionConfig{workers,max_runs:3,lease_ms:1000,poll_interval:Duration::from_millis(1),..Default::default()};
+            let config=ExecutionConfig{workers,max_runs:3,lease_ms:support::store::lease_ms(1000),poll_interval:Duration::from_millis(1),..Default::default()};
             let engines=[ExecutionEngine::launch(left.clone(),config.clone()).unwrap(),ExecutionEngine::launch(right.clone(),config).unwrap()];
             let mut commands=vec![];
             let seeds=[i64::MIN,-1,0,1,i64::MAX];

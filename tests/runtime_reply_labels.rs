@@ -7,7 +7,7 @@ use htlk::runtime::{
     failure::{FailureCode, RuntimeFailure},
     identity::{RunId, WaitId},
     records::{InputValue, RunStatus, SecurityLabels},
-    store::{SqliteStore, StoreConfig},
+    store::StoreConfig,
 };
 use htlk_executable::{
     Identifier,
@@ -22,6 +22,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 struct Policy {
     secret: AtomicBool,
     classifications: AtomicUsize,

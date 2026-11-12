@@ -11,6 +11,9 @@ Install Node.js 24 as well: the full compiler/runtime E2E suite launches indepen
 local stdio/HTTP/SSE MCP peers. Every E2E, crash/restart and bounded concurrency
 campaign runs on every PR. See [testing](docs/testing.md)
 for pinned coverage toolchains, reports, advisory per-crate baselines and focused commands.
+All-feature validation also requires the disposable PostgreSQL service and
+`HTLK_TEST_POSTGRES_URL` described there. Docker runs the isolated PostgreSQL
+server-crash campaign. CI qualifies both PostgreSQL 16 and 18.
 
 Before opening a pull request, run:
 
@@ -23,7 +26,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
-cargo package --workspace --locked --target-dir "$(mktemp -d)"
+cargo package --workspace --all-features --locked --target-dir "$(mktemp -d)"
 ```
 
 Every public API should include rustdoc. Behavior changes should include tests
@@ -62,7 +65,7 @@ release validation, then regenerate third-party notices:
 
 ```console
 cargo install cargo-about --version 0.9.2 --locked --features cli
-cargo about generate about.hbs --workspace --locked --fail --output-file THIRD_PARTY_LICENSES
+cargo about generate about.hbs --workspace --all-features --locked --fail --output-file THIRD_PARTY_LICENSES
 ```
 
 Generator upgrades can change selected license text even when `Cargo.lock` is

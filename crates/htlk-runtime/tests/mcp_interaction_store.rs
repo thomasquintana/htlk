@@ -1,4 +1,6 @@
 //! Independent connections prove callback intent/results are atomic and replay-safe.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     cbor::{Limits, Value},
     digest::hash_bytes,
@@ -8,12 +10,13 @@ use htlk_runtime::{
     failure::FailureCode,
     mcp::client::McpWorkDelivery,
     records::SecurityLabels,
-    store::{McpOwnerUsage, McpWorkClaim, McpWorkState, SqliteStore, StoreConfig, StoreError},
+    store::{McpOwnerUsage, McpWorkClaim, McpWorkState, StoreConfig, StoreError},
 };
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
+use test_store::TestStore as SqliteStore;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Database(PathBuf);

@@ -11,11 +11,25 @@ jobs:
   coverage:
     name: ${{ matrix.mode }} coverage and complete suite
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       # Coverage maps do not require the much larger type-level debug data.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      HTLK_TEST_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=htlk-test dbname=htlk_test sslmode=disable
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: htlk-test
+          POSTGRES_DB: htlk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d htlk_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +71,16 @@ jobs:
       - name: Check coverage report integrity and baseline tooling
         run: node --test tools/coverage.test.mjs
 
+      - name: Clean coverage artifacts before accumulating backend runs
+        run: cargo +${{ matrix.toolchain }} llvm-cov clean --workspace
+
       - name: Execute all unit, integration, native E2E, crash and stress tests
+        run: cargo +${{ matrix.toolchain }} llvm-cov --workspace --all-features --all-targets --locked ${{ matrix.flags }} --no-report
+
+      - name: Accumulate complete PostgreSQL backend coverage
+        env:
+          HTLK_TEST_BACKEND: postgres
+        # --no-report already preserves profiles for the final combined report.
         run: cargo +${{ matrix.toolchain }} llvm-cov --workspace --all-features --all-targets --locked ${{ matrix.flags }} --no-report
 
       - name: Export coverage evidence

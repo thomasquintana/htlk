@@ -67,7 +67,8 @@ operator-selected resource for 15 seconds after discovery:
 cargo run -p htlk-runtime --example mcp_client --locked -- --store ./mcp-client.sqlite --root file:///absolute/workspace/ --subscribe context://status --watch-seconds 15 http SERVER_NAME SERVER_VERSION https://service.example/mcp
 ```
 
-The store defaults to in-memory when `--store` is omitted. A file store retains
+The store defaults to SQLite in-memory when neither backend option is supplied.
+A file store retains
 interaction evidence and subscription intent across runs; the example acquires a
 300-second owner lease, covering the maximum 120-second startup, 20-second discovery,
 60-second watch, bounded subscription requests and cleanup with margin. It opens a
@@ -79,6 +80,24 @@ from an earlier epoch reports `Gap` until an explicit restoration command binds 
 record to the new session. A host building continuous monitoring should renew
 ownership and authorize restoration through the
 [durable subscription APIs](#durable-resource-monitoring).
+
+For PostgreSQL, enable the feature and name the environment variable containing
+the host-owned database connection string:
+
+```console
+cargo run -p htlk-runtime --example mcp_client --features postgres --locked -- --postgres-env HTLK_DATABASE_URL --postgres-schema mcp_host --postgres-mode initialize http SERVER_NAME SERVER_VERSION https://service.example/mcp
+```
+
+`--postgres-mode initialize` creates an empty dedicated schema or opens its current
+recognized layout. Use `--postgres-mode open` with an already provisioned store and
+a runtime role that creates no objects. The schema defaults to `htlk`; PostgreSQL
+options require `--postgres-env` and are mutually exclusive with `--store`.
+Connection values are read by the host and excluded from argument-error diagnostics.
+The same store retains owners, epochs, callback replies/accounting, subscriptions,
+URL consent, tasks and protected evidence. Runtime-owned clients must share the
+runtime's actual store handle and clock. See
+[storage provisioning](runtime-guide.md#choose-and-provision-storage) for TLS,
+permissions, connection bounds and recovery procedures.
 
 Each inventory has a five-second traversal budget, 16-page and 512-item ceilings,
 256 KiB per page, and 2 MiB cumulative result bytes. All four share a 20-second

@@ -497,7 +497,7 @@ impl SqliteStore {
                 if bytes>limits.max_document_bytes {if result.is_empty(){return Err(StoreError::Invalid);}break;}
                 result.push(record);
             }
-            drop(rows);drop(statement);tx.commit()?;Ok(result)
+            drop(rows);statement.finish();tx.commit()?;Ok(result)
         }).await.map_err(worker_error)
     }
 }
@@ -522,6 +522,7 @@ fn validate_keys(uri: &str, subscriber: &str, limits: &Limits) -> Result<(), Sto
 fn worker_error(error: crate::sqlite_worker::Error<StoreError>) -> StoreError {
     match error {
         crate::sqlite_worker::Error::Error(error) => error,
+        crate::sqlite_worker::Error::Database(error) => error.into(),
         _ => StoreError::Closed,
     }
 }

@@ -12,7 +12,7 @@ use htlk::{
         failure::{FailureCode, RuntimeFailure},
         mcp::{McpEndpoint, NativeMcpAdapter},
         records::RunStatus,
-        store::{RecordFamily, SqliteStore, StoreConfig},
+        store::{RecordFamily, StoreConfig},
         *,
     },
 };
@@ -28,6 +28,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use support::store::TestStore as SqliteStore;
 
 struct Worker(Child);
 impl Drop for Worker {
@@ -141,7 +142,7 @@ fn subprocess_worker() {
         let _engine = ExecutionEngine::launch(
             runtime.clone(),
             ExecutionConfig {
-                lease_ms: 100,
+                lease_ms: support::store::lease_ms(100),
                 poll_interval: Duration::from_millis(2),
                 ..Default::default()
             },
@@ -163,15 +164,30 @@ fn subprocess_worker() {
             loop {
                 let view = e2e::inspect(&runtime, &run.run_id).await;
                 if let Some(wait) = view.waits.first() {
-                    runtime
-                        .submit_reply(
-                            &e2e::caller(),
-                            wait.wait_id,
-                            Value::Bool(false),
-                            "first-iteration",
-                        )
-                        .await
-                        .unwrap();
+                    // A lease may renew or transfer between inspection and reply
+                    // acceptance. Retry only stale authority, keeping the exact
+                    // wait/value/key; the durable receipt prevents reacceptance.
+                    loop {
+                        match runtime
+                            .submit_reply(
+                                &e2e::caller(),
+                                wait.wait_id,
+                                Value::Bool(false),
+                                "first-iteration",
+                            )
+                            .await
+                        {
+                            Ok(_) => break,
+                            Err(error) if error.code() == FailureCode::Fenced => {
+                                assert!(
+                                    Instant::now() < deadline,
+                                    "first loop reply never acquired live authority: {error}"
+                                );
+                                actix::clock::sleep(Duration::from_millis(2)).await;
+                            }
+                            Err(error) => panic!("first loop reply failed: {error:?}"),
+                        }
+                    }
                     break;
                 }
                 assert!(Instant::now() < deadline);

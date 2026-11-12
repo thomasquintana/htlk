@@ -35,6 +35,10 @@ pub fn native_profile(
         include_bytes!("records.rs"),
         include_bytes!("store.rs"),
         include_bytes!("sqlite_worker.rs"),
+        include_bytes!("store_db.rs"),
+        include_bytes!("store_postgres.rs"),
+        include_bytes!("store_postgres_client.rs"),
+        include_bytes!("store_postgres.sql"),
         include_bytes!("store_transitions.rs"),
         include_bytes!("store_replay.rs"),
         include_bytes!("store.sql"),
@@ -115,6 +119,7 @@ pub fn native_profile(
         include_bytes!("store_mcp_url_state.rs"),
         include_bytes!("store_mcp_url.sql"),
         b"rusqlite=0.41.1;features=bundled,cache,fallible_uint",
+        b"postgres=0.19.14;tokio-postgres=0.7.18;postgres-native-tls=0.5.3;native-tls=0.2.18",
     ]);
     let regex = EngineIdentity::new(
         "htlk.native-regex".into(),

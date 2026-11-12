@@ -1,4 +1,5 @@
 //! Shared full-stack fixtures; every external service is an isolated local peer.
+use crate::support::store::TestStore as SqliteStore;
 use execution::{ExecutionConfig, ExecutionEngine, RunView};
 use failure::{FailureCode, RuntimeFailure};
 use htlk::{compiler::*, runtime::*};
@@ -17,7 +18,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use store::{RecordFamily, ReplayState, SqliteStore, StoreConfig};
+use store::{RecordFamily, ReplayState, Store, StoreConfig};
 
 pub struct TempDir(PathBuf);
 impl TempDir {
@@ -206,7 +207,8 @@ pub fn caller() -> HostContext {
 }
 
 pub async fn inspect(runtime: &Runtime, run: &RunId) -> RunView {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline =
+        Instant::now() + Duration::from_millis(crate::support::store::io_budget_ms(20000));
     loop {
         match runtime.inspect_run(&caller(), run).await {
             Ok(view) => return view,
@@ -225,7 +227,8 @@ pub async fn inspect(runtime: &Runtime, run: &RunId) -> RunView {
 }
 
 pub async fn terminal(runtime: &Runtime, run: &RunId) -> RunView {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline =
+        Instant::now() + Duration::from_millis(crate::support::store::io_budget_ms(20000));
     loop {
         let view = inspect(runtime, run).await;
         if view.header.status.is_terminal() {
@@ -253,7 +256,7 @@ pub async fn output(runtime: &Runtime, view: &RunView, port: &str) -> Value {
         .value
 }
 
-pub async fn assert_replay(store: &SqliteStore, run: &RunId) {
+pub async fn assert_replay(store: &Store, run: &RunId) {
     let mut sequence = 0;
     let mut state: Option<ReplayState> = None;
     loop {
@@ -331,7 +334,10 @@ impl Harness {
         policy: Arc<dyn RuntimePolicy>,
     ) -> Self {
         let directory = TempDir::new();
-        let (compiler, registry) = crate::support::native_compiler_with_timeouts(30000, 10000);
+        let (compiler, registry) = crate::support::native_compiler_with_timeouts(
+            crate::support::store::io_budget_ms(30000),
+            crate::support::store::io_budget_ms(10000),
+        );
         let store = SqliteStore::open(
             directory.path().join("runtime.sqlite"),
             StoreConfig::default(),
@@ -355,7 +361,7 @@ impl Harness {
             ExecutionConfig {
                 workers,
                 max_runs: 3,
-                lease_ms: 1000,
+                lease_ms: crate::support::store::lease_ms(1000),
                 poll_interval: Duration::from_millis(2),
                 ..Default::default()
             },

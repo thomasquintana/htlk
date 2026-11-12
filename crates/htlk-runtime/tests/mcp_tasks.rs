@@ -1,4 +1,6 @@
 //! Independent stdio/HTTP peers exercise protocol tasks without SDKs or hooks.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument, McpTransport, ServerIdentity,
     cbor::{Limits, Value},
@@ -8,6 +10,7 @@ use htlk_runtime::{
     mcp::{McpCancellation, McpDelivery, McpEndpoint, client::*},
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use test_store::TestStore as SqliteStore;
 
 const PEER: &str = include_str!("../../../tests/support/mcp_tasks_peer.mjs");
 fn document(raw: &str) -> JsonDocument {
@@ -612,10 +615,7 @@ fn final_result_identity_terminal_observations_and_restored_retention_do_not_res
 #[test]
 fn retrieval_rpc_errors_are_retained_without_installing_an_underlying_final_result() {
     use htlk_executable::digest::hash_bytes;
-    use htlk_runtime::{
-        clock::SystemClock,
-        store::{SqliteStore, StoreError},
-    };
+    use htlk_runtime::{clock::SystemClock, store::StoreError};
     for mode in ["stdio", "http-json", "http-sse"] {
         let peer = (mode != "stdio").then(|| HttpPeer::start("retrieval-error", mode));
         actix::System::new().block_on(async {
@@ -715,7 +715,7 @@ fn retrieval_rpc_errors_are_retained_without_installing_an_underlying_final_resu
 #[test]
 fn related_error_requires_terminal_observation_and_then_persists_exact_execution_error() {
     use htlk_executable::digest::hash_bytes;
-    use htlk_runtime::{clock::SystemClock, store::SqliteStore};
+    use htlk_runtime::clock::SystemClock;
     actix::System::new().block_on(async {
         let store = SqliteStore::in_memory(Default::default()).await.unwrap();
         let persistence = McpClientPersistence::new(store.clone(), Arc::new(SystemClock));
@@ -831,9 +831,7 @@ impl McpClientAuthorizer for SamePrincipal {
 #[test]
 fn uninstalled_client_direction_task_services_ignore_augmentation_and_execute_normally() {
     actix::System::new().block_on(async {
-        let store = htlk_runtime::store::SqliteStore::in_memory(Default::default())
-            .await
-            .unwrap();
+        let store = SqliteStore::in_memory(Default::default()).await.unwrap();
         let persistence =
             McpClientPersistence::new(store, Arc::new(htlk_runtime::clock::SystemClock));
         let representation = Limits::default();
@@ -914,10 +912,7 @@ fn uninstalled_client_direction_task_services_ignore_augmentation_and_execute_no
 #[test]
 fn durable_remote_intent_precedes_send_and_survives_lost_ack_or_transport_owner_restart() {
     use htlk_executable::digest::hash_bytes;
-    use htlk_runtime::{
-        clock::SystemClock,
-        store::{SqliteStore, StoreConfig},
-    };
+    use htlk_runtime::{clock::SystemClock, store::StoreConfig};
     for mode in ["http-json", "http-sse"] {
         for scenario in ["normal", "lost-ack", "create-error"] {
             let peer = HttpPeer::start(scenario, mode);

@@ -11,7 +11,7 @@ use htlk::{
         identity::{InvocationId, RunId, WaitId},
         mcp::{McpAdapter, McpFuture, McpPolicy, McpRequest},
         records::{InputValue, RunStatus, SecurityLabels},
-        store::{RecordFamily, RecordKey, SqliteStore, StoreConfig},
+        store::{RecordFamily, RecordKey, StoreConfig},
     },
 };
 use htlk_executable::{
@@ -27,6 +27,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 
 struct Clock(AtomicI64);
 impl CoordinatorClock for Clock {

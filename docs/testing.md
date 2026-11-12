@@ -46,6 +46,60 @@ Install Node.js 24 for the independent local MCP peers. These tests use loopback
 ports, local child processes and isolated temporary SQLite databases; they require
 no service credentials or remote MCP server.
 
+The default-feature Rust suite uses SQLite. The `postgres` feature additionally
+requires PostgreSQL 16 or newer and an explicit `HTLK_TEST_POSTGRES_URL`. A missing
+test database is an error when those tests are enabled. For a disposable local
+PostgreSQL 18 service, run this in a separate terminal:
+
+```console
+docker run --rm --name htlk-postgres --env POSTGRES_PASSWORD=htlk-test --env POSTGRES_DB=htlk_test --publish 127.0.0.1:55432:5432 postgres:18
+```
+
+Then configure the local test connection before running all-feature commands:
+
+```console
+export HTLK_TEST_POSTGRES_URL='host=127.0.0.1 port=55432 user=postgres password=htlk-test dbname=htlk_test sslmode=disable'
+```
+
+Tests allocate uniquely named schemas within that disposable database. They do not
+use application deployment credentials or external MCP services. Select another
+unused host port if necessary.
+Docker is also required for the isolated server-crash campaign. That test creates
+its own disposable container, kills the database process after acknowledged commits,
+restarts the same volume, and checks receipts, records, journal and higher-fence
+takeover. It does not restart the configured shared test service. Set
+`HTLK_TEST_POSTGRES_VERSION=16` to use PostgreSQL 16 for this isolated campaign;
+the default is 18.
+
+Shared runtime campaigns select their test-only factory with
+`HTLK_TEST_BACKEND=postgres`; the default is SQLite. Production store constructors
+never inspect these variables. File-store scenarios derive the PostgreSQL schema
+from the exact test path, so independent connections and killed/restarted subprocesses
+reopen the same state. Real wall-clock campaigns use longer finite I/O/lease budgets
+for PostgreSQL; fake-clock deadline tests retain their exact logical timestamps.
+
+To execute shared workflows, native MCP peers, crash/restart and stress scenarios
+on PostgreSQL after configuring the service:
+
+```console
+HTLK_TEST_BACKEND=postgres cargo test --workspace --all-features --locked
+```
+
+CI and releases run that complete campaign on PostgreSQL 16 and 18 through
+`.github/workflows/postgres.yml`. Default-feature and backend-only compilation are
+checked independently, including PostgreSQL-only host-example tests. SQLite-native
+format/fault tests require its feature; shared behavioral tests select the enabled
+backend when only one is compiled.
+
+`crates/htlk-runtime/tests/postgres_store.rs` additionally uses an independent
+plaintext loopback protocol proxy that observes PostgreSQL's successful COMMIT
+response and drops it before delivery. Reopening must recover the original command
+receipt, and a committed MCP intent must return existing work rather than another
+dispatch claim. Separate tests cover stalled TLS/authentication, lock/statement/
+operation deadlines, deferred-constraint rollback, oversized stored fields, and
+conflicting lookup preimages. Worker tests fill the entire bounded queue and prove
+that abandoned admitted calls run while cancelled capacity waiters do not.
+
 The ordinary Rust suite includes every E2E, crash, and stress campaign. The retained
 Node tests independently exercise documentation, coverage, and discovery helpers:
 
@@ -60,7 +114,10 @@ To reproduce the primary CI coverage measurement:
 rustup toolchain install 1.98.0 --profile minimal --component llvm-tools-preview
 cargo +stable install cargo-llvm-cov --version 0.9.1 --locked
 mkdir -p target/coverage
-cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --json --output-path target/coverage/coverage.json
+cargo +1.98.0 llvm-cov clean --workspace
+cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --no-report
+HTLK_TEST_BACKEND=postgres cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --no-report
+cargo +1.98.0 llvm-cov report --workspace --json --output-path target/coverage/coverage.json
 cargo +1.98.0 llvm-cov report --workspace --html --output-dir target/coverage
 node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-thresholds.json
 ```
@@ -70,12 +127,19 @@ For branch coverage:
 ```console
 rustup toolchain install nightly-2026-10-20 --profile minimal --component llvm-tools-preview
 mkdir -p target/coverage
-cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --json --output-path target/coverage/coverage.json
+cargo +nightly-2026-10-20 llvm-cov clean --workspace
+cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --no-report
+HTLK_TEST_BACKEND=postgres cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --no-report
+cargo +nightly-2026-10-20 llvm-cov report --workspace --json --output-path target/coverage/coverage.json
 node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-branch-thresholds.json
 ```
 
 Use separate `CARGO_LLVM_COV_TARGET_DIR` directories if keeping stable and nightly
 profiles simultaneously. The default coverage command clears old profiles.
+For backend accumulation, clean once before the first run and use `--no-report`
+for both runs. The pinned collector implicitly preserves profiles with that flag;
+explicitly combining it with `--no-clean` is rejected. Export the combined report
+only after both backend runs succeed.
 `cargo llvm-cov report` exports additional formats from the same run without
 executing tests again. Include `--workspace` when exporting reports.
 

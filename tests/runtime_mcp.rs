@@ -7,7 +7,7 @@ use htlk::runtime::{
     failure::RuntimeFailure,
     mcp::{McpAdapter, McpFuture, McpPolicy, McpRequest},
     records::{InputValue, RunStatus, SecurityLabels},
-    store::{SqliteStore, StoreConfig},
+    store::StoreConfig,
 };
 use htlk_executable::{
     Identifier, JsonDocument, McpBinding, McpBindingKind,
@@ -22,6 +22,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 use support::{catalogs, native_compiler};
 struct Policy {
     approval: bool,
@@ -807,7 +808,9 @@ fn decision_brief_handles_retrieval_schema_empty_question_and_explicit_stop() {
     actix::System::new().block_on(async {
         for mode in ["retrieval","schema","empty","stop"]{
             let (compiler,registry)=support::native_compiler_with_timeouts(10000,1000);let graph=compiler.compile_source(include_str!("../specs/examples/decision_brief.htlk"),&catalogs()).unwrap();let raw=if mode=="retrieval"{br#"{"content":[],"isError":true,"structuredContent":{}}"#.to_vec()}else{br#"{"content":[],"structuredContent":{}}"#.to_vec()};let adapter=Arc::new(FaultAdapter{descriptors:graph.canonical_document.fields().bindings.values().map(|b|(b.descriptor(),graph.canonical_document.fields().documents[&b.descriptor()].clone())).collect(),replies:Mutex::new(if mode=="stop"{VecDeque::from([None])}else{VecDeque::from([Some(raw.clone()),Some(raw)])}),requests:Mutex::new(vec![]),release:AtomicBool::new(false)});let runtime=Arc::new(Runtime::new(SqliteStore::in_memory(StoreConfig::default()).await.unwrap(),Arc::new(registry),Arc::new(Policy{approval:false,version:AtomicUsize::new(1)}),RuntimeConfig::default()).unwrap().with_clock(Arc::new(Clock)).with_mcp(adapter.clone()));let caller=HostContext::new("alice".into(),&Limits::default()).unwrap();runtime.register_graph(&caller,&graph.executable_bytes,&[]).await.unwrap();let engine=ExecutionEngine::launch(runtime.clone(),ExecutionConfig{poll_interval:Duration::from_millis(1),..Default::default()}).unwrap();let question=if mode=="empty"{""}else{"Should we run a pilot?"};let run=runtime.start_run(&caller,graph.fingerprint,&BTreeMap::from([("question".parse().unwrap(),InputValue::Inline(Value::Text(question.into())))]),"start",None).await.unwrap();
-            if mode=="stop"{for _ in 0..1000{if !adapter.requests.lock().unwrap().is_empty(){break}actix::clock::sleep(Duration::from_millis(2)).await;}assert_eq!(runtime.cancel_run(&caller,&run.run_id,"explicit stop","stop").await.unwrap().status,RunStatus::Cancelled);adapter.release.store(true,Ordering::SeqCst);}
+            // Reaching this barrier includes the complete graph's transactional
+            // admission/reduction, not just the eventual MCP RPC itself.
+            if mode=="stop"{let patience=if support::store::postgres_selected(){Duration::from_secs(80)}else{Duration::from_secs(2)};tokio::time::timeout(patience,async{loop{if !adapter.requests.lock().unwrap().is_empty(){break}actix::clock::sleep(Duration::from_millis(2)).await;}}).await.expect("first MCP dispatch did not reach the cancellation barrier");assert_eq!(runtime.cancel_run(&caller,&run.run_id,"explicit stop","stop").await.unwrap().status,RunStatus::Cancelled);adapter.release.store(true,Ordering::SeqCst);}
             let view=terminal(&runtime,&caller,&run.run_id).await;
             match mode{
                 "empty"=>{assert_eq!(view.header.status,RunStatus::Failed);assert_eq!(view.failure.unwrap().code(),htlk::runtime::failure::FailureCode::Preconditions);assert!(adapter.requests.lock().unwrap().is_empty());},

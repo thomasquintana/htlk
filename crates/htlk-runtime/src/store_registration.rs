@@ -108,7 +108,7 @@ impl SqliteStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 pub(super) mod tests {
     use super::*;
     use crate::{NativeRegistry, verify_executable_owned};

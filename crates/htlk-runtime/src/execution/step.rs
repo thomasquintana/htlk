@@ -27,7 +27,7 @@ use htlk_executable::{
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 #[path = "step_tests.rs"]
 mod tests;
 
@@ -50,7 +50,7 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
     tick_observed(
         runtime,
         lease,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "sqlite"))]
         None,
     )
     .await
@@ -58,7 +58,7 @@ pub(super) async fn tick(runtime: Arc<Runtime>, lease: RunLease) -> Result<Progr
 async fn tick_observed(
     runtime: Arc<Runtime>,
     lease: RunLease,
-    #[cfg(test)] probe: Option<&tests::Probe>,
+    #[cfg(all(test, feature = "sqlite"))] probe: Option<&tests::Probe>,
 ) -> Result<Progress, RuntimeError> {
     let header = runtime.store.run_header(lease.run_id()).await?;
     if header.status.is_terminal() {
@@ -243,7 +243,7 @@ async fn tick_observed(
             return Ok(Progress::Changed);
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     if let Some(probe) = probe {
         probe.pause(tests::Stage::BeforeWaitScan).await;
     }
@@ -254,7 +254,7 @@ async fn tick_observed(
             wake_at = wake_at.min(number(&wait.payload, "expires_at")?);
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     if let Some(probe) = probe {
         probe.pause(tests::Stage::BeforeInvocationScan).await;
     }
@@ -266,7 +266,7 @@ async fn tick_observed(
             wake_at = wake_at.min(number(&invocation.payload, "retry_at")?);
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     if let Some(probe) = probe {
         probe.pause(tests::Stage::AfterExternalScans).await;
     }

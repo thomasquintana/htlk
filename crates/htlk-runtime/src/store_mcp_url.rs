@@ -5,6 +5,7 @@ use crate::mcp::client::{
     McpRpcError, McpStoredUrlInteraction, McpStoredUrlRequiredError, McpUrlCompletion,
     McpUrlConsent, McpUrlRequest, McpUrlRequiredError,
 };
+use crate::store_db as state_db;
 #[path = "store_mcp_url_state.rs"]
 mod state;
 

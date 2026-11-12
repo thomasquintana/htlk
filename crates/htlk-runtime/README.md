@@ -1,6 +1,6 @@
 # htlk-runtime
 
-Execute checked HTLK Draft 0.1 workflows with durable SQLite state, fenced Actix
+Execute checked HTLK Draft 0.1 workflows with durable SQLite or PostgreSQL state, fenced Actix
 supervision, explicit host policy, and bounded MCP connections over stdio and
 Streamable HTTP JSON/SSE. Pure expressions and prompt rendering use native Rust;
 the runtime embeds no scripting engine.
@@ -9,7 +9,7 @@ the runtime embeds no scripting engine.
 
 1. Build a `NativeRegistry`, link your policy and required pure libraries, and
    compile with the same profile, policy, manifests, and default native schema options.
-2. Construct `Runtime` from a `SqliteStore`, immutable registry, `RuntimePolicy`,
+2. Construct `Runtime` from a backend-neutral `Store`, immutable registry, `RuntimePolicy`,
    finite codec limits, and admitted-cache capacity.
 3. Supply authenticated `HostContext` and call `register_graph` with executable
    bytes. Runtime independently verifies authoritative bytes and producer trust.
@@ -34,6 +34,41 @@ The repository's `docs/runtime-guide.md` provides the complete host lifecycle;
 `examples/runtime_workflow.rs` is runnable without credentials. `docs/mcp-guide.md`
 covers adapters, sessions, results, evidence, and explicit schema adoption.
 
+## Storage backends
+
+SQLite is the default `sqlite` Cargo feature. Existing `SqliteStore::open` and
+`SqliteStore::in_memory` constructors remain available through the compatible
+`SqliteStore` name. Enable `postgres` for native PostgreSQL storage; the `htlk`
+facade forwards both features. A PostgreSQL-only dependency can use:
+
+```toml
+htlk-runtime = { version = "0.1.0", default-features = false, features = ["postgres"] }
+```
+
+This host-construction helper compiles without contacting a database during doctests:
+
+```no_run
+#[cfg(feature = "postgres")]
+async fn postgres_store() -> Result<htlk_runtime::store::Store, Box<dyn std::error::Error>> {
+    use htlk_runtime::store::{PostgresConfig, PostgresStore, StoreConfig};
+    let mut settings = PostgresConfig::new(std::env::var("HTLK_DATABASE_URL")?);
+    settings.schema = "htlk".into();
+    let store = PostgresStore::initialize(settings, StoreConfig::default()).await?;
+    Ok(store.into())
+}
+```
+
+`PostgresStore::initialize` initializes an empty dedicated schema or opens its
+recognized layout. `PostgresStore::open` requires existing compatible state and
+creates no objects. Both the runtime and `McpClientPersistence` accept the concrete
+PostgreSQL handle directly and share its actual worker when cloned. PostgreSQL 16
+and 18 are qualified by complete backend campaigns. Use a writable UTF-8 primary
+with fsync enabled; connections require verified platform TLS unless explicitly
+configured with `sslmode=disable`. Clones share one bounded connection worker;
+independent opens create independent connections. Transactions currently serialize
+per HTLK schema across processes. Select lease/workflow timeouts for database and
+provider latency. The runtime guide covers provisioning, durability and recovery.
+
 ## Admission and enforcement
 
 `verify_executable` decodes the canonical envelope/document, matches host-selected
@@ -48,9 +83,9 @@ Binding reducers are pure proposals; the coordinator applies authorization,
 contracts, frozen manifests, and transactional publication. Actual-read influence
 preserves labels through values, absence, outcomes, and lazy branches.
 
-`SqliteStore` is trusted infrastructure, not the authenticated host API. File stores
-use WAL/FULL synchronization and reject incompatible schemas without migration or
-deletion. Accepted artifacts preserve typed content identity separately from producer
+`Store` is trusted infrastructure, not the authenticated host API. SQLite file stores
+use WAL/FULL synchronization; PostgreSQL uses native tables and durable transactions.
+Both reject incompatible state without migration or deletion. Accepted artifacts preserve typed content identity separately from producer
 provenance; staged bytes become readable only after atomic metadata/output acceptance.
 `read_artifact` authorizes metadata before loading and checking bytes.
 

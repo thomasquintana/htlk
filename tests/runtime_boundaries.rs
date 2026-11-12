@@ -9,7 +9,7 @@ use htlk::runtime::{
     execution::{ExecutionConfig, ExecutionEngine},
     failure::{FailureBoundary, FailureCode, RuntimeFailure},
     records::{InputValue, RuntimeRecordError},
-    store::{SqliteStore, StoreConfig, StoreError},
+    store::{StoreConfig, StoreError},
     *,
 };
 use htlk_executable::{
@@ -18,6 +18,7 @@ use htlk_executable::{
     *,
 };
 use std::{collections::BTreeMap, error::Error as _, sync::Arc, time::Duration};
+use support::store::TestStore as SqliteStore;
 
 #[test]
 fn service_and_worker_configuration_rejects_each_invalid_boundary() {

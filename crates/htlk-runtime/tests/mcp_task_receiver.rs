@@ -1,4 +1,6 @@
-//! Real SQLite receiver tasks, including independent-writer cancellation races.
+//! Durable receiver tasks, including independent-writer cancellation races.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument,
     cbor::{Limits, Value},
@@ -8,11 +10,11 @@ use htlk_runtime::{
     HostContext,
     clock::CoordinatorClock,
     failure::{FailureCode, RuntimeFailure},
-    mcp::{McpCancellation, client::*},
+    mcp::{McpCancellation, McpFuture, client::*},
     records::SecurityLabels,
     store::{
         McpReceivedTask, McpReceivedTaskLimits, McpReceivedTaskStatus, McpStoredInteraction,
-        McpStoredSession, McpWorkClaim, McpWorkState, SqliteStore, StoreConfig, StoreError,
+        McpStoredSession, McpWorkClaim, McpWorkState, StoreConfig, StoreError,
     },
 };
 use std::{
@@ -24,6 +26,7 @@ use std::{
     },
     time::Duration,
 };
+use test_store::TestStore as SqliteStore;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Database(PathBuf);
@@ -473,7 +476,7 @@ fn independent_completion_and_cancellation_writers_choose_one_immutable_terminal
 }
 
 #[test]
-fn sqlite_scope_isolation_cursor_paging_and_authorized_new_epoch_retrieval() {
+fn store_scope_isolation_cursor_paging_and_authorized_new_epoch_retrieval() {
     actix::System::new().block_on(async {
         let f = Fixture::new(16, 8).await;
         let mut ids = vec![];
@@ -1111,8 +1114,13 @@ fn failed_terminal_write_rolls_back_work_cancellation_and_the_rpc_receipt() {
         let original = request("1","sampling/createMessage",Some("{}"));
         let (work,task) = f.accept(&original,900).await;
         f.first.begin_mcp_work(&f.owner,work.id,20,16,8).await.unwrap();
-        let independent = rusqlite::Connection::open(&f._path.0).unwrap();
-        independent.execute_batch("CREATE TRIGGER reject_task_cancellation BEFORE UPDATE ON mcp_received_tasks WHEN NEW.status='cancelled' BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
+        if test_store::postgres_selected() {
+            #[cfg(feature="postgres")]
+            test_store::postgres_admin(&f._path.0, |db| db.batch_execute("CREATE FUNCTION reject_task_cancellation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.status='cancelled' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_task_cancellation BEFORE UPDATE ON mcp_received_tasks FOR EACH ROW EXECUTE FUNCTION reject_task_cancellation();").unwrap());
+        } else {
+            #[cfg(feature="sqlite")]
+            rusqlite::Connection::open(&f._path.0).unwrap().execute_batch("CREATE TRIGGER reject_task_cancellation BEFORE UPDATE ON mcp_received_tasks WHEN NEW.status='cancelled' BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
+        }
         let cancel = control("2","tasks/cancel",task.task_id());
         assert_eq!(f.second.cancel_mcp_received_task_request(&f.owner,f.session.id,f.session.server,&cancel,20).await.unwrap_err(),StoreError::Database);
         let unchanged = f.first.mcp_received_task(&f.owner,f.session.id,f.session.server,task.task_id(),20).await.unwrap();
@@ -1121,7 +1129,13 @@ fn failed_terminal_write_rolls_back_work_cancellation_and_the_rpc_receipt() {
         assert_eq!(unchanged.state,McpWorkState::Intent);
         assert!(unchanged.outstanding && unchanged.reply.is_none());
         assert!(f.first.mcp_received_task_cancel_receipt(&f.owner,f.session.id,f.session.server,&cancel,20).await.unwrap().is_none());
-        independent.execute_batch("DROP TRIGGER reject_task_cancellation;").unwrap();
+        if test_store::postgres_selected() {
+            #[cfg(feature="postgres")]
+            test_store::postgres_admin(&f._path.0, |db| db.batch_execute("DROP TRIGGER reject_task_cancellation ON mcp_received_tasks; DROP FUNCTION reject_task_cancellation();").unwrap());
+        } else {
+            #[cfg(feature="sqlite")]
+            rusqlite::Connection::open(&f._path.0).unwrap().execute_batch("DROP TRIGGER reject_task_cancellation;").unwrap();
+        }
         let response = f.handle(&cancel).await;
         let Value::Map(result) = field(&response,"result") else {panic!()};
         assert_eq!(result.get("status"),Some(&Value::Text("cancelled".into())));
@@ -1129,7 +1143,22 @@ fn failed_terminal_write_rolls_back_work_cancellation_and_the_rpc_receipt() {
     });
 }
 
-struct LiveServices(AtomicU64);
+struct LiveServices {
+    calls: AtomicU64,
+    controls_observed: tokio::sync::Notify,
+}
+impl McpEventHandler for LiveServices {
+    fn receive<'a>(&'a self, event: McpClientEvent) -> McpFuture<'a, ()> {
+        Box::pin(async move {
+            if event.method == "notifications/message"
+                && field(&event.params, "data") == &Value::Text("receiver-controls-observed".into())
+            {
+                self.controls_observed.notify_one();
+            }
+            Ok(())
+        })
+    }
+}
 impl McpClientHandler for LiveServices {
     fn handle<'a>(
         &'a self,
@@ -1137,11 +1166,11 @@ impl McpClientHandler for LiveServices {
         request: &'a JsonDocument,
     ) -> McpServiceFuture<'a> {
         Box::pin(async move {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(context.task_id.is_some());
             tokio::select! {
                 _=context.cancellation.cancelled()=>return McpServiceOutcome::failure(McpWorkDelivery::Uncertain,McpRpcError::new(doc(r#"{"code":-32000,"message":"underlying work cancellation uncertain"}"#)).unwrap()),
-                _=tokio::time::sleep(Duration::from_millis(100))=>{}
+                _=self.controls_observed.notified()=>{}
             }
             let result = if field(request, "method")
                 == &Value::Text("sampling/createMessage".into())
@@ -1175,7 +1204,10 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                         .acquire_owner(&host("alice"), "live-receiver", 10_000)
                         .await
                         .unwrap();
-                    let handler = Arc::new(LiveServices(AtomicU64::new(0)));
+                    let handler = Arc::new(LiveServices {
+                        calls: AtomicU64::new(0),
+                        controls_observed: tokio::sync::Notify::new(),
+                    });
                     let config = McpClientConfig::new(
                         McpClientLimits {
                             callbacks: 1,
@@ -1186,7 +1218,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                             } else {
                                 1024 * 1024
                             },
-                            timeout_ms: 2000,
+                            timeout_ms: test_store::io_budget_ms(2000),
                             ..Default::default()
                         },
                         BTreeMap::from([
@@ -1199,7 +1231,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                                 handler.clone() as Arc<dyn McpClientHandler>,
                             ),
                         ]),
-                        None,
+                        Some(handler.clone() as Arc<dyn McpEventHandler>),
                     )
                     .unwrap()
                     .with_persistence(persistence)
@@ -1269,7 +1301,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                         .await;
                     let result = reply
                         .result
-                        .unwrap()
+                        .unwrap_or_else(|error| panic!("{mode} {scenario} {method}: {error:?}"))
                         .unwrap_or_else(|error| panic!("{mode} {scenario} {method}: {error:?}"));
                     assert_eq!(
                         field(&result, "resultSeen"),
@@ -1277,7 +1309,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                         "{mode} {scenario} {method}"
                     );
                     assert_eq!(
-                        handler.0.load(Ordering::SeqCst),
+                        handler.calls.load(Ordering::SeqCst),
                         1,
                         "replayed acceptance must not recall the model"
                     );
@@ -1347,8 +1379,13 @@ fn independent_outbound_claims_scope_identity_and_recheck_terminal_and_final_evi
         assert_eq!(snapshot.final_payload.unwrap().1,final_result.as_bytes());
         assert_eq!(f.first.update_mcp_remote_task(&f.owner,f.session.id,f.session.server,key,Some(state),None,20).await.unwrap_err(),StoreError::Terminal);
         assert_eq!(f.first.resolve_mcp_remote_task(&f.owner,f.session.id,f.session.server,"remote-private",20).await.unwrap_err(),StoreError::Terminal);
-        let independent=rusqlite::Connection::open(&f._path.0).unwrap();
-        independent.execute_batch("UPDATE mcp_remote_tasks SET final_payload=x'7b7d' WHERE final_kind='result';").unwrap();
+        if test_store::postgres_selected() {
+            #[cfg(feature="postgres")]
+            test_store::postgres_admin(&f._path.0, |db| db.batch_execute("UPDATE mcp_remote_tasks SET final_payload=decode('7b7d','hex') WHERE final_kind='result'").unwrap());
+        } else {
+            #[cfg(feature="sqlite")]
+            rusqlite::Connection::open(&f._path.0).unwrap().execute_batch("UPDATE mcp_remote_tasks SET final_payload=x'7b7d' WHERE final_kind='result';").unwrap();
+        }
         assert_eq!(f.first.inspect_mcp_remote_task_intent(&f.owner,f.session.server,key).await.unwrap_err(),StoreError::Corrupt);
     });
 }

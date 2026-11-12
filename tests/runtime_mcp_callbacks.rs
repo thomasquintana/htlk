@@ -11,7 +11,7 @@ use htlk::{
         identity::InvocationId,
         mcp::{McpEndpoint, McpPolicy, NativeMcpAdapter, client::*},
         records::{RunStatus, SecurityLabels},
-        store::{RecordFamily, SqliteStore, StoreConfig},
+        store::{RecordFamily, StoreConfig},
     },
 };
 use htlk_executable::{
@@ -27,6 +27,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 
 struct Policy;
 impl RuntimePolicy for Policy {
@@ -286,8 +287,10 @@ fn runtime_callbacks_have_real_attempt_origins_and_atomic_ancestor_budgets() {
 fn runtime_timeout_keeps_a_late_native_reply_after_its_caller_future_is_dropped() {
     actix::System::new().block_on(async {
         let limits = Limits::default();
-        let defaults = ExecutionLimits::new().with_timeout_ms(5000).unwrap()
-            .with_attempt_timeout_ms(500).unwrap().with_max_mcp_calls(1).unwrap().with_max_concurrency(2).unwrap();
+        let attempt_ms = support::store::io_budget_ms(500);
+        let late_ms = attempt_ms + support::store::io_budget_ms(50);
+        let defaults = ExecutionLimits::new().with_timeout_ms(support::store::io_budget_ms(5000)).unwrap()
+            .with_attempt_timeout_ms(attempt_ms).unwrap().with_max_mcp_calls(1).unwrap().with_max_concurrency(2).unwrap();
         let (compiler, registry) = support::native_compiler_with_defaults(defaults);
         let catalogs = MCPCatalogInputs::from_json(br#"{
             "tools":{"catalog_version":"0.1","mcp_protocol_version":"2025-11-25","servers":{"server":{"deployment_id":"test","transport":"stdio","implementation_name":"peer","implementation_version":"1"}},"schema_documents":{},"tools":[{"server":"server","descriptor":{"name":"tool","inputSchema":{"type":"object"}}}]},
@@ -299,7 +302,7 @@ fn runtime_timeout_keeps_a_late_native_reply_after_its_caller_future_is_dropped(
         let path = std::env::temp_dir().join(format!("htlk-late-native-{}.sqlite", std::process::id()));
         let store = SqliteStore::open(&path, StoreConfig::default()).await.unwrap();
         let policy = Arc::new(Policy);
-        let config = McpClientConfig::new(McpClientLimits { timeout_ms: 5000, ..Default::default() }, BTreeMap::new(), None).unwrap()
+        let config = McpClientConfig::new(McpClientLimits { timeout_ms: 5000, cancellation_grace_ms: support::store::io_budget_ms(100), ..Default::default() }, BTreeMap::new(), None).unwrap()
             .with_persistence(McpClientPersistence::new(store.clone(), Arc::new(SystemClock)));
         let script = r#"
             import {createInterface} from 'node:readline';
@@ -308,26 +311,26 @@ fn runtime_timeout_keeps_a_late_native_reply_after_its_caller_future_is_dropped(
               const r=JSON.parse(line);
               if(r.method==='initialize')send({jsonrpc:'2.0',id:r.id,result:{protocolVersion:'2025-11-25',serverInfo:{name:'peer',version:'1'},capabilities:{tools:{}}}});
               else if(r.method==='tools/list')send({jsonrpc:'2.0',id:r.id,result:{tools:[{name:'tool',inputSchema:{type:'object'}}]}});
-              else if(r.method==='tools/call') {if(++calls!==1)process.exit(41);setTimeout(()=>send({jsonrpc:'2.0',id:r.id,result:{content:[{type:'text',text:'late-provider-result'}]}}),550);}
+              else if(r.method==='tools/call') {if(++calls!==1)process.exit(41);setTimeout(()=>send({jsonrpc:'2.0',id:r.id,result:{content:[{type:'text',text:'late-provider-result'}]}}),Number(process.argv[1]));}
               else if(!['notifications/cancelled','notifications/initialized'].includes(r.method))process.exit(42);
             }
         "#;
         let adapter = Arc::new(NativeMcpAdapter::with_client_config(BTreeMap::from([("test".into(), McpEndpoint::Stdio {
-            program:"node".into(), arguments:vec!["--input-type=module".into(),"-e".into(),script.into()], environment:BTreeMap::new(),
+            program:"node".into(), arguments:vec!["--input-type=module".into(),"-e".into(),script.into(),late_ms.to_string()], environment:BTreeMap::new(),
         })]), config).unwrap());
-        let runtime = Arc::new(Runtime::new(store.clone(), Arc::new(registry), policy, RuntimeConfig::default()).unwrap().with_mcp(adapter.clone()));
+        let runtime = Arc::new(Runtime::new(store.clone(), Arc::new(registry), policy, RuntimeConfig { cancellation_grace_ms: support::store::io_budget_ms(100), ..Default::default() }).unwrap().with_mcp(adapter.clone()));
         let actor = HostContext::new("alice".into(), &limits).unwrap();
         runtime.register_graph(&actor, &compiled.executable_bytes, &[]).await.unwrap();
         let engine = ExecutionEngine::launch(runtime.clone(), ExecutionConfig { workers:1, poll_interval:Duration::from_millis(1), ..Default::default() }).unwrap();
         let run = runtime.start_run(&actor, compiled.fingerprint, &BTreeMap::new(), "start", None).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(8), async {
+        tokio::time::timeout(Duration::from_millis(support::store::io_budget_ms(8000)), async {
             loop {
                 let view = runtime.inspect_run(&actor, &run.run_id).await.unwrap();
                 if view.header.status.is_terminal() { assert_eq!(view.header.status, RunStatus::Failed); break; }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }).await.unwrap();
-        // Independent SQLite reader checks bytes/protection, not an in-process
+        // Independent native SQL readers check bytes/protection, not an in-process
         // dispatch counter or the runtime's already-recorded timeout response.
         let inspector = r#"
             const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1],{readOnly:true});
@@ -335,14 +338,30 @@ fn runtime_timeout_keeps_a_late_native_reply_after_its_caller_future_is_dropped(
             const known=rows.filter(r=>Buffer.from(r.payload).includes(Buffer.from('late-provider-result')));
             if(known.length!==1 || !Buffer.from(known[0].protection).includes(Buffer.from('private-parent')))process.exit(1);
         "#;
-        tokio::time::timeout(Duration::from_secs(3), async {
+        let retained = tokio::time::timeout(Duration::from_millis(support::store::io_budget_ms(3000)), async {
             loop {
-                let result = std::process::Command::new("node").args(["--disable-warning=ExperimentalWarning", "-e", inspector]).arg(&path).status().unwrap();
-                if result.success() { break; }
+                let found = if support::store::postgres_selected() {
+                    #[cfg(feature="postgres")]
+                    { support::store::postgres_admin(&path, |db| {
+                        let known: Vec<_> = db.query("SELECT payload,protection FROM late_responses", &[]).unwrap().into_iter().filter(|row| {
+                            let bytes: Vec<u8> = row.get(0);
+                            bytes.windows(b"late-provider-result".len()).any(|part| part == b"late-provider-result")
+                        }).collect();
+                        known.len() == 1 && known[0].get::<_, Vec<u8>>(1).windows(b"private-parent".len()).any(|part| part == b"private-parent")
+                    }) }
+                    #[cfg(not(feature="postgres"))]
+                    { unreachable!("PostgreSQL fixture requires its feature") }
+                } else {
+                    std::process::Command::new("node").args(["--disable-warning=ExperimentalWarning", "-e", inspector]).arg(&path).status().unwrap().success()
+                };
+                if found { break; }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        }).await.unwrap();
+        }).await;
+        assert!(retained.is_ok(), "late result was not retained; attempts={:?}; responses={:?}",
+            store.records(&run.run_id, RecordFamily::Attempt, None, 16).await.unwrap(),
+            store.records(&run.run_id, RecordFamily::Response, None, 16).await.unwrap());
         engine.shutdown().await.unwrap(); adapter.shutdown().await.unwrap();
-        store.close().await.unwrap(); std::fs::remove_file(path).unwrap();
+        store.close().await.unwrap(); support::store::remove_file(path).unwrap();
     });
 }

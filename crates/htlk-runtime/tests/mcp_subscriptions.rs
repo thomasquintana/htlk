@@ -1,5 +1,7 @@
-//! Durable lifecycle evidence from independent Node peers and competing SQLite
+//! Durable lifecycle evidence from independent Node peers and competing database
 //! connections. Notifications never authorize resource acquisition or tool calls.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument, McpTransport, ServerIdentity,
     cbor::{Limits, Value},
@@ -12,8 +14,7 @@ use htlk_runtime::{
     mcp::{McpCancellation, McpEndpoint, client::*},
     store::{
         McpSubscriptionClaim, McpSubscriptionIntent, McpSubscriptionLimits,
-        McpSubscriptionOperation, McpSubscriptionOutcome, McpSubscriptionState, SqliteStore,
-        StoreError,
+        McpSubscriptionOperation, McpSubscriptionOutcome, McpSubscriptionState, StoreError,
     },
 };
 use std::{
@@ -25,6 +26,7 @@ use std::{
     },
     time::Duration,
 };
+use test_store::TestStore as SqliteStore;
 
 const PEER: &str = r#"
 import {createInterface} from 'node:readline';
@@ -722,15 +724,28 @@ fn independent_authority_checks_reject_cross_owner_server_and_corrupt_epoch_bind
             .await
             .unwrap();
         assert_ne!(alice_record.id(), bob_record.id());
-        // Mutate the independent SQLite boundary, preserving foreign keys and a
+        // Mutate the independent database boundary, preserving foreign keys and a
         // valid session identity. The read must reject a cross-owner epoch binding.
-        let db = rusqlite::Connection::open(&f.path).unwrap();
         let id = alice_record.id().to_string();
-        db.execute(
-            "UPDATE mcp_resource_subscriptions SET session_id=?2 WHERE subscription_id=?1",
-            rusqlite::params![id, bob_epoch.id.to_string()],
-        )
-        .unwrap();
+        if test_store::postgres_selected() {
+            #[cfg(feature = "postgres")]
+            test_store::postgres_admin(&f.path, move |db| {
+                db.execute(
+                    "UPDATE mcp_resource_subscriptions SET session_id=$2 WHERE subscription_id=$1",
+                    &[&id, &bob_epoch.id.to_string()],
+                )
+                .unwrap();
+            });
+        } else {
+            #[cfg(feature = "sqlite")]
+            rusqlite::Connection::open(&f.path)
+                .unwrap()
+                .execute(
+                    "UPDATE mcp_resource_subscriptions SET session_id=?2 WHERE subscription_id=?1",
+                    rusqlite::params![id, bob_epoch.id.to_string()],
+                )
+                .unwrap();
+        }
         assert!(matches!(
             f.store
                 .mcp_subscription(&f.owner, server, "test://resource", 10)

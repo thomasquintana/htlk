@@ -8,6 +8,12 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Changed
 
+- Storage workers admit at most 256 queued operations per shared connection handle.
+- Runtime and durable MCP persistence accept the backend-neutral `Store` handle.
+  `SqliteStore` remains a source-compatible name for the SQLite constructors.
+  Native implementation identities and executable fingerprints change.
+- The facade forwards `sqlite` (default) and `postgres` Cargo features; PostgreSQL-only
+  builds omit bundled SQLite. Pure evaluators can be built without either backend.
 - Coverage baselines are advisory recommendations in CI. Invalid or missing
   measurements and absent branch instrumentation still fail validation; complete
   instrumented test suites and report artifacts remain required.
@@ -34,6 +40,20 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- The MCP catalog browser accepts `--postgres-env`, `--postgres-schema`, and
+  `--postgres-mode initialize|open` for host-owned durable PostgreSQL configuration.
+  Initialization and reopen are exercised against independent no-content-call peers.
+- Optional native PostgreSQL storage supports fenced run transactions, immutable
+  registration, command/host receipts, journals and outbox recovery. Exact opaque
+  identities, including long strings and NUL, retain their bytewise semantics.
+  Artifact publication, retention/collection, live extension, and saved-checkpoint
+  recovery preserve the same transactional invariants across both backends.
+  Durable MCP sessions, callback accounting, URL consent, subscriptions, received
+  tasks, remote tasks, and protected late evidence use the selected store as well.
+  Whole-handshake/protocol deadlines, server-side field bounds, exact layout
+  compatibility, and observed-commit/lost-ack recovery are independently exercised.
+  Known transaction rollback keeps connections reusable; uncertain commits require
+  reopening and reconciling the original receipt. SQLite remains the default.
 - Accounted MCP host work now has a stable single-operation claim and a native child
   RPC wrapper bound to the actual callback session, ancestor reservation, deadline
   and cancellation. Protected routing/native outcome evidence and known sampling

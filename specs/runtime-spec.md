@@ -645,6 +645,32 @@ Queue deliveries are hints and may duplicate. A duplicate candidate cannot creat
 
 Retention must preserve active manifests, open waits, committed loop checkpoints, and the audit window promised by the deployment. Retention expiry has a tombstone; it is distinguishable from corrupted content.
 
+### 14.1 Storage backend equivalence
+
+The host selects storage; executable inputs cannot select a database, connection,
+schema, or credentials. Backend selection does not grant execution authority.
+Every supported backend MUST enforce the same admission, fencing, revision,
+finality, deadline, idempotency, protection, and retention predicates. Authoritative
+records, command receipts, journal entries, and outbox notices belonging to one
+transition MUST commit atomically across independent connections and processes.
+
+Opaque identities retain their exact admitted UTF-8 spelling, including distinctions
+between Unicode representations. Lookup indexes MUST NOT normalize identities or
+treat a hash collision as equality. Ordered pages retain the specified logical
+ordering and exclusive cursor semantics independently of database collation.
+
+A database transaction retry MUST reload authoritative facts and recheck acceptance
+predicates. It MUST NOT invoke providers or repeat an external operation. Loss of a
+commit acknowledgement is not proof of rollback: the implementation MUST reconcile
+the original operation identity before authorizing effectful progress. An existing
+dispatch intent retains its uncertainty rules. Replay remains capability-free.
+
+Artifact expiry and collection MUST arbitrate with new references and publication:
+no accepted manifest may refer to an artifact already expired at acceptance, and
+collection MUST NOT remove bytes required by an accepted artifact. Host-owned and
+run-owned MCP state retain their separate namespaces; compound callback accounting
+and run transitions share the same atomic storage boundary.
+
 ## 15. Runtime API
 
 An **API**, or application programming interface, is the set of operations another program can request. These definitions describe the runtime's logical API, not a released software library or a required network endpoint layout. The host's authenticated request context supplies who the caller is; a field inside an ordinary data object cannot impersonate that caller.

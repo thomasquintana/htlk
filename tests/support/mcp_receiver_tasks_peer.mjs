@@ -6,8 +6,14 @@ const related='io.modelcontextprotocol/related-task';
 let emit, original, finish, taskId, acceptanceCount=0, started=false, replayed=false, resultSeen=false, cancelSeen=false;
 let callback;
 let resultReplies=0;
+let getSeen=false, listSeen=false, getAfterSeen=false, released=false;
 const cancelling=scenario==='cancel' || scenario==='saturated';
 const assert=(yes,message)=>{if(!yes)throw new Error(message);};
+function releaseWork(){
+  if(cancelling || released || !getSeen || !listSeen || (scenario==='wait-cancel' && !getAfterSeen))return;
+  released=true;
+  emit({jsonrpc:'2.0',method:'notifications/message',params:{level:'info',data:'receiver-controls-observed'}});
+}
 function begin(){
   if(started || !emit || !original)return;
   started=true;
@@ -42,8 +48,11 @@ function response(r){
     }
   }else if(r.id==='get' || r.id==='get-after'){
     assert(['working','input_required'].includes(r.result?.status),'get progresses before the model finishes');
+    if(r.id==='get')getSeen=true;else getAfterSeen=true;
+    releaseWork();
   }else if(r.id==='list'){
     assert(r.result?.tasks.some(t=>t.taskId===taskId),'retrievable task is listed');
+    listSeen=true;releaseWork();
   }else if(r.id==='result' || r.id==='result2'){
     if(scenario==='wait-cancel' && r.id==='result'){
       assert(r.error?.code===-32800,'cancelled result RPC must stop waiting');
@@ -73,7 +82,7 @@ async function receive(r,send,disconnect){
   if(r.method==='initialize'){
     const tasks=r.params.capabilities.tasks;
     assert(tasks?.requests?.sampling?.createMessage && tasks?.requests?.elicitation?.create && tasks.list && tasks.cancel,'derived task capabilities');
-    send({jsonrpc:'2.0',id:r.id,result:{protocolVersion:'2025-11-25',serverInfo:{name:'receiver-peer',version:'1'},capabilities:{tools:{}}}});
+    send({jsonrpc:'2.0',id:r.id,result:{protocolVersion:'2025-11-25',serverInfo:{name:'receiver-peer',version:'1'},capabilities:{tools:{},logging:{}}}});
   }else if(r.method==='notifications/initialized'){}
   else if(r.method==='tools/call'){original=r;finish=send;begin();}
   else if(r.method==='notifications/cancelled'){}

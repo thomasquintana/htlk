@@ -1,4 +1,6 @@
 //! Independent stdio peers observe idle delivery, correlation and bounded teardown.
+#[path = "support/store.rs"]
+mod test_store;
 use htlk_executable::{
     JsonDocument, McpTransport, ServerIdentity,
     cbor::{Limits, Value},
@@ -489,7 +491,7 @@ impl htlk_runtime::clock::CoordinatorClock for Clock {
 #[test]
 fn durable_epochs_survive_transport_owners_and_expired_ownership_prevents_dispatch() {
     actix::System::new().block_on(async {
-        let store = htlk_runtime::store::SqliteStore::in_memory(Default::default())
+        let store = test_store::TestStore::in_memory(Default::default())
             .await
             .unwrap();
         let clock = Arc::new(Clock(std::sync::atomic::AtomicI64::new(10)));

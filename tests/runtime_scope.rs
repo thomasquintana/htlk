@@ -10,7 +10,7 @@ use htlk::{
         identity::RunId,
         mcp::{McpAdapter, McpFuture, McpRequest, McpRunContext},
         records::{RunStatus, SecurityLabels},
-        store::{SqliteStore, StoreConfig},
+        store::StoreConfig,
     },
 };
 use htlk_executable::{
@@ -26,6 +26,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 
 struct Policy {
     deny_dispatch: AtomicBool,
@@ -122,6 +123,7 @@ async fn duplicate_launch_preserves_command_routing_and_shutdown_allows_replacem
             RuntimeConfig::default(),
         )
         .unwrap()
+        .with_clock(Arc::new(Clock(AtomicI64::new(1000))))
         .with_mcp(adapter(&graph)),
     );
     runtime
@@ -206,38 +208,44 @@ fn adapter(graph: &CompilationSuccess) -> Arc<Adapter> {
     })
 }
 async fn terminal(runtime: &Runtime, run: &RunId) -> RunView {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match runtime.inspect_run(&caller(), run).await {
-                Ok(view) if view.header.status.is_terminal() => return view,
-                Ok(_) => {}
-                Err(error) if error.code() == FailureCode::Fenced => {}
-                Err(error) => panic!("inspection: {error}"),
+    tokio::time::timeout(
+        Duration::from_millis(support::store::io_budget_ms(5000)),
+        async {
+            loop {
+                match runtime.inspect_run(&caller(), run).await {
+                    Ok(view) if view.header.status.is_terminal() => return view,
+                    Ok(_) => {}
+                    Err(error) if error.code() == FailureCode::Fenced => {}
+                    Err(error) => panic!("inspection: {error}"),
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
             }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
+        },
+    )
     .await
     .expect("selected run stalled")
 }
 async fn waiting(runtime: &Runtime, run: &RunId) -> htlk::runtime::identity::WaitId {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match runtime.inspect_run(&caller(), run).await {
-                Ok(view) => {
-                    assert!(!view.header.status.is_terminal(), "{view:?}");
-                    if view.blocked
-                        && let Some(wait) = view.waits.first()
-                    {
-                        return wait.wait_id;
+    tokio::time::timeout(
+        Duration::from_millis(support::store::io_budget_ms(5000)),
+        async {
+            loop {
+                match runtime.inspect_run(&caller(), run).await {
+                    Ok(view) => {
+                        assert!(!view.header.status.is_terminal(), "{view:?}");
+                        if view.blocked
+                            && let Some(wait) = view.waits.first()
+                        {
+                            return wait.wait_id;
+                        }
                     }
+                    Err(error) if error.code() == FailureCode::Fenced => {}
+                    Err(error) => panic!("inspection: {error}"),
                 }
-                Err(error) if error.code() == FailureCode::Fenced => {}
-                Err(error) => panic!("inspection: {error}"),
+                tokio::time::sleep(Duration::from_millis(2)).await;
             }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
+        },
+    )
     .await
     .expect("selected wait stalled")
 }
@@ -436,20 +444,23 @@ async fn selected_run_restart_preserves_effect_and_exact_addressed_wait() {
     assert_eq!(store.run_header(&run).await.unwrap(), before);
     engine.attach_run(&run).await.unwrap();
     assert_eq!(waiting(&runtime, &run).await, wait);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match runtime
-                .submit_reply(&caller(), wait, Value::Bool(true), "exact-reply")
-                .await
-            {
-                Ok(_) => break,
-                Err(error) if error.code() == FailureCode::Fenced => {
-                    tokio::time::sleep(Duration::from_millis(2)).await
+    tokio::time::timeout(
+        Duration::from_millis(support::store::io_budget_ms(5000)),
+        async {
+            loop {
+                match runtime
+                    .submit_reply(&caller(), wait, Value::Bool(true), "exact-reply")
+                    .await
+                {
+                    Ok(_) => break,
+                    Err(error) if error.code() == FailureCode::Fenced => {
+                        tokio::time::sleep(Duration::from_millis(2)).await
+                    }
+                    Err(error) => panic!("reply: {error}"),
                 }
-                Err(error) => panic!("reply: {error}"),
             }
-        }
-    })
+        },
+    )
     .await
     .unwrap();
     assert_eq!(
@@ -463,7 +474,7 @@ async fn selected_run_restart_preserves_effect_and_exact_addressed_wait() {
     assert_eq!(adapter.calls(&run), 1);
     engine.shutdown().await.unwrap();
     store.close().await.unwrap();
-    std::fs::remove_file(directory).unwrap();
+    support::store::remove_file(directory).unwrap();
 }
 
 #[actix::test]

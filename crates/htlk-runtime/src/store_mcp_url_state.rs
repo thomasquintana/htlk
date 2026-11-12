@@ -1,6 +1,8 @@
 //! SQL state transitions shared by the fenced store facade and independent SQLite
 //! fault tests. Every mutating function requires an already-authorized transaction;
 //! the store facade owns BEGIN IMMEDIATE and parent owner/session checks.
+use super::state_db as rusqlite;
+use super::state_db::{Connection as Db, OptionalExtension, params};
 use crate::{
     mcp::client::{
         McpOperationOrigin, McpOwner, McpRequestId, McpRpcError, McpStoredUrlInteraction,
@@ -15,7 +17,6 @@ use htlk_executable::{
     cbor::{self, Limits, Value},
     digest::{Digest, hash_bytes},
 };
-use rusqlite::{Connection as Db, OptionalExtension, params};
 
 /// Exact scope supplied only after the parent transaction checks authority.
 #[derive(Clone, Copy)]

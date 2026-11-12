@@ -10,7 +10,7 @@ use htlk::{
         identity::{AttemptId, InvocationId},
         mcp::{McpEndpoint, McpPolicy, NativeMcpAdapter, client::McpRpcError},
         records::{RunStatus, SecurityLabels},
-        store::{SqliteStore, StoreConfig},
+        store::StoreConfig,
     },
 };
 use htlk_executable::{
@@ -19,6 +19,7 @@ use htlk_executable::{
     digest::Digest,
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use support::store::TestStore as SqliteStore;
 
 struct Policy;
 impl RuntimePolicy for Policy {

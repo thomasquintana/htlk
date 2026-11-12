@@ -10,7 +10,7 @@ use htlk::runtime::{
     identity::{InvocationId, RunId},
     mcp::{McpAdapter, McpFuture, McpPolicy, McpRequest, McpRunContext},
     records::{RunStatus, SecurityLabels},
-    store::{SqliteStore, StoreConfig},
+    store::StoreConfig,
 };
 use htlk_executable::{
     DeclaredContractPolicy, Identifier, JsonDocument, McpBinding, McpTransport, ServerIdentity,
@@ -26,6 +26,7 @@ use std::{
     },
     time::Duration,
 };
+use support::store::TestStore as SqliteStore;
 
 struct Policy {
     granted: ToolResultPolicy,
