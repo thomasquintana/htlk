@@ -10,7 +10,7 @@ use htlk_runtime::{
     HostContext,
     clock::CoordinatorClock,
     failure::{FailureCode, RuntimeFailure},
-    mcp::{McpCancellation, client::*},
+    mcp::{McpCancellation, McpFuture, client::*},
     records::SecurityLabels,
     store::{
         McpReceivedTask, McpReceivedTaskLimits, McpReceivedTaskStatus, McpStoredInteraction,
@@ -1143,7 +1143,22 @@ fn failed_terminal_write_rolls_back_work_cancellation_and_the_rpc_receipt() {
     });
 }
 
-struct LiveServices(AtomicU64);
+struct LiveServices {
+    calls: AtomicU64,
+    controls_observed: tokio::sync::Notify,
+}
+impl McpEventHandler for LiveServices {
+    fn receive<'a>(&'a self, event: McpClientEvent) -> McpFuture<'a, ()> {
+        Box::pin(async move {
+            if event.method == "notifications/message"
+                && field(&event.params, "data") == &Value::Text("receiver-controls-observed".into())
+            {
+                self.controls_observed.notify_one();
+            }
+            Ok(())
+        })
+    }
+}
 impl McpClientHandler for LiveServices {
     fn handle<'a>(
         &'a self,
@@ -1151,11 +1166,11 @@ impl McpClientHandler for LiveServices {
         request: &'a JsonDocument,
     ) -> McpServiceFuture<'a> {
         Box::pin(async move {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(context.task_id.is_some());
             tokio::select! {
                 _=context.cancellation.cancelled()=>return McpServiceOutcome::failure(McpWorkDelivery::Uncertain,McpRpcError::new(doc(r#"{"code":-32000,"message":"underlying work cancellation uncertain"}"#)).unwrap()),
-                _=tokio::time::sleep(Duration::from_millis(100))=>{}
+                _=self.controls_observed.notified()=>{}
             }
             let result = if field(request, "method")
                 == &Value::Text("sampling/createMessage".into())
@@ -1189,7 +1204,10 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                         .acquire_owner(&host("alice"), "live-receiver", 10_000)
                         .await
                         .unwrap();
-                    let handler = Arc::new(LiveServices(AtomicU64::new(0)));
+                    let handler = Arc::new(LiveServices {
+                        calls: AtomicU64::new(0),
+                        controls_observed: tokio::sync::Notify::new(),
+                    });
                     let config = McpClientConfig::new(
                         McpClientLimits {
                             callbacks: 1,
@@ -1200,7 +1218,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                             } else {
                                 1024 * 1024
                             },
-                            timeout_ms: 2000,
+                            timeout_ms: test_store::io_budget_ms(2000),
                             ..Default::default()
                         },
                         BTreeMap::from([
@@ -1213,7 +1231,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                                 handler.clone() as Arc<dyn McpClientHandler>,
                             ),
                         ]),
-                        None,
+                        Some(handler.clone() as Arc<dyn McpEventHandler>),
                     )
                     .unwrap()
                     .with_persistence(persistence)
@@ -1283,7 +1301,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                         .await;
                     let result = reply
                         .result
-                        .unwrap()
+                        .unwrap_or_else(|error| panic!("{mode} {scenario} {method}: {error:?}"))
                         .unwrap_or_else(|error| panic!("{mode} {scenario} {method}: {error:?}"));
                     assert_eq!(
                         field(&result, "resultSeen"),
@@ -1291,7 +1309,7 @@ fn live_receiver_tasks_progress_on_one_worker_over_stdio_http_json_and_post_sse(
                         "{mode} {scenario} {method}"
                     );
                     assert_eq!(
-                        handler.0.load(Ordering::SeqCst),
+                        handler.calls.load(Ordering::SeqCst),
                         1,
                         "replayed acceptance must not recall the model"
                     );
