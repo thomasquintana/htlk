@@ -112,7 +112,7 @@ fixture validation (fingerprint 6474d225d85c4c217ee66d6b20eb5aad2c28a58a11e8ca7c
 
 ### Task 3 — PostgreSQL foundation and native layout
 
-Status: pending.
+Status: complete (2026-11-11).
 
 - Default sqlite Cargo feature and optional postgres feature, forwarded by htlk.
 - Initially proposed SQLx with Tokio/pooling/rustls; review against new private
@@ -134,6 +134,32 @@ Status: pending.
 - Stable bounded errors; no credentials/raw diagnostics in public formatting.
 
 Gate: lifecycle/compatibility/concurrent-init and representation-boundary tests.
+
+Implementation: store_db is the private typed row/statement/transaction boundary;
+the existing worker now has a bounded Tokio queue and runs PostgreSQL operations
+inside a database/schema-scoped transaction gate. Domain transactions are savepoints
+inside that operation, retaining early-return rollback semantics. PostgreSQL tables
+are native and independent of SQLite; opaque indexed identities retain raw BYTEA
+plus generated SHA-256 keys and checked preimages. Flags use checked BIGINT 0/1
+rather than BOOLEAN to share the audited predicate vocabulary; this is private
+layout only. A finite set of PostgreSQL binding/dialect variants is separate from
+the domain reducers. Rows stream through server cursors, one row at a time.
+Driver: postgres 0.19.14, postgres-native-tls 0.5.3, native-tls 0.2.18; verified
+platform TLS replaces the initially proposed rustls stack. PostgreSQL-only builds
+exclude rusqlite. An uncertain COMMIT quarantines the connection and returns a
+distinct sanitized CommitUnknown error; hosts reopen/reconcile existing receipts.
+No automatic transaction replay is introduced: the serialized gate avoids internal
+write deadlocks/serialization retries, and ambiguous commits must not be replayed.
+Connection, lock, statement and admitted-operation timeouts are explicit.
+Validation: 44 all-feature unit tests passed against local PostgreSQL 18 and
+SQLite; all-target runtime Clippy with warnings denied passed; PG-only library
+build passed. Native identity source lists updated together; explicit generation
+and independent fixture validation passed (49ebd7d332ae0db54caa2945a4799876db4018c2e9d59988aec5e86e14e598e9).
+30 focused identity/admission/independent raw-SQL URL regressions passed. Notices
+regenerated with cargo-about 0.9.2 for all features; matching CI/release/procedure
+flags synchronized. cargo deny check passed (duplicate-version warnings only).
+Documentation/spec validators passed. Remaining domains use the same implementation bodies and native
+layout, but their PostgreSQL conformance is established in tasks 4–6.
 
 ### Task 4 — PostgreSQL core transaction engine
 
@@ -265,3 +291,13 @@ whole and clearly records behavior, tests, compatibility, operational limits.
 - Task 1 commit: 033c290. Re-read plan after completion. Task 2 façade validated;
   next: commit task 2, then implement shared relational primitives and native PG
   worker/schema/configuration while preserving the security-fixed SQLite worker.
+- Task 2 commit: 01c9b7b. Re-read plan at task 3. Local PostgreSQL 18 container
+  htlk-postgres uses port 58754 (an existing service owns port 55432; it was not
+  disturbed). Test URL: host=127.0.0.1 port=58754 user=postgres password=htlk-test
+  dbname=htlk_test sslmode=disable. These are isolated disposable test credentials.
+- Task 3 complete after foundation checks. Next: finish generation/notices and
+  commit, then qualify core transaction/receipt/replay/concurrency and fault paths.
+- Task 3 final evidence: all-feature rustdoc with denied warnings and all 3 runtime
+  doctests passed; updated documentation/spec validators passed. Generated notices
+  retain the generator's exact upstream license text (including upstream CRLF).
+  Re-read plan after task 3; core acceptance and fault qualification is next.

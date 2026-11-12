@@ -46,6 +46,25 @@ Install Node.js 24 for the independent local MCP peers. These tests use loopback
 ports, local child processes and isolated temporary SQLite databases; they require
 no service credentials or remote MCP server.
 
+The default-feature Rust suite uses SQLite. The `postgres` feature additionally
+requires PostgreSQL 16 or newer and an explicit `HTLK_TEST_POSTGRES_URL`. A missing
+test database is an error when those tests are enabled. For a disposable local
+PostgreSQL 18 service, run this in a separate terminal:
+
+```console
+docker run --rm --name htlk-postgres --env POSTGRES_PASSWORD=htlk-test --env POSTGRES_DB=htlk_test --publish 127.0.0.1:55432:5432 postgres:18
+```
+
+Then configure the local test connection before running all-feature commands:
+
+```console
+export HTLK_TEST_POSTGRES_URL='host=127.0.0.1 port=55432 user=postgres password=htlk-test dbname=htlk_test sslmode=disable'
+```
+
+Tests allocate uniquely named schemas within that disposable database. They do not
+use application deployment credentials or external MCP services. Select another
+unused host port if necessary.
+
 The ordinary Rust suite includes every E2E, crash, and stress campaign. The retained
 Node tests independently exercise documentation, coverage, and discovery helpers:
 

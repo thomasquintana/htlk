@@ -1,13 +1,13 @@
 //! Transactional host-session ownership and client-work facts. As with the other
 //! store APIs, these are trusted infrastructure, not authenticated frontend APIs.
 use super::*;
+use crate::store_db::Connection as Db;
 use crate::{
     HostContext,
     mcp::client::{McpOperationOrigin, McpOwner, McpOwnerScope, McpRequestId, McpWorkDelivery},
     records::SecurityLabels,
 };
 use htlk_executable::{JsonDocument, digest::hash_bytes};
-use rusqlite::Connection as Db;
 #[path = "store_mcp_run.rs"]
 mod run;
 #[path = "store_mcp_tasks.rs"]

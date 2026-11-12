@@ -62,7 +62,7 @@ release validation, then regenerate third-party notices:
 
 ```console
 cargo install cargo-about --version 0.9.2 --locked --features cli
-cargo about generate about.hbs --workspace --locked --fail --output-file THIRD_PARTY_LICENSES
+cargo about generate about.hbs --workspace --all-features --locked --fail --output-file THIRD_PARTY_LICENSES
 ```
 
 Generator upgrades can change selected license text even when `Cargo.lock` is

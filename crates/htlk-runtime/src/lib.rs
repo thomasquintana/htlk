@@ -33,6 +33,9 @@ mod sqlite_worker;
 #[cfg(test)]
 mod sqlite_worker_tests;
 pub mod store;
+mod store_db;
+#[cfg(feature = "postgres")]
+mod store_postgres;
 mod uri_template;
 mod verified;
 

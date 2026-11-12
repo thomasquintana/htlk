@@ -8,6 +8,7 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Changed
 
+- Storage workers admit at most 256 queued operations per shared connection handle.
 - Runtime and durable MCP persistence accept the backend-neutral `Store` handle.
   `SqliteStore` remains a source-compatible name for the SQLite constructors.
   Native implementation identities and executable fingerprints change.

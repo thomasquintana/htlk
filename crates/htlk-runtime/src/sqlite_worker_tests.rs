@@ -85,7 +85,7 @@ fn dropped_callers_do_not_cancel_queued_transactions_or_reorder_clones() {
         release.send(()).unwrap();
         waiter.await.unwrap();
         let values = db
-            .call(|db| -> rusqlite::Result<Vec<i64>> {
+            .call(|db| -> crate::store_db::Result<Vec<i64>> {
                 db.prepare("SELECT value FROM effects ORDER BY rowid")?
                     .query_map([], |row| row.get(0))?
                     .collect()

@@ -27,7 +27,15 @@ ryu-js.workspace = true
 sha2.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, optional = true }
+postgres = { workspace = true, optional = true }
+postgres-native-tls = { workspace = true, optional = true }
+native-tls = { workspace = true, optional = true }
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite"]
+postgres = ["dep:postgres", "dep:postgres-native-tls", "dep:native-tls"]
 
 [lints]
 workspace = true

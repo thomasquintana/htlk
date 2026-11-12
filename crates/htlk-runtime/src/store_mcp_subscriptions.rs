@@ -522,6 +522,7 @@ fn validate_keys(uri: &str, subscriber: &str, limits: &Limits) -> Result<(), Sto
 fn worker_error(error: crate::sqlite_worker::Error<StoreError>) -> StoreError {
     match error {
         crate::sqlite_worker::Error::Error(error) => error,
+        crate::sqlite_worker::Error::Database(error) => error.into(),
         _ => StoreError::Closed,
     }
 }

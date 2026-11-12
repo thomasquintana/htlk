@@ -17,7 +17,7 @@ half = { version = "=2.7.1", default-features = false }
 htlk-compiler = { version = "=0.1.0", path = "crates/htlk-compiler" }
 htlk-analyzer = { version = "=0.1.0", path = "crates/htlk-analyzer" }
 htlk-executable = { version = "=0.1.0", path = "crates/htlk-executable" }
-htlk-runtime = { version = "=0.1.0", path = "crates/htlk-runtime" }
+htlk-runtime = { version = "=0.1.0", path = "crates/htlk-runtime", default-features = false }
 iri-string = "=0.7.14"
 jsonschema = { version = "=0.56.0", default-features = false }
 regex = "=1.13.1"
@@ -29,6 +29,9 @@ ryu-js = "=1.0.3"
 serde = "=1.0.229"
 serde_json = { version = "=1.0.151", features = ["float_roundtrip", "unbounded_depth"] }
 sha2 = "=0.10.9"
+postgres = "=0.19.14"
+postgres-native-tls = "=0.5.3"
+native-tls = "=0.2.18"
 rusqlite = { version = "=0.41.1", default-features = false, features = [
     "bundled",
     "cache",
@@ -63,7 +66,12 @@ all-features = true
 
 [dependencies]
 htlk-compiler.workspace = true
-htlk-runtime.workspace = true
+htlk-runtime = { workspace = true, default-features = false }
+
+[features]
+default = ["sqlite"]
+sqlite = ["htlk-runtime/sqlite"]
+postgres = ["htlk-runtime/postgres"]
 
 [dev-dependencies]
 actix.workspace = true

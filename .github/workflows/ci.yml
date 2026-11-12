@@ -119,5 +119,5 @@ jobs:
 
       - name: Check third-party notices
         run: |
-          cargo about generate about.hbs --workspace --locked --fail --output-file "$RUNNER_TEMP/THIRD_PARTY_LICENSES"
+          cargo about generate about.hbs --workspace --all-features --locked --fail --output-file "$RUNNER_TEMP/THIRD_PARTY_LICENSES"
           diff --unified THIRD_PARTY_LICENSES "$RUNNER_TEMP/THIRD_PARTY_LICENSES"

@@ -60,6 +60,36 @@ expression/source decisions must not become eager database reads when adapting a
 backend. Recovery rebuilds derived indexes from authoritative metadata, and replay
 does not acquire provider capabilities.
 
+### PostgreSQL layout and execution
+
+The optional `postgres` feature provides native PostgreSQL tables in a dedicated
+host-selected schema. `PostgresStore::initialize` transactionally creates an empty
+recognized layout; `PostgresStore::open` requires existing state. The metadata
+application is `htlk.runtime.postgres`, layout version **1**. Initialization and
+runtime operations arbitrate through the same database/schema-scoped transaction
+advisory lock. Each admitted operation uses one primary connection and a READ
+COMMITTED transaction; domain transaction boundaries use savepoints inside it.
+The lock is acquired before domain reads, preserving SQLite's serialized writer
+semantics across processes, including retention, callbacks, and journal cursors.
+Read operations currently acquire the same gate for coherent multi-query views.
+
+Cloned handles share a dedicated worker and a queue of at most 256 waiting calls.
+Independent opens create independent connections. Timeouts bound connection,
+authority lock, statements, and admitted operations. A dropped waiter does not
+cancel admitted work. Close drains earlier work and closes every clone of that
+handle. There is no automatic replay of database operations. A lost commit reply
+returns `StoreError::CommitUnknown` and quarantines the connection; reopen and
+reconcile the original durable receipt before further effectful progress.
+
+Canonical CBOR and protected values remain BYTEA. Arbitrary indexed string
+identities also retain exact UTF-8 BYTEA, including NUL. Generated SHA-256 lookup
+keys bound PostgreSQL B-tree entries; checked preimages prevent a collision from
+becoming identity equality. Pages compare original identity bytes, not lookup
+digests or locale collation. Private flags use checked BIGINT 0/1 values, while
+counters, revisions, fences, and milliseconds retain signed i64 bounds. Staged
+artifact bytes do not publish accepted metadata. The native layout has its own
+constraints and deferred producer links; it does not embed a SQLite database.
+
 ### Host MCP interaction storage
 
 The store includes owner-scoped MCP leases, epochs, interactions, receipts, journal

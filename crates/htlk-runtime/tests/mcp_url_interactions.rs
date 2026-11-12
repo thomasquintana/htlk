@@ -7,6 +7,7 @@ use htlk_executable::{
 };
 use htlk_runtime::{HostContext, mcp::client::*, records::SecurityLabels, store::*};
 pub use htlk_runtime::{failure, identity, mcp, records, store};
+use rusqlite as state_db;
 use rusqlite::{Connection as Db, TransactionBehavior};
 use std::{
     path::PathBuf,
