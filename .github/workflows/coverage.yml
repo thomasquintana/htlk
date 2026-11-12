@@ -71,13 +71,17 @@ jobs:
       - name: Check coverage report integrity and baseline tooling
         run: node --test tools/coverage.test.mjs
 
+      - name: Clean coverage artifacts before accumulating backend runs
+        run: cargo +${{ matrix.toolchain }} llvm-cov clean --workspace
+
       - name: Execute all unit, integration, native E2E, crash and stress tests
         run: cargo +${{ matrix.toolchain }} llvm-cov --workspace --all-features --all-targets --locked ${{ matrix.flags }} --no-report
 
       - name: Accumulate complete PostgreSQL backend coverage
         env:
           HTLK_TEST_BACKEND: postgres
-        run: cargo +${{ matrix.toolchain }} llvm-cov --workspace --all-features --all-targets --locked ${{ matrix.flags }} --no-clean --no-report
+        # --no-report already preserves profiles for the final combined report.
+        run: cargo +${{ matrix.toolchain }} llvm-cov --workspace --all-features --all-targets --locked ${{ matrix.flags }} --no-report
 
       - name: Export coverage evidence
         if: always()

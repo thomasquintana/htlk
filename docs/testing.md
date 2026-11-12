@@ -114,8 +114,9 @@ To reproduce the primary CI coverage measurement:
 rustup toolchain install 1.98.0 --profile minimal --component llvm-tools-preview
 cargo +stable install cargo-llvm-cov --version 0.9.1 --locked
 mkdir -p target/coverage
-cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --json --output-path target/coverage/coverage.json
-HTLK_TEST_BACKEND=postgres cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --no-clean --no-report
+cargo +1.98.0 llvm-cov clean --workspace
+cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --no-report
+HTLK_TEST_BACKEND=postgres cargo +1.98.0 llvm-cov --workspace --all-features --all-targets --locked --no-report
 cargo +1.98.0 llvm-cov report --workspace --json --output-path target/coverage/coverage.json
 cargo +1.98.0 llvm-cov report --workspace --html --output-dir target/coverage
 node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-thresholds.json
@@ -126,14 +127,19 @@ For branch coverage:
 ```console
 rustup toolchain install nightly-2026-10-20 --profile minimal --component llvm-tools-preview
 mkdir -p target/coverage
-cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --json --output-path target/coverage/coverage.json
-HTLK_TEST_BACKEND=postgres cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --no-clean --no-report
+cargo +nightly-2026-10-20 llvm-cov clean --workspace
+cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --no-report
+HTLK_TEST_BACKEND=postgres cargo +nightly-2026-10-20 llvm-cov --workspace --all-features --all-targets --locked --branch --no-report
 cargo +nightly-2026-10-20 llvm-cov report --workspace --json --output-path target/coverage/coverage.json
 node tools/coverage.mjs target/coverage/coverage.json --recommendations tools/coverage-branch-thresholds.json
 ```
 
 Use separate `CARGO_LLVM_COV_TARGET_DIR` directories if keeping stable and nightly
 profiles simultaneously. The default coverage command clears old profiles.
+For backend accumulation, clean once before the first run and use `--no-report`
+for both runs. The pinned collector implicitly preserves profiles with that flag;
+explicitly combining it with `--no-clean` is rejected. Export the combined report
+only after both backend runs succeed.
 `cargo llvm-cov report` exports additional formats from the same run without
 executing tests again. Include `--workspace` when exporting reports.
 
