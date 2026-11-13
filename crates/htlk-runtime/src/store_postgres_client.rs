@@ -1,17 +1,27 @@
 //! Deadline-bounded protocol I/O on the connection's dedicated worker runtime.
-//! Timeouts abort the protocol task: an abandoned response cannot authorize reuse.
+//! Requests and asynchronous messages share one ordered driver. An abandoned or
+//! warning-tainted commit response cannot authorize connection reuse.
 
 use postgres::types::{ToSql, Type};
 use std::{
     cell::{Cell, RefCell},
-    future::Future,
+    future::{Future, poll_fn},
+    pin::pin,
+    task::Poll,
     time::{Duration, Instant},
 };
-use tokio_postgres::{Row, Statement, ToStatement};
+use tokio_postgres::{AsyncMessage, Row, Statement, ToStatement, error::Severity};
+
+type Protocol = tokio_postgres::Connection<
+    tokio_postgres::Socket,
+    postgres_native_tls::TlsStream<tokio_postgres::Socket>,
+>;
 
 pub(crate) enum Error {
     BeforeSend,
     Timeout,
+    Disconnected,
+    CommitWarning,
     Protocol(postgres::Error),
 }
 impl Error {
@@ -22,7 +32,7 @@ impl Error {
                 let code = code.code();
                 code.starts_with("23") || matches!(code, "40001" | "40P01")
             }),
-            Self::Timeout => false,
+            Self::Timeout | Self::Disconnected | Self::CommitWarning => false,
         }
     }
 }
@@ -35,7 +45,7 @@ impl From<postgres::Error> for Error {
 pub(crate) struct Client {
     runtime: tokio::runtime::Runtime,
     inner: tokio_postgres::Client,
-    protocol: RefCell<tokio::task::JoinHandle<()>>,
+    protocol: RefCell<Option<Protocol>>,
     timeout: Duration,
     deadline: Cell<Option<Instant>>,
     closed: Cell<bool>,
@@ -57,13 +67,10 @@ impl Client {
                 .map_err(|_| Error::Timeout)?
                 .map_err(Error::Protocol)
         })?;
-        let protocol = runtime.spawn(async move {
-            let _ = connection.await;
-        });
         Ok(Self {
             runtime,
             inner,
-            protocol: RefCell::new(protocol),
+            protocol: RefCell::new(Some(connection)),
             timeout,
             deadline: Cell::new(None),
             closed: Cell::new(false),
@@ -75,6 +82,13 @@ impl Client {
     fn drive<T>(
         &self,
         future: impl Future<Output = Result<T, postgres::Error>>,
+    ) -> Result<T, Error> {
+        self.drive_ordered(future, false)
+    }
+    fn drive_ordered<T>(
+        &self,
+        future: impl Future<Output = Result<T, postgres::Error>>,
+        committing: bool,
     ) -> Result<T, Error> {
         if self.closed.get() {
             return Err(Error::BeforeSend);
@@ -88,16 +102,68 @@ impl Client {
             self.abort();
             return Err(Error::BeforeSend);
         }
-        let outcome = self
-            .runtime
-            .block_on(async { tokio::time::timeout(remaining, future).await });
+        let outcome = {
+            let mut protocol = self.protocol.borrow_mut();
+            let Some(protocol) = protocol.as_mut() else {
+                return Err(Error::BeforeSend);
+            };
+            let mut future = pin!(future);
+            // A latch, not a notice queue: no diagnostic text or execution content
+            // is retained or forwarded to the dependency's general notice logger.
+            let mut warning = false;
+            let ordered = poll_fn(|cx| {
+                // Bound each poll even if the server sends an endless notice stream,
+                // allowing the existing operation/I/O deadline to keep making progress.
+                for _ in 0..64 {
+                    if let Poll::Ready(result) = future.as_mut().poll(cx) {
+                        return Poll::Ready(commit_result(result, warning));
+                    }
+                    match protocol.poll_message(cx) {
+                        Poll::Ready(Some(Ok(message))) => {
+                            // poll_message may route ReadyForQuery before returning
+                            // a *following* asynchronous message. Finish the request
+                            // first in that case: an idle notice is not its warning.
+                            if let Poll::Ready(result) = future.as_mut().poll(cx) {
+                                return Poll::Ready(commit_result(result, warning));
+                            }
+                            if committing && let AsyncMessage::Notice(notice) = message {
+                                // PostgreSQL >=16 supplies nonlocalized severity.
+                                // Missing classification cannot prove benignity.
+                                warning |= matches!(
+                                    notice.parsed_severity(),
+                                    Some(Severity::Warning) | None
+                                );
+                            }
+                            // Notifications and benign notices remain ordinary
+                            // asynchronous messages, never commit-failure evidence.
+                        }
+                        Poll::Ready(Some(Err(error))) => {
+                            return Poll::Ready(Err(Error::Protocol(error)));
+                        }
+                        Poll::Ready(None) => return Poll::Ready(Err(Error::Disconnected)),
+                        Poll::Pending => {
+                            // Normal responses may have been delivered without any
+                            // asynchronous message; consume them before yielding.
+                            return future
+                                .as_mut()
+                                .poll(cx)
+                                .map(|result| commit_result(result, warning));
+                        }
+                    }
+                }
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            });
+            self.runtime
+                .block_on(async { tokio::time::timeout(remaining, ordered).await })
+        };
         match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => {
-                if error.as_db_error().is_none() {
+                if !matches!(&error, Error::Protocol(error) if error.as_db_error().is_some()) {
                     self.abort();
                 }
-                Err(Error::Protocol(error))
+                Err(error)
             }
             Err(_) => {
                 self.abort();
@@ -105,15 +171,25 @@ impl Client {
             }
         }
     }
-    fn abort(&self) {
-        if self.closed.replace(true) {
-            return;
+    pub(crate) fn abort(&self) {
+        self.closed.set(true);
+        // Drop the socket, including buffered responses. Nothing can subsequently
+        // drain an uncertain completion and turn this connection reusable.
+        self.protocol.borrow_mut().take();
+    }
+    pub(crate) fn commit(&self) -> Result<(), Error> {
+        // Some driver methods (notably prepare) finish before ReadyForQuery. An
+        // empty simple query fences all preceding responses/notices before opening
+        // the commit-only observation window. A refusal here precedes COMMIT.
+        self.batch_execute("").map_err(|_| Error::BeforeSend)?;
+        let result = self.drive_ordered(self.inner.batch_execute("COMMIT"), true);
+        if result
+            .as_ref()
+            .is_err_and(|error| !error.known_commit_rollback())
+        {
+            self.abort();
         }
-        let mut protocol = self.protocol.borrow_mut();
-        protocol.abort();
-        self.runtime.block_on(async {
-            let _ = (&mut *protocol).await;
-        });
+        result
     }
     pub(crate) fn batch_execute(&self, sql: &str) -> Result<(), Error> {
         self.drive(self.inner.batch_execute(sql))
@@ -151,5 +227,13 @@ impl Client {
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<u64, Error> {
         self.drive(self.inner.execute(sql, params))
+    }
+}
+
+fn commit_result<T>(result: Result<T, postgres::Error>, warning: bool) -> Result<T, Error> {
+    if warning {
+        Err(Error::CommitWarning)
+    } else {
+        result.map_err(Error::Protocol)
     }
 }

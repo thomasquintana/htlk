@@ -176,6 +176,118 @@ fn observed_commit_with_lost_ack_recovers_one_receipt_and_never_restarts_a_work_
 }
 
 #[test]
+fn commit_notices_follow_protocol_boundaries_without_stale_contamination() {
+    use commit_proxy::Fault;
+    actix::System::new().block_on(async {
+        let settings = settings();
+        let observer = PostgresStore::initialize(settings.clone(), StoreConfig::default())
+            .await
+            .unwrap();
+        let run = seed();
+        observer.create_run(run.clone()).await.unwrap();
+        let lease = observer
+            .acquire(&run.run_id, "owner".into(), 2, 100)
+            .await
+            .unwrap();
+        for (index, fault) in [
+            Fault::WarningBeforeComplete,
+            Fault::WarningBeforeReady,
+            Fault::FragmentedWarning,
+            Fault::UnclassifiedNotice,
+            Fault::WarningAfterReady,
+            Fault::WarningBeforeCommit,
+            Fault::BenignMessages,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let proxy = commit_proxy::CommitProxy::with_fault(fault);
+            let mut config = PostgresConfig::new(proxy.connection());
+            config.schema = settings.schema.clone();
+            let store = PostgresStore::open(config, StoreConfig::default())
+                .await
+                .unwrap();
+            proxy.arm();
+            let command = format!("notice-{index}");
+            let mut change = proposal(&command, None);
+            change.writes[0].key.id = command.clone();
+            let result = store.commit(&lease, change.clone()).await;
+            let uncertain = matches!(
+                fault,
+                Fault::WarningBeforeComplete
+                    | Fault::WarningBeforeReady
+                    | Fault::FragmentedWarning
+                    | Fault::UnclassifiedNotice
+            );
+            if uncertain {
+                assert_eq!(result, Err(StoreError::CommitUnknown));
+                assert_eq!(
+                    store.run_header(&run.run_id).await,
+                    Err(StoreError::Database)
+                );
+            } else {
+                assert_eq!(result.as_ref().unwrap().sequence, 3 + index as i64);
+                // Two more physical commits exercise a warning after the previous
+                // ReadyForQuery and prove it cannot taint the next observation.
+                assert_eq!(
+                    store.run_header(&run.run_id).await.unwrap().sequence,
+                    3 + index as i64
+                );
+                assert_eq!(store.commit(&lease, change.clone()).await, result);
+            }
+            assert_eq!(
+                observer.commit(&lease, change).await.unwrap().sequence,
+                3 + index as i64
+            );
+            store.close().await.unwrap();
+        }
+        assert_eq!(observer.journal(&run.run_id, 0, 10).await.unwrap().len(), 9);
+        observer.close().await.unwrap();
+    });
+}
+
+#[test]
+fn initialization_and_opening_use_the_same_guarded_commit() {
+    actix::System::new().block_on(async {
+        for (initialize, fault) in [
+            (true, commit_proxy::Fault::WarningBeforeReady),
+            (false, commit_proxy::Fault::WarningBeforeReady),
+            (true, commit_proxy::Fault::LostAck),
+            (false, commit_proxy::Fault::LostAck),
+        ] {
+            let settings = settings();
+            if !initialize {
+                PostgresStore::initialize(settings.clone(), StoreConfig::default())
+                    .await
+                    .unwrap()
+                    .close()
+                    .await
+                    .unwrap();
+            }
+            let proxy = commit_proxy::CommitProxy::with_fault(fault);
+            let mut config = PostgresConfig::new(proxy.connection());
+            config.schema = settings.schema.clone();
+            proxy.arm();
+            let result = if initialize {
+                PostgresStore::initialize(config, StoreConfig::default()).await
+            } else {
+                PostgresStore::open(config, StoreConfig::default()).await
+            };
+            assert!(matches!(result, Err(StoreError::CommitUnknown)));
+            assert!(proxy.observed_commit());
+            // Uncertain initialization can have created a complete recognized
+            // schema; inspect/reopen, never relabel or delete it as a rollback.
+            PostgresStore::open(settings, StoreConfig::default())
+                .await
+                .unwrap()
+                .close()
+                .await
+                .unwrap();
+        }
+    });
+}
+
+#[test]
 fn stalled_authentication_and_tls_negotiation_obey_the_whole_connection_deadline() {
     use std::{
         net::TcpListener,

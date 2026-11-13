@@ -166,11 +166,15 @@ impl SqliteStore {
     /// Atomically compare/revise records, update run status/root, append the complete
     /// decision and enqueue its outbox hint. An identical command returns its old
     /// receipt; a changed request under that key fails. Timestamp and worker lease
-    /// are excluded from request identity so recovery can retry with new authority.
+    /// are excluded from request identity so recovery can reconcile with new authority.
+    /// An existing receipt identifies the original accepted transition; returning it
+    /// does not establish a new synchronous replication acknowledgment for that write.
     ///
     /// # Errors
     /// Returns stale authority/revision, final record/run, idempotency conflict,
     /// active-fingerprint conflict, complete record limits or database failure.
+    /// [`StoreError::CommitUnknown`] preserves the original operation's uncertainty;
+    /// do not infer rollback or automatically repeat external work.
     pub async fn commit(
         &self,
         lease: &RunLease,
