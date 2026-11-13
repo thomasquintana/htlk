@@ -802,6 +802,12 @@ navigation does not manufacture analyzed dependency information. Original canoni
 identities remain stable through repeated scope use, loop iterations and extension
 mounting, alongside their recorded execution context.
 
+Recorded immediate-parent traversal resolves a response to its same-key historical
+attempt, then that attempt to its recorded invocation. Each endpoint MUST exist at
+the selected pin and pass current discovery and structure checks. Structural attempt
+status comes from its closed dispatch lifecycle (`prepared`, `possibly_sent`,
+`response_recorded`); accepted waits retain their recorded `accepted` state.
+
 Discovery uses structured run ID/status/fingerprint/time filters. Entity listing,
 relation traversal and history use bounded candidate pages and aggregate byte limits.
 History can select a run, record or event and MUST stop at its snapshot's committed

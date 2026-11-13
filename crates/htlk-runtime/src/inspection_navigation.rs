@@ -57,7 +57,28 @@ fn record(family: RecordFamily, id: impl ToString) -> EntityId {
         id: id.to_string(),
     })
 }
-fn status(v: &Value) -> Option<&'static str> {
+fn status(record: &StoredRecord) -> Option<&'static str> {
+    let v = &record.payload;
+    match record.key.family {
+        RecordFamily::Attempt => {
+            return match text(v, "dispatch_state")? {
+                "prepared" => Some("prepared"),
+                "possibly_sent" => Some("possibly_sent"),
+                "response_recorded" => Some("response_recorded"),
+                _ => None,
+            };
+        }
+        RecordFamily::Wait => {
+            return match text(v, "state")? {
+                "open" => Some("open"),
+                "accepted" => Some("accepted"),
+                "expired" => Some("expired"),
+                "cancelled" => Some("cancelled"),
+                _ => None,
+            };
+        }
+        _ => {}
+    }
     match text(v, "status").or_else(|| text(v, "state"))? {
         "pending" => Some("pending"),
         "active" => Some("active"),
@@ -71,9 +92,6 @@ fn status(v: &Value) -> Option<&'static str> {
         "expired" => Some("expired"),
         "value" => Some("value"),
         "absent" => Some("absent"),
-        "prepared" => Some("prepared"),
-        "possibly_sent" => Some("possibly_sent"),
-        "response_recorded" => Some("response_recorded"),
         _ => None,
     }
 }
@@ -441,7 +459,7 @@ impl Inspector {
             definition: selected.identity.clone(),
             revision: selected.record.as_ref().map(|r| r.revision),
             final_record: selected.record.as_ref().map(|r| r.final_record),
-            status: payload.and_then(status),
+            status: selected.record.as_ref().and_then(status),
             iteration: payload.and_then(|v| number(v, "iteration")),
             extension_number: payload.and_then(|v| number(v, "extension_number")),
             scope_use: selected
@@ -644,9 +662,14 @@ impl Inspector {
                             .map(|id| record(RecordFamily::Invocation, id)),
                         RecordFamily::Invocation => text(&stored.payload, "scope_instance_id")
                             .map(|id| record(RecordFamily::Scope, id)),
+                        // Production responses share their attempt's key and do
+                        // not duplicate invocation_id. The normal target lookup
+                        // verifies and authorizes that attempt at this exact pin.
+                        RecordFamily::Response => {
+                            Some(record(RecordFamily::Attempt, &stored.key.id))
+                        }
                         RecordFamily::Attempt
                         | RecordFamily::Wait
-                        | RecordFamily::Response
                         | RecordFamily::Reply
                         | RecordFamily::Approval => text(&stored.payload, "invocation_id")
                             .map(|id| record(RecordFamily::Invocation, id)),

@@ -1033,7 +1033,7 @@ fn authored_edges_recorded_selection_loops_and_extension_origins_stay_distinct()
             write(RecordFamily::Binding,format!("{}:work:x",run.root),None,object([
                 ("state",text("absent")),("selected_edge",text("right")),("influence_labels",labels().to_value(&l).unwrap()),
             ])),
-            write(RecordFamily::Attempt,"attempt-one",None,object([("invocation_id",text(run.work)),("state",text("prepared"))])),
+            write(RecordFamily::Attempt,"attempt-one",None,object([("invocation_id",text(run.work)),("dispatch_state",text("prepared"))])),
             write(RecordFamily::Wait,"wait-one",None,object([("invocation_id",text(run.work)),("state",text("open"))])),
         ];
         let mut iterations = Vec::new();
@@ -1448,5 +1448,89 @@ fn metadata_pages_have_a_byte_ceiling_and_denied_definitions_are_not_decoded() {
                 .unwrap_err(),
             InspectionError::Corrupt
         );
+    });
+}
+
+#[test]
+fn structural_lifecycle_uses_only_the_selected_family_field_and_closed_states() {
+    actix::System::new().block_on(async {
+        let store = Store::in_memory(StoreConfig::default()).await.unwrap();
+        let admitted = graph(&store, "lifecycle.fields").await;
+        let run = run(&store, &admitted, "family-fields").await;
+        let cases = [
+            (
+                RecordFamily::Attempt,
+                "prepared",
+                object([
+                    ("dispatch_state", text("prepared")),
+                    ("status", text("active")),
+                    ("state", text("response_recorded")),
+                ]),
+                Some("prepared"),
+            ),
+            (
+                RecordFamily::Attempt,
+                "wrong-field",
+                object([("state", text("prepared"))]),
+                None,
+            ),
+            (
+                RecordFamily::Attempt,
+                "unknown",
+                object([
+                    ("dispatch_state", text("private-stage")),
+                    ("status", text("prepared")),
+                ]),
+                None,
+            ),
+            (
+                RecordFamily::Wait,
+                "accepted",
+                object([
+                    ("state", text("accepted")),
+                    ("status", text("active")),
+                    ("expires_at", Value::Integer(100)),
+                ]),
+                Some("accepted"),
+            ),
+            (
+                RecordFamily::Wait,
+                "unknown",
+                object([
+                    ("state", text("private-state")),
+                    ("status", text("accepted")),
+                ]),
+                None,
+            ),
+            (
+                RecordFamily::Observation,
+                "wrong-family",
+                object([("dispatch_state", text("prepared"))]),
+                None,
+            ),
+        ];
+        let writes = cases
+            .iter()
+            .map(|(family, id, payload, _)| write(*family, id, None, payload.clone()))
+            .collect();
+        store
+            .commit(&run.lease, transition("lifecycle-fields", writes))
+            .await
+            .unwrap();
+        let inspector = Inspector::new(store, Policy::all());
+        let host = context("host", None);
+        let snapshot = inspector
+            .open_snapshot(&host, RunSelector::Id(run.id), None)
+            .await
+            .unwrap();
+        for (family, id, _, expected) in cases {
+            let inspection = inspector
+                .inspect_entity(&host, &snapshot, &reference(&snapshot, family, id))
+                .await
+                .unwrap();
+            assert_eq!(inspection.status, expected);
+            assert!(!format!("{inspection:?}").contains("private-stage"));
+            assert!(!format!("{inspection:?}").contains("private-state"));
+        }
     });
 }

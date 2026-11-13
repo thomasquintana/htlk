@@ -267,6 +267,10 @@ use the same policy hooks. A run does not gain access merely by inspecting itsel
    `SelectedArtifact` shows the recorded choice. Reusable definitions, iterations,
    use sites and extensions retain their original canonical identities. Definition
    navigation does not produce analyzed dependency results.
+   `ExecutionParent` follows immediate recorded ownership: response to its matching
+   attempt, then attempt to invocation. Both targets are resolved at the same pin
+   and checked against current discovery and structure policy. Attempt status shows
+   its recorded dispatch stage; an accepted wait retains the `accepted` status.
 4. Use `read_history` for bounded event summaries at the snapshot's committed upper
    bound. Full headers, definitions, records, raw journal writes and embedded values
    require `read_content(..., ContentKind::Payload, max_bytes)`. Artifact bytes use

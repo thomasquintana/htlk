@@ -23,6 +23,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Fixed
 
+- Pinned inspection reports MCP attempt dispatch stages and accepted waits, and
+  follows response ownership through the matching historical attempt to its
+  invocation, with current endpoint policy checks and no content reads.
 - Bundled SQLite uses the patched 3.54 engine line through pinned rusqlite 0.41.1,
   fixing RUSTSEC-2026-0459 / CVE-2026-119375. A private asynchronous connection
   worker preserves transactional store behavior without depending on an affected

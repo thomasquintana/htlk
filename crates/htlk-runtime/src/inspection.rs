@@ -317,6 +317,8 @@ pub enum RelationKind {
     /// Run to active root; scope to invocations; invocation to recorded child scopes.
     ExecutionChild,
     /// Recorded immediate container/owner; never reconstructed from potential edges.
+    /// A response's parent is its same-key attempt; an attempt's parent is its
+    /// recorded invocation. Both steps resolve and authorize the target at the pin.
     ExecutionParent,
     /// Recorded scope/invocation to original canonical definition.
     InstanceOf,
