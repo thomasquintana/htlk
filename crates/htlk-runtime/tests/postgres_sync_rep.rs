@@ -82,6 +82,22 @@ fn synchronous_replication_success_timeout_and_observed_server_cancellation() {
         // replay checkpoints rather than opening an unsupported standby Store.
         blocking(|| cluster.stop_standby());
 
+        // Schema initialization writes WAL too. Its uncertain completion must not
+        // return a usable handle or imply that its atomic schema creation rolled back.
+        let mut initialize_settings = settings(&cluster, "htlk_sync_initialize");
+        initialize_settings.schema = "htlk_sync_initialize".into();
+        let connection = cluster.connection.clone();
+        let monitor = thread::spawn(move || {
+            let pid = sync_wait(&connection, "htlk_sync_initialize");
+            cancel_wait(&connection, pid);
+        });
+        let initialized = PostgresStore::initialize(initialize_settings.clone(), StoreConfig::default()).await;
+        monitor.join().unwrap();
+        assert!(matches!(initialized, Err(StoreError::CommitUnknown)));
+        let reconciled = PostgresStore::open(initialize_settings, StoreConfig::default()).await.unwrap();
+        assert_eq!(reconciled.run_header(&run_id).await, Err(StoreError::Missing));
+        reconciled.close().await.unwrap();
+
         let mut timed_settings = settings(&cluster, "htlk_sync_timeout");
         timed_settings.statement_timeout = Duration::from_secs(1);
         timed_settings.operation_timeout = Duration::from_secs(3);
@@ -109,6 +125,9 @@ fn synchronous_replication_success_timeout_and_observed_server_cancellation() {
         assert_eq!(result, Err(StoreError::CommitUnknown));
         assert_eq!(cancelled.run_header(&run_id).await, Err(StoreError::Database));
         assert_eq!(cancelled.commit(&lease, proposal("cancel-original\0identity", "cancelled")).await, Err(StoreError::Database));
+        blocking(|| until("uncertain connection socket closed", || {
+            cluster.admin().query_one("SELECT NOT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name='htlk_sync_cancel')", &[]).unwrap().get::<_, bool>(0).then_some(())
+        }));
         cancelled.close().await.unwrap();
 
         // Receipt reconciliation preserves the original identity and evidence.

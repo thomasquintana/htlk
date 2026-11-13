@@ -122,6 +122,7 @@ impl Cluster {
             "--pgdata=/tmp/htlk_standby",
             "--write-recovery-conf",
             "--wal-method=stream",
+            "--checkpoint=fast",
         ]);
         self.start_standby();
         self.admin()
