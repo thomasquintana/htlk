@@ -142,6 +142,162 @@ cap, whole-validation fuel counter, or in-process deadline. Runtime registration
 transactions, scheduling, authorization, persistence and live MCP I/O belong to
 `htlk-runtime`; source compilation and composition belong to `htlk-compiler`.
 
+## Inspect pinned runtime history
+
+The public `htlk::runtime::inspection` service needs only a store and your policy.
+It does not attach an engine, link a native registry or dispatch work. This runnable
+example uses trusted storage setup to simulate committed coordinator writes; a
+production host normally obtains its run ID from ordinary admitted `Runtime` work.
+The policy is an illustrative application grant for one principal/run, with content
+revocable independently of structural access.
+
+```rust
+# #[cfg(feature = "sqlite")]
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+use htlk::runtime::{
+    HostContext,
+    identity::{RunId, ScopeInstanceId},
+    inspection::{
+        ContentKind, DiscoveryTarget, InspectionContext, InspectionError,
+        InspectionPolicy, InspectionTarget, Inspector, PageRequest, Reference,
+        RunSelector,
+    },
+    store::{RunSeed, Store, StoreConfig},
+};
+use htlk_executable::{cbor::Limits, digest::Digest};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+struct ApplicationGrants {
+    run: RunId,
+    allow_content: AtomicBool,
+}
+impl InspectionPolicy for ApplicationGrants {
+    fn discover(&self, context: &InspectionContext, target: &DiscoveryTarget<'_>) -> bool {
+        context.host().principal() == "reader" && target.reference.run_id() == &self.run
+    }
+    fn structure(&self, context: &InspectionContext, _: &InspectionTarget<'_>) -> bool {
+        context.host().principal() == "reader"
+    }
+    fn content(&self, context: &InspectionContext, _: &InspectionTarget<'_>, _: ContentKind) -> bool {
+        context.host().principal() == "reader" && self.allow_content.load(Ordering::SeqCst)
+    }
+}
+
+actix::System::new().block_on(async {
+    let limits = Limits::default();
+    let store = Store::in_memory(StoreConfig::default()).await?;
+    let run = RunId::new("inspection-example".into(), &limits)?;
+    store.create_run(RunSeed {
+        run_id: run.clone(),
+        fingerprint: Digest::from_bytes([1; 32]),
+        root_scope: ScopeInstanceId::root(&run, &limits)?,
+        actor: "host".into(), causation: "example".into(), timestamp_ms: 0,
+    }).await?;
+    let grants = Arc::new(ApplicationGrants {
+        run: run.clone(), allow_content: AtomicBool::new(true),
+    });
+    let inspector = Inspector::new(store.clone(), grants.clone());
+    // Both principal and optional executing-run identity come from the host.
+    let context = InspectionContext::new(
+        HostContext::new("reader".into(), &limits)?, Some(run.clone()),
+    );
+    let original = inspector.open_snapshot(&context, RunSelector::Caller, None).await?;
+    let reference = original.reference();
+    let transported = Reference::decode(&reference.encode(&limits)?, &limits)?;
+
+    // A separate writer can commit while the inspector retains its old pin.
+    let lease = store.acquire(&run, "coordinator".into(), 1, 100).await?;
+    store.renew(&lease, 2, 200).await?;
+    let refreshed = inspector.refresh_snapshot(&context, &original).await?;
+    assert!(refreshed.position().number() > original.position().number());
+    let (restored, _) = inspector.resolve_reference(&context, &transported).await?;
+    assert_eq!(restored, original);
+    assert!(matches!(
+        inspector.inspect_entity(&context, &refreshed, &reference).await,
+        Err(InspectionError::InvalidReference),
+    ));
+
+    let first = inspector.read_history(&context, &original, None, PageRequest::new(1)).await?;
+    let old_cursor = first.next.clone().expect("one retained event");
+    let mut count = first.items.len();
+    let mut next = first.next;
+    // Continue on `next`, including after a page with no visible items.
+    while let Some(cursor) = next {
+        let page = inspector.read_history(&context, &original, None,
+            PageRequest { limit: 1, cursor: Some(cursor) }).await?;
+        assert_eq!(page.position, *original.position());
+        count += page.items.len();
+        next = page.next;
+    }
+    assert_eq!(count, 1); // Later ownership commits do not enter old history.
+    assert!(matches!(inspector.read_history(&context, &refreshed, None,
+        PageRequest { limit: 1, cursor: Some(old_cursor) }).await,
+        Err(InspectionError::InvalidCursor)));
+
+    grants.allow_content.store(false, Ordering::SeqCst);
+    inspector.inspect_entity(&context, &original, &reference).await?;
+    assert!(matches!(inspector.read_content(&context, &original, &reference,
+        ContentKind::Payload, 4096).await, Err(InspectionError::Denied)));
+    Ok::<(), Box<dyn std::error::Error>>(())
+})?;
+# Ok(())
+# }
+# #[cfg(not(feature = "sqlite"))]
+# fn main() {}
+```
+
+Use `list_runs` with `store::InspectionRunFilter`, `list_entities` with `EntityKind`,
+and `follow_relations` with one `RelationKind` per request. `AuthoredDataflow(Source)`
+describes a potential source; `SelectedArtifact` describes a recorded selection.
+Run, record and event history are supported, while authored definition display is
+separate. `read_changes` accepts an independent `ChangeCursor`; save its returned
+`next` even on empty authorized results, and keep each consumer's offset separately.
+
+For an accepted artifact reference obtained through authorized navigation, this
+checked helper illustrates handling current byte availability under an old snapshot.
+The application supplies real policy/context and preserves `ProtectedContent`'s
+source protection. No retry dispatch or value regeneration follows an expiry result.
+
+```no_run
+use htlk::runtime::inspection::{
+    ContentKind, ContentResult, InspectionContext, InspectionError, Inspector,
+    Reference, Snapshot, UnavailableReason,
+};
+
+async fn selected_artifact(
+    inspector: &Inspector,
+    context: &InspectionContext,
+    snapshot: &Snapshot,
+    artifact: &Reference,
+) -> Result<ContentResult, InspectionError> {
+    let content = inspector.read_content(context, snapshot, artifact,
+        ContentKind::ArtifactValue, 64 * 1024).await?;
+    match &content {
+        ContentResult::Available(protected) => {
+            // Apply the host's response-label policy to protected.protection.
+            let _source_protection = &protected.protection;
+        }
+        ContentResult::Unavailable(UnavailableReason::Expired) => {
+            // Display expiry even if the snapshot predates its tombstone.
+        }
+        ContentResult::Unavailable(UnavailableReason::NotRetained) => {
+            // Preserve the historical reference; selected bytes are absent.
+        }
+        ContentResult::Unavailable(UnavailableReason::TooLarge) => {
+            // Full content exceeds this request's bound; it was not truncated.
+        }
+    }
+    Ok(content)
+}
+```
+
+Snapshots cover retained runtime facts, not mutable MCP adjuncts or detached source
+attachment inventories. Content access uses current grants and current retention.
+See the [runtime guide](runtime-guide.md#pinned-history-without-an-engine) for the
+embedding procedure and the [runtime specification](../specs/runtime-spec.md#151-read-only-historical-inspection)
+for the exact contract. Identity, sharing, search/indexes and experience-reuse policy
+belong to the application; MCP transport hosting belongs to the separate sibling.
+
 ## Local identifiers
 
 `Identifier` is an immutable local name with exact ASCII spelling

@@ -14,6 +14,7 @@ pub mod execution;
 pub mod failure;
 pub mod identity;
 pub mod influence;
+pub mod inspection;
 pub mod mcp;
 mod mcp_content;
 mod mcp_control;
@@ -47,6 +48,7 @@ pub use evaluate::{
     EvaluationFrame, EvaluationMeter, EvaluationOutcome, EvaluationResult, EvaluationUsage,
     EvaluationValue, evaluate, evaluate_condition,
 };
+pub use inspection::{InspectionContext, InspectionError, InspectionPolicy, Inspector};
 pub use mcp_content::{link_mcp_content_library, mcp_content_library};
 pub use mcp_extract::{
     ExtractedCandidate, ExtractionDiagnostic, ExtractionError, ExtractionReport, ExtractionSource,

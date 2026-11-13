@@ -240,10 +240,80 @@ usage, bindings, guard causes, protected diagnostics, and delivery-aware attempt
 They exclude raw unvalidated proposals; [MCP evidence](mcp-guide.md#protected-evidence)
 has a separate authorized API. IDs never grant value access.
 
-`inspect_history` pages bounded summaries rather than private journal payloads.
+`Runtime::inspect_history` pages bounded summaries rather than private journal payloads.
 Readers verify stable committed sequences; concurrent mutation can return retryable
 `E_FENCED`. `blocked` reflects a completed eligibility scan at an unchanged sequence
 before the next timer, not a guess from pending-node reasons.
+
+### Pinned history without an engine
+
+Use `htlk_runtime::inspection::Inspector` for active, completed or self-inspection
+without constructing `Runtime`, `ExecutionEngine` or `NativeRegistry`. Give it a
+`Store` and your current `InspectionPolicy`. The application establishes
+`InspectionContext` from its authenticated `HostContext`; supply an executing run
+only from trusted host context to enable `RunSelector::Caller`. Explicit run IDs
+use the same policy hooks. A run does not gain access merely by inspecting itself.
+
+1. Implement separate `discover`, `structure` and `content` decisions using your
+   own identity/grant system. Hooks receive the original recorded protection;
+   they may inspect selected raw records/events as trusted policy inputs. Empty
+   labels do not mean public content. Every operation and page rechecks decisions.
+2. Start `list_runs` with `InspectionRunFilter` and `PageRequest::new(limit)`, or
+   `open_snapshot` for a known run. A first listing captures a position; subsequent
+   query cursors retain it. Filters select historical status, fingerprint, exact
+   run ID and inclusive authoritative-time bounds.
+3. Use `list_entities`, `select`, `inspect_entity` and `follow_relations` to navigate
+   allowlisted structure. `AuthoredDataflow` shows a potential endpoint;
+   `SelectedArtifact` shows the recorded choice. Reusable definitions, iterations,
+   use sites and extensions retain their original canonical identities. Definition
+   navigation does not produce analyzed dependency results.
+   `ExecutionParent` follows immediate recorded ownership: response to its matching
+   attempt, then attempt to invocation. Both targets are resolved at the same pin
+   and checked against current discovery and structure policy. Attempt status shows
+   its recorded dispatch stage; an accepted wait retains the `accepted` status.
+4. Use `read_history` for bounded event summaries at the snapshot's committed upper
+   bound. Full headers, definitions, records, raw journal writes and embedded values
+   require `read_content(..., ContentKind::Payload, max_bytes)`. Artifact bytes use
+   `ContentKind::ArtifactValue`. Content permission is independent of structure.
+5. Follow `Page::next` even when `items` is empty. A query cursor is valid only for
+   its original store, pin and selectors; start a new query after `refresh_snapshot`.
+   Refresh returns a new snapshot and leaves the old one intact. A metadata limit
+   error asks for a smaller candidate page rather than silently dropping results.
+
+Snapshots pin headers, runtime records (including recorded MCP observations),
+artifact metadata/expiry and journal bounds. They use actual commit positions,
+not wall-clock times or arbitrary journal prefixes. Mutable MCP adjunct/evidence
+tables and source attachment inventories are excluded. Immutable graph bytes can
+be resolved by fingerprint without loading their original native implementations;
+source reports remain separately immutable by digest. Do not label a separate latest
+MCP/source inventory read as part of a historical snapshot.
+
+`Reference`, `Cursor` and `ChangeCursor` support bounded versioned byte conversion
+without serde; applications can add their own transport encoding. Decode is not
+authorization. `resolve_reference` restores the original pin under current grants;
+`resolve_position` rejects a foreign namespace. Cross-run artifact navigation also
+checks the producing run. Keep original protection when presenting selected content.
+
+`ContentResult::Unavailable` distinguishes `Expired`, `NotRetained` and `TooLarge`.
+An old pin does not hold bytes: current expiry still applies, and content is never
+truncated or regenerated. A policy refusal is `InspectionError::Denied`, not missing
+content. Candidate pages allow at most 256 entries and the store's maximum; selected
+content is capped at 1 MiB and the codec ceiling, tokens at 16 KiB and caller limits.
+
+Use `read_changes` with your own `ChangeCursor` to maintain an application index.
+Each call captures a fresh upper bound unless you supply `through`; persist the
+returned cursor even if no entries were visible. Consumers do not acknowledge or
+consume each other's changes, and outbox delivery does not affect this feed. Your
+application owns search, summaries, sharing, tenant/agent isolation and experience
+reuse. MCP hosting belongs in the separate private `htlk-mcp` sibling, which is not
+a workspace member or a native executable operation.
+
+The [checked API example](executable-api.md#inspect-pinned-runtime-history) demonstrates
+policy, history continuations, restored references and refresh. The
+[runtime contract](../specs/runtime-spec.md#151-read-only-historical-inspection)
+defines the exact boundaries. Historical playback issues no execution commands.
+
+### Detached sources and accepted values
 
 `SourceSidecar` attaches exact source origins, UTF-8 spans, declarations and
 descriptions outside executable identity. `attach_source` validates targets and
