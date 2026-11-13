@@ -60,6 +60,47 @@ expression/source decisions must not become eager database reads when adapting a
 backend. Recovery rebuilds derived indexes from authoritative metadata, and replay
 does not acquire provider capabilities.
 
+### Historical inspection projections
+
+`append_event` maintains `inspection_headers`, `inspection_records`, stable run/record
+ordinal catalogs and `inspection_changes` inside the authoritative journal/outbox
+transaction. These projections are read indexes, not a replacement recovery journal.
+They never contain artifact value blobs or become retention roots. Artifact producer
+index rebuilding does not rewrite historical projections or accepted outcomes.
+
+`inspection_clock` allocates a transactional position on the first journaled fact.
+Multiple events overwrite the same transaction's projected header/record version;
+the final per-run journal sequence bounds all its feed entries. PostgreSQL shares the
+position across released domain savepoints and restores the cached value on rollback.
+Creation plus initialization therefore exposes one committed initialized boundary,
+not an addressable prefix at sequence one. Failed transactions publish no position,
+version or change. The store namespace survives reopen; explicit disposable-state
+reset creates a new namespace. Incompatible old stores are not backfilled or migrated.
+
+`inspection_commits` records per-position run, record and change ordinal high-water
+marks. Historical discovery bounds candidate keys before indexed version lookup,
+avoiding replay from sequence one, complete-run aggregation and scans into later
+commits. Run filters examine at most the requested candidates; an empty matching
+page can still advance. Feed offsets are exclusive, may have gaps, and are independent
+of the acknowledged outbox. Ordinary reads do not mutate consumer state.
+
+Coverage is limited to historical headers, authoritative runtime records, accepted
+artifact metadata/tombstones and journal bounds, including recorded MCP observations.
+Mutable MCP adjunct and transport-evidence tables are excluded; detached source reports
+are immutable by digest but their attachment inventory is not pinned. No query joins
+latest adjunct metadata into a historical result. Cross-run artifact origins use the
+immutable accepted artifact identity index and the same historical creation bound.
+Current artifact expiry and selected byte-size checks share the byte-read transaction.
+
+`Inspector` adds current application discovery/structure/content checks over these
+trusted store methods. It owns no engine or registry. Structural results allowlist
+metadata; full payloads, raw journal writes and values require selected content access.
+Reference and query-cursor tokens bind namespace/pin/selectors without granting access.
+Original executable witnesses support historical navigation without native admission.
+The [inspection contract](../specs/runtime-spec.md#151-read-only-historical-inspection)
+owns portable semantics; [the guide](runtime-guide.md#pinned-history-without-an-engine)
+covers caller procedures.
+
 ### PostgreSQL layout and execution
 
 The optional `postgres` feature provides native PostgreSQL tables in a dedicated

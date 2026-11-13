@@ -8,6 +8,9 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Changed
 
+- Historical runtime inspection uses committed version projections on both backends:
+  SQLite schema 14 and PostgreSQL layout 2 reject older stores without migration or
+  deletion. Native implementation identities and executable fingerprints change.
 - Storage workers admit at most 256 queued operations per shared connection handle.
 - Runtime and durable MCP persistence accept the backend-neutral `Store` handle.
   `SqliteStore` remains a source-compatible name for the SQLite constructors.
@@ -40,6 +43,11 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Added
 
+- Read-only `Inspector` supports active, completed and host-established caller runs
+  without an engine or native registry: pinned snapshots, typed authored/recorded
+  relations, bounded history and independent changes, transportable references,
+  and separately authorized selected content with explicit expiry. Applications
+  supply current discovery, structure and content policy; references grant no access.
 - The MCP catalog browser accepts `--postgres-env`, `--postgres-schema`, and
   `--postgres-mode initialize|open` for host-owned durable PostgreSQL configuration.
   Initialization and reopen are exercised against independent no-content-call peers.

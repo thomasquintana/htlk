@@ -735,6 +735,99 @@ every actual-value destination-validation failure, including secondary failures
 that do not become the primary graph-visible error. Diagnostic evidence is not a
 successful artifact and cannot change the fixed graph-visible error record.
 
+### 15.1 Read-only historical inspection
+
+Inspection supports completed runs, other active runs, and an executing caller's
+own run through the same primitives. The embedding application MUST establish the
+caller identity and optional executing run through trusted context; an ordinary
+inspection argument MUST NOT establish that context. The Rust `Inspector` requires
+only a store and application policy, without an execution engine or native registry.
+Historical playback MUST NOT acquire run ownership, select a run for execution,
+recompute decisions, dispatch operations, or require original native implementations.
+Immutable graph display checks canonical identities without granting native admission.
+
+#### Committed facts and coverage
+
+A historical inspection snapshot pins a **store-wide committed position**, scoped
+to that store's persistent namespace. A position is not a per-run journal sequence
+or a wall-clock timestamp. All included changes from one physical transaction MUST
+share a position, including creation plus initialization and compound callback/run
+publication. Interior journal prefixes MUST NOT be exposed as independent committed
+snapshots. Transactions without journaled inspection-domain facts do not advance this
+position. Refresh captures a new boundary and leaves the original snapshot intact.
+
+The pinned domain comprises run headers, all authoritative runtime record families
+(including recorded MCP observations), accepted artifact metadata and expiry
+tombstones, and per-run journal upper bounds. Independently mutable MCP owner,
+session, epoch, interaction, subscription, task, receipt, URL and transport-evidence
+adjunct tables are outside this domain; their latest contents MUST NOT be represented
+as facts at the snapshot. Immutable executable bytes can be separately resolved by
+fingerprint. Detached source/provenance reports are separately immutable by digest,
+but their attachment inventory is outside the snapshot. An implementation MUST state
+these boundaries rather than implying that every store table is pinned.
+
+Snapshots pin retained facts, not authorization or byte retention. Current artifact
+expiry MUST apply even when metadata was selected at a pre-expiry position. Selected
+content distinguishes expired, not-retained and too-large content; corruption remains
+an integrity failure. Reading historical metadata MUST NOT fetch artifact value bytes
+or create a retention root. Retention and recovery acceptance rules remain unchanged.
+
+#### Current application policy and content
+
+The application owns identity, tenant/agent isolation, sharing and grants, discovery
+indexes, keyword/semantic search, summaries and experience-reuse policy. HTLK supplies
+composable read primitives, not these application services or a query language.
+Every operation and continuation MUST apply current application-supplied decisions
+for discovery, allowlisted structure and selected content independently. References,
+decoded tokens and snapshot possession MUST NOT confer authority. Revocation applies
+to old pins and restored references. A host-established caller run grants no bypass.
+
+Discovery precedes interpretation of selected payloads. Denied discovery or structure
+is omitted from result pages. Structural output exposes immutable identities,
+recognized lifecycle/revision/finality and iteration/use-site/extension context;
+arbitrary values, messages, attribution and raw journal writes require selected
+content access. Full headers, definitions, records and events are content as well.
+Content authorization MUST precede artifact byte access and need not imply structure
+permission. Original accepted type, provenance and protection MUST remain available
+for application result-label policy; empty recorded labels do not assert public data.
+Cross-run artifact navigation MUST recheck both the producing run and target entity.
+
+#### Navigation, continuations and changes
+
+Authored containment, explicitly directed potential dataflow endpoints and reusable
+definition use remain distinct from recorded execution containment, instance-of,
+attempts, waits, binding selections, produced artifacts, causal links, provenance
+and extension reuse. Potential edges MUST NOT be reported as actual reads. Definition
+navigation does not manufacture analyzed dependency information. Original canonical
+identities remain stable through repeated scope use, loop iterations and extension
+mounting, alongside their recorded execution context.
+
+Discovery uses structured run ID/status/fingerprint/time filters. Entity listing,
+relation traversal and history use bounded candidate pages and aggregate byte limits.
+History can select a run, record or event and MUST stop at its snapshot's committed
+journal upper bound. Definition listing covers the active canonical graph; original
+graphs remain reachable through pinned instances/extensions. Definition display may
+decode one complete codec-bounded canonical document without aggregating a run.
+
+Query continuations bind store namespace, exact position, run, operation and selectors;
+reusing them for a different query or refreshed snapshot MUST fail. Empty filtered or
+denied pages can carry a continuation; exhaustion is determined by continuation state,
+not item count. Rust candidate limits are 1 through the smaller of 256 and the store
+maximum. Response-metadata overflow returns a limit error rather than silently skipping
+results; callers may reduce the candidate size. Selected content is full or explicitly
+unavailable, never truncated, with a maximum of 1 MiB and the store codec ceiling.
+Versioned reference/cursor encodings are bounded at 16 KiB and caller codec limits;
+decoding validates representation, while resolution rechecks existence and grants.
+
+The store-wide committed change feed has independent exclusive consumer offsets and
+an optional committed upper bound. It identifies changed run/record entities at their
+actual commit boundary. Feed reads and outbox acknowledgments MUST NOT consume another
+consumer's changes. Live change offsets are not frozen query continuations: absent an
+explicit upper bound, each read captures a new one. Denied entries still advance the
+consumer past examined candidates under current policy. Inspection adds no native
+executable operations; MCP hosting and transport belong to an embedding application
+such as the separate `htlk-mcp` project, not this workspace.
+
 ## 16. Stable failures
 
 An **error code** is a stable machine-readable name for a kind of failure. Applications can route on the code without depending on the wording of a human-readable message. `E_` codes below are runtime errors; `MCP_` codes concern connected-service calls. These names describe what happened, not permission to retry it.
@@ -800,5 +893,11 @@ A **conformance test** checks whether an implementation obeys the specification.
 | Install and planning-wait closure | Both commit or neither does. |
 | Terminal run receives extension/reply | Terminal result remains immutable. |
 | Rebuild all local indexes | Same bindings and outcomes from authoritative records. |
+| Inspect an old pin after later writes and refresh | Old headers/records/history remain frozen; refreshed references cannot retarget the old snapshot. |
+| Creation and initialization in one commit | One position exposes the initialized state; no independently openable interior prefix. |
+| Revoke discovery, structure or content independently | Every operation rechecks current policy; old/decoded references convey no grant. |
+| Traverse authored possibilities and recorded selections | Distinct typed relations; no unselected artifact value access or fabricated actual read. |
+| Expire or collect bytes after opening a snapshot | Historical metadata remains; selected bytes report current expiry/absence without reexecution. |
+| Two change consumers and an acknowledged outbox | Each feed cursor resumes independently with no consumed or duplicated accepted outcome. |
 
 The runtime does not need extra built-in mechanisms to pick the first completed sibling, continue after a selected number of replies, or automatically cancel competing branches when a winner appears. It also does not need to revise previously accepted outcomes, load new predicate implementations during a run, or invent different execution rules for each remote service. An application that needs such behavior gives that responsibility to an explicit MCP operation or host service. The surrounding HTLK graph still follows the execution rules defined here.

@@ -287,6 +287,8 @@ Test-source references describe coverage; CI artifacts establish results for a c
 | Protected logical/source/history views, causal diagnostics and synthetic joins | `tests/runtime_inspection.rs`, `tests/runtime_sources.rs`, `tests/runtime_alignment.rs`. |
 | Saved audit promises, immutable tombstones, shared bytes, expired-ID nonrevival | `tests/runtime_retention.rs`. |
 | Transaction rollback, fences, CAS/finality, incompatible schema rejection, bounded replay/outbox | SQLite unit tests in `crates/htlk-runtime/src/store*.rs`; integration replay and stress suites. |
+| Committed historical pins, frozen headers/records, initialization/rollback boundaries, independent feeds, expiry without byte holds | `crates/htlk-runtime/src/store_inspection_tests.rs`, shared SQLite/PostgreSQL contracts and independent journal reconstruction. |
+| Current discovery/structure/content decisions, token scope, authored vs recorded relations, original reuse/loop/extension identities, cross-run artifacts and lazy bytes | `crates/htlk-runtime/src/inspection_tests.rs`; the facade doctests the public example in `docs/executable-api.md`. |
 | Concurrent host reply cannot create false invariant failure; stable impossible states still fail | Deterministic interleavings and deadline negative controls in `crates/htlk-runtime/src/execution/step_tests.rs`. |
 
 MCP HTTP authentication is qualified by
@@ -346,6 +348,26 @@ operation claims, original native bytes, known completion reuse and unknown-vers
 usage. Runtime campaigns check every real ancestor and sequential budget exhaustion;
 an independent Node SQLite reader checks late native results after a dropped waiter.
 
+## Historical inspection qualification
+
+With the disposable PostgreSQL connection configured as described above:
+
+```console
+cargo test -p htlk-runtime --all-features --lib inspection::tests
+cargo test -p htlk --all-features --doc
+```
+
+The tests import the public service and independently observe policy revocation,
+frozen old facts after new writes, explicit refresh, scoped token round trips and
+separate authored/recorded selections. They remove the value-byte table to prove
+structural navigation and denied content do not fetch blobs. Cross-run artifact
+references recheck both runs and current grants. Metadata survives expiry/collection;
+old pins still enforce current byte expiry. Store tests compare version projections
+with independent journal reconstruction, inject publication failures, hold an
+uncommitted writer, and check physical PostgreSQL commits across domain savepoints.
+Two feed consumers and outbox acknowledgment exercise independent resume positions.
+These are read-only history tests, not execution replay or provider qualification.
+
 ## Native identity and fixtures
 
 Native implementation identities hash explicit source contributions, package-owned
@@ -360,6 +382,13 @@ inline rustdoc, can change native identities. Markdown content included from an
 unchanged Rust path is not itself an explicit source contribution. Never refresh a
 golden just to conceal an unexplained mismatch.
 
+Inspection implementation contributions include `store_inspection.rs`, its SQLite
+schema, and `inspection.rs`, `inspection_navigation.rs`, `inspection_tokens.rs` in
+the same order in both source lists. Test-only source modules are not implementation
+contributions. A changed native profile changes compiled executable fingerprints;
+source package/module pins depend on source bytes and do not change merely because
+the compiler's selected native profile changed.
+
 After reviewing an intentional implementation change:
 
 ```console
@@ -367,9 +396,10 @@ cargo run -p htlk-runtime --example native_fixture --locked
 ```
 
 Review the printed envelope/profile and update `native-empty.hex` from that output,
-then run:
+using the explicit generator's write mode after review, then run the checkers:
 
 ```console
+cargo run -p htlk-runtime --example native_fixture --locked -- --write
 node tools/validate-executable-fixtures.mjs
 cargo test -p htlk-runtime --test verified --test identity --locked
 ```

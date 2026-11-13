@@ -95,6 +95,23 @@ work and adopts usage/reservations. Protected source reports and retention tombs
 remain separate from executable meaning. `docs/runtime-internals.md` records private
 checkpoint/storage invariants; `docs/testing.md` maps contracts to regression suites.
 
+## Read-only historical inspection
+
+`Inspector` takes a `Store` and application-supplied `InspectionPolicy`, with no
+engine or native registry. Trusted `InspectionContext` selects active/completed
+runs or the host-established caller run. Current discovery, structure and content
+decisions apply on every operation; encoded references and cursors grant no access.
+Snapshots pin actual committed runtime facts and refresh explicitly. Typed relations
+separate authored possibilities from recorded selections; original identities survive
+reuse, loops and extension. Selected content is separate from structural navigation.
+
+Historical headers, records, artifact metadata/tombstones and journal bounds are
+pinned. Mutable MCP adjuncts and source attachment inventories are excluded. Pins
+do not hold bytes or freeze authorization: selected artifact reads honor current
+expiry. Independent change cursors support application-owned indexes without sharing
+outbox acknowledgments. Search, sharing, identity and tenancy remain application work.
+See `docs/runtime-guide.md` and the doctested example in `docs/executable-api.md`.
+
 ## Focused evaluation
 
 ```rust
