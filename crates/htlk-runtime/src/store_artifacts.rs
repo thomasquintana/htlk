@@ -77,12 +77,46 @@ impl SqliteStore {
         id: ArtifactId,
         reference: Digest,
     ) -> Result<Vec<u8>, StoreError> {
+        self.artifact_bytes_limited(id, reference, self.config.limits.max_document_bytes)
+            .await
+            .map_err(|error| {
+                if error == StoreError::Missing {
+                    StoreError::Corrupt
+                } else {
+                    error
+                }
+            })?
+            .ok_or(StoreError::Invalid)
+    }
+    // Inspection needs to reject oversized selected content before copying its
+    // bytes. Expiry and length/bytes checks share the same read transaction.
+    pub(crate) async fn artifact_bytes_limited(
+        &self,
+        id: ArtifactId,
+        reference: Digest,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
         let limits = self.config.limits.clone();
         self.connection
-            .call(move |db| -> Result<Vec<u8>, StoreError> {
+            .call(move |db| -> Result<Option<Vec<u8>>, StoreError> {
                 let tx = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
                 if retention::expired(&tx, id, &limits)?.is_some() {
                     return Err(StoreError::Expired);
+                }
+                let length: i64 = tx
+                    .query_row(
+                        "SELECT length(value_bytes) FROM value_blobs WHERE blob_digest=?1",
+                        [reference.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .ok_or(StoreError::Missing)?;
+                let length = usize::try_from(length).map_err(|_| StoreError::Corrupt)?;
+                if length > limits.max_document_bytes {
+                    return Err(StoreError::Invalid);
+                }
+                if length > max_bytes {
+                    return Ok(None);
                 }
                 let mut statement =
                     tx.prepare("SELECT value_bytes FROM value_blobs WHERE blob_digest=?1")?;
@@ -95,7 +129,7 @@ impl SqliteStore {
                 if htlk_executable::digest::hash_bytes(bytes) != reference {
                     return Err(StoreError::Corrupt);
                 }
-                Ok(bytes.to_vec())
+                Ok(Some(bytes.to_vec()))
             })
             .await
             .map_err(StoreError::from_worker)

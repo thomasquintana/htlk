@@ -134,6 +134,30 @@ pub struct InspectionChange {
 }
 
 impl Store {
+    /// Resolve one accepted artifact's original producing run at a committed pin.
+    /// The accepted identity index is immutable; the historical key creation bound
+    /// excludes artifacts first published after `at`. No latest payload, adjunct
+    /// state, artifact bytes, or store-wide inventory is read.
+    ///
+    /// # Errors
+    /// Returns unknown historical artifact, invalid/foreign pin, corruption or database failure.
+    pub async fn inspection_artifact_origin(
+        &self,
+        at: &StorePosition,
+        id: crate::identity::ArtifactId,
+    ) -> Result<InspectionSnapshot, StoreError> {
+        let (at, limits) = (at.clone(), self.config.limits.clone());
+        self.connection.call(move |db| {
+            let pin = checked_position(db, Some(&at))?;
+            let mut statement = db.prepare("SELECT k.run_id FROM records r JOIN inspection_record_keys k ON k.run_id=r.run_id AND k.family=r.family AND k.record_id=r.record_id WHERE r.family='artifact' AND r.record_id=?1 AND k.created_position<=?2")?;
+            let mut rows = statement.query(params![id.to_string(),pin.position])?;
+            let row = rows.next()?.ok_or(StoreError::Missing)?;
+            let run = RunId::new(text(row,0,&limits)?,&limits).map_err(|_|StoreError::Corrupt)?;
+            let (_,header) = historical_header(db,&run,pin.position,&limits)?;
+            Ok(InspectionSnapshot { position:pin,header })
+        }).await.map_err(StoreError::from_worker)
+    }
+
     /// Reads the latest committed inspection-domain boundary without loading values.
     ///
     /// # Errors
