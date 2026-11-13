@@ -126,15 +126,38 @@ Cloned handles share a dedicated worker and a queue of at most 256 waiting calls
 Independent opens create independent connections. Timeouts bound connection,
 authority lock, statements, and admitted operations. A dropped waiter does not
 cancel admitted work. Close drains earlier work and closes every clone of that
-handle. There is no automatic replay of database operations. A lost commit reply
-returns `StoreError::CommitUnknown` and quarantines the connection; reopen and
-reconcile the original durable receipt before further effectful progress.
-The worker drives its own Tokio PostgreSQL protocol runtime. The connection
-deadline covers TCP, TLS negotiation and authentication; protocol I/O also observes
-the operation deadline. Timed-out protocol tasks are aborted and their connections
-cannot be reused. Only explicit integrity/serialization/deadlock rollback or a
-pre-send refusal establishes a known failed commit; other ambiguous COMMIT failures
-retain uncertainty.
+handle. There is no automatic replay of database operations. A lost commit reply or
+uncertain synchronous replication confirmation returns `StoreError::CommitUnknown`
+and quarantines the connection; reopen and reconcile the original durable receipt
+before further effectful progress.
+
+The worker drives its own Tokio PostgreSQL protocol runtime. It co-polls each request
+and `Connection::poll_message` in one ordered driver. An empty simple-query boundary
+drains earlier responses before the dedicated COMMIT observation window. A fixed-size
+latch records any notice with structured nonlocalized `WARNING` severity during that
+window; a missing severity classification also fails closed. It never stores or logs
+raw notice messages, details, SQL or execution content. Ordinary notifications and
+benign notices do not change success classification. Completion requires the request's
+`ReadyForQuery`, including warnings after `CommandComplete`; an asynchronous message
+following completion cannot contaminate that request or a later commit. Both worker
+transactions and initialization/opening use this guarded commit path.
+
+The connection deadline covers TCP, TLS negotiation and authentication; protocol I/O
+also observes the operation deadline. Bounded asynchronous-message processing yields
+to those deadlines. Timeout or uncertainty drops the protocol connection/socket,
+including buffered responses, so it cannot be reused. Only explicit
+integrity/serialization/deadlock rollback or a pre-send refusal establishes a known
+failed commit; other ambiguous COMMIT failures retain uncertainty. No rollback is
+attempted as a remedy for an uncertain commit.
+
+An existing command receipt can be returned by a read-only transaction that emits no
+new WAL and performs no replication wait. Local receipt reconciliation therefore
+preserves acceptance/identity evidence without establishing replicated durability.
+The public API has no per-commit replication attestation; warning capture does not
+enforce a host's selected HA policy against administrative policy changes. Deployments
+requiring synchronous redundancy keep protected writes stopped until that redundancy
+is restored. The [host guide](runtime-guide.md#choose-and-provision-storage) describes
+the boundary; failover and stale-worker qualification are separate from this fix.
 
 Canonical CBOR and protected values remain BYTEA. Arbitrary indexed string
 identities also retain exact UTF-8 BYTEA, including NUL. Generated SHA-256 lookup

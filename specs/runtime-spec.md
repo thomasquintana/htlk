@@ -660,10 +660,14 @@ treat a hash collision as equality. Ordered pages retain the specified logical
 ordering and exclusive cursor semantics independently of database collation.
 
 A database transaction retry MUST reload authoritative facts and recheck acceptance
-predicates. It MUST NOT invoke providers or repeat an external operation. Loss of a
-commit acknowledgement is not proof of rollback: the implementation MUST reconcile
-the original operation identity before authorizing effectful progress. An existing
+predicates. It MUST NOT invoke providers or repeat an external operation. Loss or
+uncertainty of a commit acknowledgement, including confirmation of requested
+synchronous replication, MUST NOT be reported as ordinary success for that commit
+and is not proof of rollback. The implementation MUST preserve and reconcile the
+original operation identity before authorizing effectful progress. An existing
 dispatch intent retains its uncertainty rules. Replay remains capability-free.
+Returning an existing local receipt establishes the original recorded acceptance,
+not a fresh replication acknowledgement or proof of a deployment's HA policy.
 
 Artifact expiry and collection MUST arbitrate with new references and publication:
 no accepted manifest may refer to an artifact already expired at acceptance, and
