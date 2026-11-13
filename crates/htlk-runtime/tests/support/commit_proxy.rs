@@ -1,4 +1,4 @@
-//! Plaintext local PostgreSQL proxy that drops an observed successful COMMIT reply.
+//! Plaintext local PostgreSQL proxy for independently observed COMMIT boundaries.
 
 use std::{
     io::{self, Read, Write},
@@ -19,8 +19,24 @@ pub struct CommitProxy {
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+    LostAck,
+    WarningBeforeComplete,
+    WarningBeforeReady,
+    FragmentedWarning,
+    WarningAfterReady,
+    WarningBeforeCommit,
+    BenignMessages,
+    UnclassifiedNotice,
+}
+
 impl CommitProxy {
     pub fn start() -> Self {
+        Self::with_fault(Fault::LostAck)
+    }
+    pub fn with_fault(fault: Fault) -> Self {
         let source: postgres::Config = std::env::var("HTLK_TEST_POSTGRES_URL")
             .unwrap()
             .parse()
@@ -79,23 +95,29 @@ impl CommitProxy {
             let front_armed = a.clone();
             let mut front = client.try_clone().unwrap();
             let mut upstream = server.try_clone().unwrap();
-            let forward = thread::spawn(move || -> io::Result<()> {
-                // SSL is disabled explicitly; StartupMessage has no type byte.
-                let startup = packet(&mut front)?;
-                upstream.write_all(&startup)?;
-                loop {
-                    let mut kind = [0];
-                    front.read_exact(&mut kind)?;
-                    let frame = packet(&mut front)?;
-                    if kind[0] == b'Q'
-                        && &frame[4..] == b"COMMIT\0"
-                        && front_armed.load(Ordering::Acquire)
-                    {
-                        front_pending.store(true, Ordering::Release);
+            let forward = thread::spawn(move || {
+                let result = (|| -> io::Result<()> {
+                    // SSL is disabled explicitly; StartupMessage has no type byte.
+                    let startup = packet(&mut front)?;
+                    upstream.write_all(&startup)?;
+                    loop {
+                        let mut kind = [0];
+                        front.read_exact(&mut kind)?;
+                        let frame = packet(&mut front)?;
+                        if kind[0] == b'Q'
+                            && &frame[4..] == b"COMMIT\0"
+                            && front_armed.load(Ordering::Acquire)
+                        {
+                            front_pending.store(true, Ordering::Release);
+                        }
+                        upstream.write_all(&kind)?;
+                        upstream.write_all(&frame)?;
                     }
-                    upstream.write_all(&kind)?;
-                    upstream.write_all(&frame)?;
-                }
+                })();
+                // Release the opposite proxy reader on client disconnect instead
+                // of waiting for its I/O timeout during ordinary test cleanup.
+                let _ = upstream.shutdown(Shutdown::Both);
+                result
             });
             let mut downstream = client;
             let mut back = server;
@@ -104,15 +126,62 @@ impl CommitProxy {
                     let mut kind = [0];
                     back.read_exact(&mut kind)?;
                     let frame = packet(&mut back)?;
+                    if kind[0] == b'I'
+                        && fault == Fault::WarningBeforeCommit
+                        && a.swap(false, Ordering::AcqRel)
+                    {
+                        downstream.write_all(&notice(Some("WARNING")))?;
+                    }
                     if kind[0] == b'C'
                         && &frame[4..] == b"COMMIT\0"
                         && pending.swap(false, Ordering::AcqRel)
                         && a.swap(false, Ordering::AcqRel)
                     {
-                        // PostgreSQL has committed. Neither CommandComplete nor
-                        // ReadyForQuery is allowed to reach the embedding client.
                         c.store(true, Ordering::Release);
-                        return Ok(());
+                        if fault == Fault::LostAck {
+                            // Neither completion frame reaches the embedding client.
+                            return Ok(());
+                        }
+                        let mut ready_kind = [0];
+                        back.read_exact(&mut ready_kind)?;
+                        let ready = packet(&mut back)?;
+                        assert_eq!(ready_kind[0], b'Z');
+                        let mut complete = vec![b'C'];
+                        complete.extend_from_slice(&frame);
+                        let mut ready_frame = vec![b'Z'];
+                        ready_frame.extend_from_slice(&ready);
+                        let messages = match fault {
+                            Fault::WarningBeforeComplete => {
+                                [notice(Some("WARNING")), complete, ready_frame].concat()
+                            }
+                            Fault::WarningBeforeReady | Fault::FragmentedWarning => {
+                                [complete, notice(Some("WARNING")), ready_frame].concat()
+                            }
+                            Fault::WarningAfterReady => {
+                                [complete, ready_frame, notice(Some("WARNING"))].concat()
+                            }
+                            Fault::BenignMessages => [
+                                complete,
+                                notice(Some("NOTICE")),
+                                notification(),
+                                ready_frame,
+                            ]
+                            .concat(),
+                            Fault::UnclassifiedNotice => {
+                                [complete, notice(None), ready_frame].concat()
+                            }
+                            Fault::LostAck | Fault::WarningBeforeCommit => unreachable!(),
+                        };
+                        // Deliberately coalesce completion and asynchronous messages
+                        // into one write: scheduling cannot repair a bad classifier.
+                        if fault == Fault::FragmentedWarning {
+                            for byte in &messages {
+                                downstream.write_all(std::slice::from_ref(byte))?;
+                            }
+                        } else {
+                            downstream.write_all(&messages)?;
+                        }
+                        continue;
                     }
                     downstream.write_all(&kind)?;
                     downstream.write_all(&frame)?;
@@ -165,4 +234,28 @@ fn packet(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 }
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn notice(severity: Option<&str>) -> Vec<u8> {
+    // Localized S, machine-readable V, generic SQLSTATE: classification must use
+    // structured severity, not English diagnostics or a special warning code.
+    let mut fields = b"Savertissement\0C01000\0Mprotected fixture diagnostic\0".to_vec();
+    if let Some(severity) = severity {
+        fields.push(b'V');
+        fields.extend_from_slice(severity.as_bytes());
+        fields.push(0);
+    }
+    fields.push(0);
+    message(b'N', &fields)
+}
+
+fn notification() -> Vec<u8> {
+    message(b'A', b"\0\0\0\x01htlk_fixture\0ordinary notification\0")
+}
+
+fn message(kind: u8, body: &[u8]) -> Vec<u8> {
+    let mut message = vec![kind];
+    message.extend_from_slice(&(u32::try_from(body.len()).unwrap() + 4).to_be_bytes());
+    message.extend_from_slice(body);
+    message
 }

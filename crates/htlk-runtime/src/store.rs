@@ -499,7 +499,9 @@ pub enum StoreError {
     Expired,
     /// Backend database operation failed.
     Database,
-    /// The server may have committed; reopen and reconcile the original receipt.
+    /// Commit acknowledgment or synchronous replication confirmation is uncertain.
+    /// The connection is unusable; reopen and reconcile the original identity.
+    /// A recovered local receipt alone does not prove replicated durability.
     CommitUnknown,
     /// Connection worker is unavailable.
     Closed,

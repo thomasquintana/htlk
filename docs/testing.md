@@ -100,6 +100,47 @@ operation deadlines, deferred-constraint rollback, oversized stored fields, and
 conflicting lookup preimages. Worker tests fill the entire bounded queue and prove
 that abandoned admitted calls run while cancelled capacity waiters do not.
 
+### PostgreSQL synchronous acknowledgment qualification
+
+`crates/htlk-runtime/tests/postgres_sync_rep.rs` creates its own uniquely named
+disposable Docker container with an actual primary and physical standby PostgreSQL
+process. It never reads `HTLK_TEST_POSTGRES_URL` or changes a shared/application
+database's replication settings. Both ports bind only to host loopback; cleanup
+removes its container and volumes. Select PostgreSQL 16 or 18 explicitly:
+
+```console
+HTLK_TEST_POSTGRES_VERSION=16 cargo test -p htlk-runtime --no-default-features --features postgres --test postgres_sync_rep --locked
+HTLK_TEST_POSTGRES_VERSION=18 cargo test -p htlk-runtime --no-default-features --features postgres --test postgres_sync_rep --locked
+```
+
+The campaign first confirms healthy named synchronous replication and independent
+standby replay through a primary WAL checkpoint after the receipt. It then stops the
+standby while retaining the required synchronous configuration. An independent
+connection must observe the exact tagged backend executing `COMMIT` in `SyncRep`
+before server cancellation. Client timeout, server cancellation, and cancelled schema
+initialization must retain uncertainty. Failed connections reject later operations;
+an independent activity query also confirms the cancelled connection's socket closes.
+Reopening uses public Store APIs to recover the original opaque command identity,
+receipt, record revision and journal evidence without duplicate acceptance. Local
+receipt recovery succeeds with the standby still absent, explicitly demonstrating
+that it is not a replicated-durability certificate. New write success is checked
+after the required synchronous standby is restored. Setup and fault selection use
+bounded observed checkpoints, not guessed sleeps.
+
+The independent protocol proxy in `postgres_store.rs` additionally injects structured
+warnings before `CommandComplete` and between it and `ReadyForQuery`, using coalesced
+and fragmented writes. It checks localized display severity, missing structured
+severity, prior/idle warnings, benign notices and notifications, plus warning/lost-ACK
+completion of initialization and opening. Explicit deferred-constraint rollback
+remains known failure and permits connection reuse.
+
+These are native-store acknowledgment tests. Two processes in one container do not
+qualify independent host failures, primary/standby promotion, complete runtime
+continuation, provider effects or stale workers. The host's selected policy remains
+to stop protected writes until required synchronous redundancy returns; no preceding
+health check or recovered local receipt substitutes for that policy. See the
+[public storage boundary](runtime-guide.md#choose-and-provision-storage).
+
 The ordinary Rust suite includes every E2E, crash, and stress campaign. The retained
 Node tests independently exercise documentation, coverage, and discovery helpers:
 

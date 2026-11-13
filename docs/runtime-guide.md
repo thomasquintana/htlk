@@ -63,7 +63,8 @@ finite connection/lock/statement/operation deadlines. `StoreConfig` retains shar
 codec/page bounds; its legacy busy timeout applies to SQLite. Native PostgreSQL
 storage is qualified on PostgreSQL 16 and 18 and supports all runtime and durable
 MCP operations. Select a writable primary with UTF-8 database encoding and fsync
-enabled. The connection sets synchronous commit on. Verified TLS uses the host's
+enabled. The connection sets synchronous commit on and keeps server warnings visible
+with `client_min_messages=notice`. Verified TLS uses the host's
 platform certificate trust; `sslmode=disable` explicitly selects an unencrypted
 local connection.
 
@@ -98,10 +99,27 @@ database or runtime restarted. SQLite-to-PostgreSQL transfer is not an automatic
 schema upgrade; use a fresh PostgreSQL store for new deployments.
 
 An operational storage failure is separate from a confirmed workflow outcome.
-`StoreError::CommitUnknown` means the server may have committed despite losing its
-acknowledgement. The connection is quarantined. Open a healthy handle and reconcile
-the original command/host idempotency receipt or MCP work intent before proceeding.
-Do not translate that uncertainty into another external dispatch. See
+`StoreError::CommitUnknown` means commit acknowledgment or synchronous replication
+confirmation is uncertain. PostgreSQL can commit locally, cancel its replication
+wait, and return a warning with an otherwise successful COMMIT response. HTLK treats
+any COMMIT warning as uncertain and makes the connection unusable. Initialization
+and opening use the same protection; uncertain initialization may have created a
+complete recognized schema. Reopen to inspect/reconcile rather than assuming rollback.
+
+Open a healthy handle and reconcile the original command/host idempotency receipt
+or MCP work intent before proceeding. Do not translate that uncertainty into another
+external dispatch. A recovered local receipt alone does **not** prove replicated
+durability: returning an existing receipt may perform no write and no new replication
+wait. For a deployment requiring synchronous redundancy, protected writes stop until
+the required redundancy is restored, even when local receipt recovery succeeds.
+
+The public receipt does not carry a per-commit replication attestation or an LSN-bound
+durability proof. The host owns the required standby configuration and its continuity;
+`synchronous_commit=on` alone does not require a standby when
+`synchronous_standby_names` is empty. Administrative removal of that requirement can
+also release existing waits without a warning. Warning handling does not certify
+that policy, replica failover, or stale-worker safety. Actual primary/standby failover
+and stale-worker qualification remain separate work. See
 [PostgreSQL internals](runtime-internals.md#postgresql-layout-and-execution) for
 layout and protocol boundaries.
 

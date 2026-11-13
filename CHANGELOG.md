@@ -23,6 +23,12 @@ User-visible changes and compatibility boundaries are recorded here, following
 
 ### Fixed
 
+- PostgreSQL COMMIT warnings, including cancellation of a synchronous replication
+  wait, return `StoreError::CommitUnknown` and invalidate the connection instead of
+  issuing an ordinary success receipt. Initialization/opening use the same guarded
+  completion. Original identities and receipts remain available for reconciliation;
+  a recovered local receipt does not prove replicated durability. Native identities
+  and executable fingerprints change.
 - Pinned inspection reports MCP attempt dispatch stages and accepted waits, and
   follows response ownership through the matching historical attempt to its
   invocation, with current endpoint policy checks and no content reads.

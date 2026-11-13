@@ -81,6 +81,9 @@ impl fmt::Debug for PostgresConfig {
 
 /// Asynchronous PostgreSQL store backed by native tables and a bounded worker.
 /// Clones share one connection; separately opened handles coordinate in PostgreSQL.
+/// A COMMIT warning returns [`StoreError::CommitUnknown`] and invalidates the
+/// connection. Receipts, including recovered receipts, do not certify a deployment's
+/// replication policy or permission to resume protected writes after redundancy loss.
 #[derive(Clone)]
 pub struct PostgresStore(Store);
 impl PostgresStore {
@@ -89,6 +92,8 @@ impl PostgresStore {
     ///
     /// # Errors
     /// Returns invalid settings, incompatible schema, connection, or database failure.
+    /// [`StoreError::CommitUnknown`] can leave a complete initialized schema;
+    /// reopen recognized state to reconcile, without assuming initialization rolled back.
     pub async fn initialize(
         settings: PostgresConfig,
         config: StoreConfig,
@@ -98,7 +103,8 @@ impl PostgresStore {
     /// Opens an existing recognized schema without creating database objects.
     ///
     /// # Errors
-    /// Returns invalid settings, missing/incompatible schema, or database failure.
+    /// Returns invalid settings, missing/incompatible schema, or database failure,
+    /// including [`StoreError::CommitUnknown`] during the opening transaction.
     pub async fn open(settings: PostgresConfig, config: StoreConfig) -> Result<Self, StoreError> {
         Self::connect(settings, config, false).await
     }
@@ -193,7 +199,7 @@ impl Database {
             return Err(Error::Invalid);
         }
         client.batch_execute(&format!(
-            "SET synchronous_commit=on; SET lock_timeout='{}ms'; SET statement_timeout='{}ms'; SET idle_in_transaction_session_timeout='{}ms';",
+            "SET client_min_messages=notice; SET synchronous_commit=on; SET lock_timeout='{}ms'; SET statement_timeout='{}ms'; SET idle_in_transaction_session_timeout='{}ms';",
             settings.lock_timeout.as_millis(), settings.statement_timeout.as_millis(), settings.operation_timeout.as_millis()
         )).map_err(pg_error)?;
         client.batch_execute("BEGIN").map_err(pg_error)?;
@@ -261,7 +267,7 @@ impl Database {
         {
             return Err(Error::Schema);
         }
-        client.batch_execute("COMMIT").map_err(pg_error)?;
+        client.commit().map_err(commit_error)?;
         client.set_deadline(None);
         Ok(Self {
             client: RefCell::new(client),
@@ -299,10 +305,11 @@ impl Database {
             self.started.set(None);
             return Err(Error::Database);
         }
-        let result =
-            self.client
-                .borrow_mut()
-                .batch_execute(if success { "COMMIT" } else { "ROLLBACK" });
+        let result = if success {
+            self.client.borrow().commit()
+        } else {
+            self.client.borrow().batch_execute("ROLLBACK")
+        };
         self.started.set(None);
         match result {
             Ok(()) => Ok(()),
@@ -648,6 +655,14 @@ fn pg_error(error: impl Into<ClientError>) -> Error {
             Error::Invalid
         }
         _ => Error::Database,
+    }
+}
+
+fn commit_error(error: ClientError) -> Error {
+    if error.known_commit_rollback() {
+        pg_error(error)
+    } else {
+        Error::CommitUnknown
     }
 }
 
