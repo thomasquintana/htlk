@@ -18,14 +18,14 @@ htlk-compiler = { version = "=0.1.0", path = "crates/htlk-compiler" }
 htlk-analyzer = { version = "=0.1.0", path = "crates/htlk-analyzer" }
 htlk-executable = { version = "=0.1.0", path = "crates/htlk-executable" }
 htlk-runtime = { version = "=0.1.0", path = "crates/htlk-runtime", default-features = false }
-iri-string = "=0.7.14"
-jsonschema = { version = "=0.62.0", default-features = false }
+iri-string = "=0.7.15"
+jsonschema = { version = "=0.63.1", default-features = false }
 regex = "=1.13.2"
 regex-automata = "=0.4.19"
 regex-syntax = "=0.8.12"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
 tokio = { version = "=1.54.1", features = ["process", "io-util", "time", "sync", "macros"] }
-ryu-js = "=1.0.3"
+ryu-js = "=1.0.4"
 serde = "=1.0.229"
 serde_json = { version = "=1.0.154", features = ["float_roundtrip", "unbounded_depth"] }
 sha2 = "=0.11.1"
